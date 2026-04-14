@@ -1153,6 +1153,44 @@ export async function duckdbQueryOnFileAsync<T = Record<string, unknown>>(
   }
 }
 
+/**
+ * Query an external PostgreSQL database via DuckDB's postgres_scanner extension.
+ * Uses :memory: database (never touches workspace.duckdb).
+ * Always attaches in READ_ONLY mode for safety.
+ */
+export async function duckdbQueryExternalPgAsync<T = Record<string, unknown>>(
+  connectionString: string,
+  sql: string,
+  alias: string = "ext",
+): Promise<T[]> {
+  const bin = resolveDuckdbBin();
+  if (!bin) { return []; }
+
+  const upperSql = sql.trimStart().toUpperCase();
+  const allowed = ["SELECT", "WITH", "SHOW", "DESCRIBE", "EXPLAIN", "PRAGMA"];
+  if (!allowed.some((kw) => upperSql.startsWith(kw))) {
+    return [];
+  }
+
+  try {
+    const escapedConn = connectionString.replace(/'/g, "'\\''");
+    const escapedSql = sql.replace(/'/g, "'\\''");
+    const fullSql = `INSTALL postgres_scanner; LOAD postgres_scanner; ATTACH '${escapedConn}' AS ${alias} (TYPE postgres_scanner, READ_ONLY); ${escapedSql}`;
+    const { stdout } = await execAsync(`'${bin}' -json ':memory:' '${fullSql}'`, {
+      encoding: "utf-8",
+      timeout: 15_000,
+      maxBuffer: 10 * 1024 * 1024,
+      shell: "/bin/sh",
+    });
+
+    const trimmed = stdout.trim();
+    if (!trimmed || trimmed === "[]") { return []; }
+    return JSON.parse(trimmed) as T[];
+  } catch {
+    return [];
+  }
+}
+
 export type ResolvedFilesystemPath = {
   absolutePath: string;
   kind: WorkspacePathKind;

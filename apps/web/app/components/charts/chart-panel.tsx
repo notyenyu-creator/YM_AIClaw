@@ -202,7 +202,7 @@ function PieDonutChart({
   const nameKey = mapping.nameKey ?? Object.keys(data[0] ?? {})[0] ?? "name";
   const valueKey = mapping.valueKey ?? Object.keys(data[0] ?? {})[1] ?? "value";
   const colors = mapping.colors ?? CHART_PALETTE;
-  const height = compact ? 200 : 320;
+  const height = compact ? 280 : 360;
   const ttStyle = tooltipStyle();
   const innerRadius = type === "donut" ? "50%" : 0;
 
@@ -214,25 +214,31 @@ function PieDonutChart({
           dataKey={valueKey}
           nameKey={nameKey}
           cx="50%"
-          cy="50%"
+          cy="45%"
           innerRadius={innerRadius}
-          outerRadius={compact ? 70 : 110}
+          outerRadius={compact ? 85 : 120}
           paddingAngle={2}
-          label={compact ? undefined : ((props: unknown) => {
+          label={((props: unknown) => {
             const p = props as Record<string, unknown>;
             const name = p.name;
             const percent = typeof p.percent === "number" ? p.percent : 0;
+            if (compact) {
+              return `${(percent * 100).toFixed(0)}%`;
+            }
             return `${formatLabel(name)} ${(percent * 100).toFixed(0)}%`;
           }) as never}
-          labelLine={!compact}
-          style={{ fontSize: 11 }}
+          labelLine
+          style={{ fontSize: compact ? 10 : 11 }}
         >
           {data.map((_, i) => (
             <Cell key={i} fill={colors[i % colors.length]} />
           ))}
         </Pie>
         <Tooltip {...ttStyle} formatter={formatValue} />
-        {!compact && <Legend wrapperStyle={{ fontSize: 11 }} />}
+        <Legend
+          wrapperStyle={{ fontSize: compact ? 10 : 11 }}
+          iconSize={compact ? 8 : 14}
+        />
       </PieChart>
     </ResponsiveContainer>
   );

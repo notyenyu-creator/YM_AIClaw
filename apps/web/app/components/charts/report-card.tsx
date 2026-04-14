@@ -105,35 +105,34 @@ export function ReportCard({ config }: ReportCardProps) {
     }
     setPanelData((prev) => ({ ...prev, ...initial }));
 
-    await Promise.all(
-      panels.map(async (panel) => {
-        try {
-          const res = await fetch("/api/workspace/reports/execute", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ sql: panel.sql }),
-          });
-          if (!res.ok) {
-            const data = await res.json().catch(() => ({}));
-            setPanelData((prev) => ({
-              ...prev,
-              [panel.id]: { rows: [], loading: false, error: data.error || `HTTP ${res.status}` },
-            }));
-            return;
-          }
-          const data = await res.json();
+    // Execute sequentially to avoid DuckDB file lock conflicts
+    for (const panel of panels) {
+      try {
+        const res = await fetch("/api/workspace/reports/execute", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ sql: panel.sql }),
+        });
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
           setPanelData((prev) => ({
             ...prev,
-            [panel.id]: { rows: data.rows ?? [], loading: false },
+            [panel.id]: { rows: [], loading: false, error: data.error || `HTTP ${res.status}` },
           }));
-        } catch (err) {
-          setPanelData((prev) => ({
-            ...prev,
-            [panel.id]: { rows: [], loading: false, error: err instanceof Error ? err.message : "Failed" },
-          }));
+          continue;
         }
-      }),
-    );
+        const data = await res.json();
+        setPanelData((prev) => ({
+          ...prev,
+          [panel.id]: { rows: data.rows ?? [], loading: false },
+        }));
+      } catch (err) {
+        setPanelData((prev) => ({
+          ...prev,
+          [panel.id]: { rows: [], loading: false, error: err instanceof Error ? err.message : "Failed" },
+        }));
+      }
+    }
   }, []);
 
   // Load initial compact panels
@@ -374,7 +373,7 @@ function CompactPanelCard({
       </div>
       <div className="px-1 pb-1">
         {data?.loading ? (
-          <div className="flex items-center justify-center" style={{ height: 200 }}>
+          <div className="flex items-center justify-center" style={{ height: 280 }}>
             <div
               className="w-4 h-4 border-2 rounded-full animate-spin"
               style={{
@@ -384,7 +383,7 @@ function CompactPanelCard({
             />
           </div>
         ) : data?.error ? (
-          <div className="flex items-center justify-center" style={{ height: 200 }}>
+          <div className="flex items-center justify-center" style={{ height: 280 }}>
             <p className="text-[10px]" style={{ color: "#f87171" }}>
               {data.error}
             </p>
