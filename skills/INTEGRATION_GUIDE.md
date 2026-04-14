@@ -141,7 +141,7 @@ duckdb -json ':memory:' "
 
 **範例 — 連接 AWS 上的 Y-CRM：**
 ```bash
-ssh -f -N -L 15432:localhost:5432 ubuntu@52.195.151.185 -i ~/.ssh/y-crm-aws-key.pem
+ssh -f -N -L 15432:localhost:5432 ubuntu@<AWS_HOST_IP> -i ~/.ssh/y-crm-aws-key.pem
 # 然後 port=15432 連接
 ```
 
