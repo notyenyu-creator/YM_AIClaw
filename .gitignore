@@ -107,7 +107,8 @@ apps/ios/LocalSigning.xcconfig
 # Generated protocol schema (produced via pnpm protocol:gen)
 dist/protocol.schema.json
 
-.cursor/skills/
+# Cursor IDE (local state — plans, debug logs, rules, worktrees)
+.cursor/
 
 .npmrc.deploy
 
