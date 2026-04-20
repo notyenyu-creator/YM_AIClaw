@@ -30,7 +30,10 @@ vi.mock("@/lib/workspace", () => ({
 vi.mock("@/app/api/web-sessions/shared", () => ({
   getSessionMeta: vi.fn(() => undefined),
   hasRotatedGatewayThread: vi.fn(() => false),
+  invalidateSessionPlannerArtifacts: vi.fn(),
   rotateGatewaySessionThreadForModelReset: vi.fn(),
+  updateSessionPlannerPreflight: vi.fn(),
+  updateSessionPlannerContextPack: vi.fn(),
   resolveSessionKey: vi.fn(
     (sessionId: string, fallbackAgentId: string) =>
       `agent:${fallbackAgentId}:web:${sessionId}`,
@@ -73,7 +76,10 @@ describe("Chat API routes", () => {
     vi.mock("@/app/api/web-sessions/shared", () => ({
       getSessionMeta: vi.fn(() => undefined),
       hasRotatedGatewayThread: vi.fn(() => false),
+      invalidateSessionPlannerArtifacts: vi.fn(),
       rotateGatewaySessionThreadForModelReset: vi.fn(),
+      updateSessionPlannerPreflight: vi.fn(),
+      updateSessionPlannerContextPack: vi.fn(),
       resolveSessionKey: vi.fn(
         (sessionId: string, fallbackAgentId: string) =>
           `agent:${fallbackAgentId}:web:${sessionId}`,
@@ -149,6 +155,38 @@ describe("Chat API routes", () => {
         expect.any(Function),
         { replay: true },
       );
+    });
+
+    it("clears stale planner artifacts when the latest turn no longer persists Y-CRM routing state", async () => {
+      const { hasActiveRun, subscribeToRun } = await import("@/lib/active-runs");
+      const {
+        invalidateSessionPlannerArtifacts,
+        updateSessionPlannerPreflight,
+        updateSessionPlannerContextPack,
+      } = await import("@/app/api/web-sessions/shared");
+      vi.mocked(hasActiveRun).mockReturnValue(false);
+      vi.mocked(subscribeToRun).mockReturnValue(() => {});
+
+      const { POST } = await import("./route.js");
+      const req = new Request("http://localhost/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          messages: [
+            { id: "m1", role: "user", parts: [{ type: "text", text: "hello" }] },
+          ],
+          sessionId: "s-stale",
+        }),
+      });
+
+      const res = await POST(req);
+
+      expect(res.status).toBe(200);
+      expect(invalidateSessionPlannerArtifacts).toHaveBeenCalledWith("s-stale", {
+        preserveReviewedLearningDraft: true,
+      });
+      expect(updateSessionPlannerPreflight).not.toHaveBeenCalled();
+      expect(updateSessionPlannerContextPack).not.toHaveBeenCalled();
     });
 
     it("forwards a chat model override to the run starter", async () => {
@@ -434,6 +472,101 @@ describe("Chat API routes", () => {
       expect(startRun).toHaveBeenCalledWith(
         expect.objectContaining({
           message: expect.stringContaining("workspace/doc.md"),
+        }),
+      );
+    });
+
+    it("injects Y-CRM planner preflight into the agent message and stores planner metadata", async () => {
+      const { startRun, hasActiveRun, subscribeToRun } = await import("@/lib/active-runs");
+      const {
+        updateSessionPlannerPreflight,
+        updateSessionPlannerContextPack,
+      } = await import("@/app/api/web-sessions/shared");
+      vi.mocked(hasActiveRun).mockReturnValue(false);
+      vi.mocked(subscribeToRun).mockReturnValue(() => {});
+
+      const { POST } = await import("./route.js");
+      const req = new Request("http://localhost/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          messages: [
+            {
+              id: "m1",
+              role: "user",
+              parts: [{ type: "text", text: "請幫我整理 Y-CRM 工作區裡面的 Calleen Hong 目前負責的客戶背景。" }],
+            },
+          ],
+          sessionId: "s1",
+        }),
+      });
+
+      await POST(req);
+
+      expect(updateSessionPlannerPreflight).toHaveBeenCalledWith(
+        "s1",
+        expect.objectContaining({
+          system: "ycrm",
+          intent: "entity_summary",
+          shouldRouteToYcrm: true,
+        }),
+      );
+      expect(updateSessionPlannerContextPack).toHaveBeenCalledWith(
+        "s1",
+        expect.objectContaining({
+          planner: expect.objectContaining({
+            system: "ycrm",
+            intent: "entity_summary",
+          }),
+          live_query_steps: expect.arrayContaining(["read_real_data", "read_auto_schema_first", "resolve_workspace_member_fk"]),
+        }),
+      );
+      expect(startRun).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: expect.stringContaining("[Y-CRM Context Pack]"),
+        }),
+      );
+      expect(startRun).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: expect.stringContaining("planner.intent=entity_summary"),
+        }),
+      );
+      expect(startRun).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: expect.stringContaining("resolve_workspace_member_fk"),
+        }),
+      );
+    });
+
+    it("adds compact rolling context only for follow-up turns that need continuity", async () => {
+      const { startRun, hasActiveRun, subscribeToRun } = await import("@/lib/active-runs");
+      vi.mocked(hasActiveRun).mockReturnValue(false);
+      vi.mocked(subscribeToRun).mockReturnValue(() => {});
+
+      const { POST } = await import("./route.js");
+      const req = new Request("http://localhost/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          messages: [
+            { id: "m1", role: "user", parts: [{ type: "text", text: "先幫我整理 Calleen Hong 的客戶背景" }] },
+            { id: "m2", role: "assistant", parts: [{ type: "text", text: "我已經整理出三家重點客戶與目前商機階段。" }] },
+            { id: "m3", role: "user", parts: [{ type: "text", text: "再幫我把剛剛那三家排成優先順序" }] },
+          ],
+          sessionId: "s-followup",
+        }),
+      });
+
+      await POST(req);
+
+      expect(startRun).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: expect.stringContaining("[Rolling Context]"),
+        }),
+      );
+      expect(startRun).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: expect.stringContaining("rolling.mode=window_only"),
         }),
       );
     });

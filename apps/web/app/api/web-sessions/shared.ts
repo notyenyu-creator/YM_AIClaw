@@ -1,7 +1,24 @@
 import { randomUUID } from "node:crypto";
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
+import type { YcrmContextPack } from "@/lib/ycrm-context-pack";
+import type { YcrmLearningDraft } from "@/lib/ycrm-learning-draft";
 import { resolveActiveAgentId, resolveWebChatDir } from "@/lib/workspace";
+
+export type SessionPlannerPreflight = {
+  system: "ycrm";
+  updatedAt: number;
+  validationState?: "heuristic" | "validated" | "stale";
+  intent: string;
+  confidence: string;
+  shouldRouteToYcrm: boolean;
+  workspaceId: string | null;
+  needsWorkspaceValidation: boolean;
+  warnings: string[];
+  blockers: string[];
+  crossSystem: boolean;
+  targetSystems: string[];
+};
 
 export type WebSessionMeta = {
   id: string;
@@ -31,6 +48,12 @@ export type WebSessionMeta = {
   agentMode?: "workspace" | "ephemeral";
   /** Last time the session had active traffic. */
   lastActiveAt?: number;
+  /** Latest planner preflight summary captured before a chat run starts. */
+  plannerPreflight?: SessionPlannerPreflight;
+  /** Latest planner context pack captured before a chat run starts. */
+  plannerContextPack?: YcrmContextPack;
+  /** Latest learning draft generated from the persisted planner context and session transcript. */
+  plannerLearningDraft?: YcrmLearningDraft;
 };
 
 export function ensureDir() {
@@ -152,4 +175,85 @@ export function resolveSessionKey(sessionId: string, fallbackAgentId: string): s
   const agentId = meta?.workspaceAgentId ?? fallbackAgentId;
   const threadId = meta?.gatewaySessionId ?? sessionId;
   return `agent:${agentId}:web:${threadId}`;
+}
+
+export function updateSessionPlannerPreflight(
+  sessionId: string,
+  plannerPreflight: SessionPlannerPreflight,
+): void {
+  const sessions = readIndex();
+  const session = sessions.find((entry) => entry.id === sessionId);
+  if (!session) {
+    return;
+  }
+  session.plannerPreflight = plannerPreflight;
+  session.updatedAt = Date.now();
+  writeIndex(sessions);
+}
+
+function isTerminalLearningDraftStatus(status: YcrmLearningDraft["writeback"]["status"] | undefined): boolean {
+  return status === "promoted" || status === "resolution_kept_current";
+}
+
+export function invalidateSessionPlannerArtifacts(
+  sessionId: string,
+  options?: {
+    preserveReviewedLearningDraft?: boolean;
+  },
+): void {
+  const sessions = readIndex();
+  const session = sessions.find((entry) => entry.id === sessionId);
+  if (!session) {
+    return;
+  }
+
+  const preserveReviewedLearningDraft =
+    options?.preserveReviewedLearningDraft === true
+    && isTerminalLearningDraftStatus(session.plannerLearningDraft?.writeback?.status);
+
+  const hadPlannerArtifacts = Boolean(
+    session.plannerPreflight
+    || session.plannerContextPack
+    || (!preserveReviewedLearningDraft && session.plannerLearningDraft),
+  );
+
+  if (!hadPlannerArtifacts) {
+    return;
+  }
+
+  delete session.plannerPreflight;
+  delete session.plannerContextPack;
+  if (!preserveReviewedLearningDraft) {
+    delete session.plannerLearningDraft;
+  }
+  session.updatedAt = Date.now();
+  writeIndex(sessions);
+}
+
+export function updateSessionPlannerContextPack(
+  sessionId: string,
+  plannerContextPack: YcrmContextPack,
+): void {
+  const sessions = readIndex();
+  const session = sessions.find((entry) => entry.id === sessionId);
+  if (!session) {
+    return;
+  }
+  session.plannerContextPack = plannerContextPack;
+  session.updatedAt = Date.now();
+  writeIndex(sessions);
+}
+
+export function updateSessionPlannerLearningDraft(
+  sessionId: string,
+  plannerLearningDraft: YcrmLearningDraft,
+): void {
+  const sessions = readIndex();
+  const session = sessions.find((entry) => entry.id === sessionId);
+  if (!session) {
+    return;
+  }
+  session.plannerLearningDraft = plannerLearningDraft;
+  session.updatedAt = Date.now();
+  writeIndex(sessions);
 }

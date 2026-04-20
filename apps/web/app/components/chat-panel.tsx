@@ -13,6 +13,7 @@ import {
 } from "react";
 import { HeroSuggestions } from "./hero-suggestions";
 import { ChatMessage } from "./chat-message";
+import { PlannerPreflightHeader } from "./planner-preflight-header";
 import { ChatEditor, type ChatEditorHandle } from "./tiptap/chat-editor";
 import { ChatVoiceInputButton } from "./chat-voice-input-button";
 import {
@@ -23,6 +24,8 @@ import {
 } from "./ui/dropdown-menu";
 import { UnicodeSpinner } from "./unicode-spinner";
 import { Dialog, DialogContent } from "./ui/dialog";
+import type { SessionPlannerPreflight } from "@/app/api/web-sessions/shared";
+import type { YcrmLearningDraft } from "@/lib/ycrm-learning-draft";
 import type { ChatPanelRuntimeState } from "@/lib/chat-session-registry";
 import {
 	getStreamActivityLabel,
@@ -869,6 +872,8 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 		const [currentSessionId, setCurrentSessionId] = useState<
 			string | null
 		>(null);
+		const [plannerPreflight, setPlannerPreflight] = useState<SessionPlannerPreflight | null>(null);
+		const [plannerLearningDraft, setPlannerLearningDraft] = useState<YcrmLearningDraft | null>(null);
 		const [loadingSession, setLoadingSession] = useState(false);
 		const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -936,6 +941,30 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 		useEffect(() => {
 			sessionIdRef.current = currentSessionId;
 		}, [currentSessionId]);
+
+		const refreshPlannerPreflight = useCallback(
+			async (sessionId: string) => {
+				try {
+					const response = await fetch(`/api/web-sessions/${sessionId}`);
+					if (!response.ok) {
+						return;
+					}
+					const data = await response.json() as {
+						session?: {
+							plannerPreflight?: SessionPlannerPreflight | null;
+							plannerLearningDraft?: YcrmLearningDraft | null;
+						} | null;
+					};
+					if (sessionIdRef.current === sessionId) {
+						setPlannerPreflight(data.session?.plannerPreflight ?? null);
+						setPlannerLearningDraft(data.session?.plannerLearningDraft ?? null);
+					}
+				} catch {
+					// Best-effort only; the chat should still function even if the planner badge lags behind.
+				}
+			},
+			[],
+		);
 
 		const subagentSessionKeyRef = useRef(subagentSessionKey);
 		useEffect(() => {
@@ -1044,6 +1073,27 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 			isReconnecting,
 			loadingSession,
 		]);
+
+		const plannerRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+		useEffect(() => {
+			if (plannerRefreshTimerRef.current) {
+				clearTimeout(plannerRefreshTimerRef.current);
+				plannerRefreshTimerRef.current = null;
+			}
+			if (status !== "submitted" || !currentSessionId || isSubagentMode || isGatewayMode) {
+				return;
+			}
+			plannerRefreshTimerRef.current = setTimeout(() => {
+				plannerRefreshTimerRef.current = null;
+				void refreshPlannerPreflight(currentSessionId);
+			}, 150);
+			return () => {
+				if (plannerRefreshTimerRef.current) {
+					clearTimeout(plannerRefreshTimerRef.current);
+					plannerRefreshTimerRef.current = null;
+				}
+			};
+		}, [status, currentSessionId, isSubagentMode, isGatewayMode, refreshPlannerPreflight]);
 
 		// Stream stall detection: if we stay in "submitted" (no first
 		// token received) for too long, surface an error and reset.
@@ -1299,6 +1349,8 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 			setCurrentSessionId(null);
 			onActiveSessionChange?.(null);
 			setMessages([]);
+			setPlannerPreflight(null);
+			setPlannerLearningDraft(null);
 			savedMessageIdsRef.current.clear();
 			isFirstFileMessageRef.current = true;
 
@@ -1327,6 +1379,8 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 							return;
 						}
 						const msgData = await msgRes.json();
+						setPlannerPreflight(msgData.session?.plannerPreflight ?? null);
+						setPlannerLearningDraft(msgData.session?.plannerLearningDraft ?? null);
 						const sessionMessages: Array<{
 							id: string;
 							role: "user" | "assistant";
@@ -1603,7 +1657,7 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 				);
 			}
 
-			if (filePath && onFileChanged) {
+				if (filePath && onFileChanged) {
 					fetch(
 						`/api/workspace/file?path=${encodeURIComponent(filePath)}`,
 					)
@@ -1617,6 +1671,7 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 				}
 
 				onSessionsChange?.();
+				void refreshPlannerPreflight(currentSessionId);
 			}
 		}, [
 			previousStatus,
@@ -1626,6 +1681,7 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 			filePath,
 			onFileChanged,
 			onSessionsChange,
+			refreshPlannerPreflight,
 		]);
 
 		// ── Empty-stream error detection ──
@@ -1877,6 +1933,8 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 
 				setLoadingSession(true);
 				setCurrentSessionId(sessionId);
+				setPlannerPreflight(null);
+				setPlannerLearningDraft(null);
 				sessionIdRef.current = sessionId;
 				onActiveSessionChange?.(sessionId);
 				savedMessageIdsRef.current.clear();
@@ -1890,11 +1948,15 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 					if (!response.ok) {
 						console.warn(`Session ${sessionId} not found (${response.status}), starting fresh.`);
 						setMessages([]);
+						setPlannerPreflight(null);
+						setPlannerLearningDraft(null);
 						setLoadingSession(false);
 						return;
 					}
 
 					const data = await response.json();
+					setPlannerPreflight(data.session?.plannerPreflight ?? null);
+					setPlannerLearningDraft(data.session?.plannerLearningDraft ?? null);
 					const sessionMessages: Array<{
 						id: string;
 						role: "user" | "assistant";
@@ -1971,6 +2033,8 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 			sessionIdRef.current = null;
 			onActiveSessionChange?.(null);
 			setMessages([]);
+			setPlannerPreflight(null);
+			setPlannerLearningDraft(null);
 			savedMessageIdsRef.current.clear();
 			userHtmlMapRef.current.clear();
 			isFirstFileMessageRef.current = true;
@@ -1996,6 +2060,8 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 						text.length > 60 ? text.slice(0, 60) + "..." : text;
 					const sessionId = await createSession(title);
 					setCurrentSessionId(sessionId);
+					setPlannerPreflight(null);
+					setPlannerLearningDraft(null);
 					sessionIdRef.current = sessionId;
 					onActiveSessionChange?.(sessionId);
 					onSessionsChange?.();
@@ -2391,23 +2457,39 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 					<>
 					<div className="min-w-0 flex-1">
 						{compact && fileContext ? (
-							<h2
-								className="text-xs font-semibold truncate"
-								style={{
-									color: "var(--color-text)",
-								}}
-							>
-								Chat: {fileContext.filename}
-							</h2>
+							<>
+								<h2
+									className="text-xs font-semibold truncate"
+									style={{
+										color: "var(--color-text)",
+									}}
+								>
+									Chat: {fileContext.filename}
+								</h2>
+								{currentSessionId && (
+									<PlannerPreflightHeader
+										plannerPreflight={plannerPreflight}
+										plannerLearningDraft={plannerLearningDraft}
+										sessionId={currentSessionId}
+									/>
+								)}
+							</>
 						) : currentSessionId ? (
-							<h2
-								className="text-sm font-semibold"
-								style={{
-									color: "var(--color-text)",
-								}}
-							>
-								{sessionTitle || "Chat Session"}
-							</h2>
+							<>
+								<h2
+									className="text-sm font-semibold"
+									style={{
+										color: "var(--color-text)",
+									}}
+								>
+									{sessionTitle || "Chat Session"}
+								</h2>
+								<PlannerPreflightHeader
+									plannerPreflight={plannerPreflight}
+									plannerLearningDraft={plannerLearningDraft}
+									sessionId={currentSessionId}
+								/>
+							</>
 						) : null}
 					</div>
 					{!hideHeaderActions && (

@@ -50,6 +50,8 @@
     "test:cli": "vitest run --config vitest.unit.config.ts src/cli/run-main.test.ts src/cli/bootstrap-external.test.ts src/cli/bootstrap-external.bootstrap-command.test.ts src/cli/dench-cloud.test.ts src/cli/workspace-seed.test.ts src/cli/web-runtime.test.ts src/cli/web-runtime-command.test.ts src/cli/flatten-standalone-deps.test.ts && vitest run --config extensions/vitest.config.ts extensions/dench-identity/index.test.ts extensions/dench-identity/composio-cheat-sheet.test.ts extensions/dench-ai-gateway/index.test.ts",
     "test:web": "pnpm --dir apps/web test",
     "web:build": "pnpm --dir apps/web build",
+    "web:restart:3200": "bash scripts/dench-web-standalone.sh restart --port 3200 --detach",
+    "web:restart:3200:fg": "bash scripts/dench-web-standalone.sh restart --port 3200 --foreground",
     "web:dev": "pnpm --dir apps/web dev",
     "web:install": "pnpm --dir apps/web install",
     "web:prepack": "cp -r apps/web/public apps/web/.next/standalone/apps/web/public && cp -r apps/web/.next/static apps/web/.next/standalone/apps/web/.next/static && node scripts/flatten-standalone-deps.mjs",

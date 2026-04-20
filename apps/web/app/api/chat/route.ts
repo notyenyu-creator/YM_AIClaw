@@ -23,7 +23,10 @@ import { join, basename, extname } from "node:path";
 import {
 	getSessionMeta,
 	hasRotatedGatewayThread,
+	invalidateSessionPlannerArtifacts,
 	rotateGatewaySessionThreadForModelReset,
+	updateSessionPlannerContextPack,
+	updateSessionPlannerPreflight,
 } from "@/app/api/web-sessions/shared";
 import { getAgentSession } from "@/app/api/sessions/shared";
 import {
@@ -31,6 +34,20 @@ import {
 	isLikelyOpenAiModelId,
 	needsOpenAiSwitchAcknowledgement,
 } from "@/lib/chat-models";
+import {
+	buildYcrmContext,
+	createDefaultYcrmContextInput,
+	shouldPersistYcrmPlannerPreflight,
+	summarizeYcrmContextPlan,
+} from "@/lib/ycrm-context-builder";
+import {
+	buildYcrmContextPack,
+	decorateMessageWithYcrmContextPack,
+} from "@/lib/ycrm-context-pack";
+import {
+	buildRollingChatContext,
+	decorateMessageWithRollingContext,
+} from "@/lib/chat-rolling-context";
 
 export const runtime = "nodejs";
 
@@ -266,6 +283,26 @@ export async function POST(req: Request) {
 			sessionMeta?.workspaceAgentId
 			?? resolveActiveAgentId();
 		const gatewayThreadId = sessionMeta?.gatewaySessionId ?? sessionId;
+		const ycrmPlannerInput = createDefaultYcrmContextInput(agentMessage);
+		const ycrmPlannerPlan = buildYcrmContext(ycrmPlannerInput);
+		const ycrmPlannerSummary = summarizeYcrmContextPlan(ycrmPlannerPlan);
+		const ycrmContextPack = buildYcrmContextPack(ycrmPlannerPlan);
+
+		if (shouldPersistYcrmPlannerPreflight(ycrmPlannerSummary)) {
+			updateSessionPlannerPreflight(sessionId, ycrmPlannerSummary);
+			updateSessionPlannerContextPack(sessionId, ycrmContextPack);
+		} else {
+			invalidateSessionPlannerArtifacts(sessionId, {
+				preserveReviewedLearningDraft: true,
+			});
+		}
+
+		if (ycrmPlannerSummary.shouldRouteToYcrm) {
+			agentMessage = decorateMessageWithYcrmContextPack(agentMessage, ycrmContextPack);
+		}
+
+		const rollingContext = buildRollingChatContext(messages, userText);
+		agentMessage = decorateMessageWithRollingContext(agentMessage, rollingContext);
 
 		const imageAttachments = extractImageAttachmentsFromMessage(agentMessage);
 

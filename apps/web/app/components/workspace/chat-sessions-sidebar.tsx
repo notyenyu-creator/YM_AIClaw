@@ -16,6 +16,26 @@ export type WebSession = {
 	updatedAt: number;
 	messageCount: number;
 	filePath?: string;
+	plannerPreflight?: {
+		system: "ycrm";
+		updatedAt: number;
+		validationState?: "heuristic" | "validated" | "stale";
+		intent: string;
+		confidence: string;
+		shouldRouteToYcrm: boolean;
+		workspaceId: string | null;
+		needsWorkspaceValidation: boolean;
+		warnings: string[];
+		blockers: string[];
+		crossSystem: boolean;
+		targetSystems: string[];
+	};
+	plannerLearningDraft?: {
+		writeback?: {
+			status?: "not_written" | "written" | "promoted" | "promotion_conflicted" | "resolution_kept_current";
+			reviewer_actor?: string | null;
+		};
+	};
 };
 
 export type SidebarSubagentInfo = {
@@ -54,6 +74,8 @@ type SidebarTab = {
 	iconColor?: string;
 	count?: number;
 };
+
+type ReviewQueueFilter = "all" | "draft_ready" | "needs_review" | "reviewed";
 
 type ChatSessionsSidebarProps = {
 	sessions: WebSession[];
@@ -266,6 +288,97 @@ function ConnectionDot({ status }: { status: "connected" | "running" | "configur
 	);
 }
 
+function PlannerStatusChip({
+	label,
+	tone = "neutral",
+}: {
+	label: string;
+	tone?: "neutral" | "accent" | "warning" | "success";
+}) {
+	const toneStyles = {
+		neutral: {
+			background: "rgba(148, 163, 184, 0.08)",
+			color: "var(--color-text-muted)",
+			borderColor: "rgba(148, 163, 184, 0.18)",
+		},
+		accent: {
+			background: "var(--color-accent-light)",
+			color: "var(--color-accent)",
+			borderColor: "rgba(0, 101, 162, 0.18)",
+		},
+		warning: {
+			background: "rgba(217, 119, 6, 0.08)",
+			color: "var(--color-warning)",
+			borderColor: "rgba(217, 119, 6, 0.18)",
+		},
+		success: {
+			background: "rgba(22, 163, 74, 0.08)",
+			color: "var(--color-success)",
+			borderColor: "rgba(22, 163, 74, 0.18)",
+		},
+	} as const;
+
+	return (
+		<span
+			className="inline-flex items-center rounded-full border px-1.5 py-0.5 text-[9px] font-medium"
+			style={toneStyles[tone]}
+		>
+			{label}
+		</span>
+	);
+}
+
+function formatPlannerWorkspaceLabel(workspaceId: string | null | undefined): string | null {
+	if (!workspaceId) {
+		return null;
+	}
+	if (workspaceId.length <= 16) {
+		return workspaceId;
+	}
+	return `${workspaceId.slice(0, 13)}...`;
+}
+
+function buildPlannerTooltip(session: WebSession): string | null {
+	const planner = session.plannerPreflight;
+	if (!planner) {
+		return null;
+	}
+
+	const lines = [
+		`state: ${planner.validationState ?? "heuristic"}`,
+		`intent: ${planner.intent}`,
+		`confidence: ${planner.confidence}`,
+		`route_to_ycrm: ${planner.shouldRouteToYcrm ? "yes" : "no"}`,
+		`cross_system: ${planner.crossSystem ? "yes" : "no"}`,
+	];
+
+	if (planner.workspaceId) {
+		lines.push(`workspace: ${planner.workspaceId}`);
+	}
+
+	return lines.join("\n");
+}
+
+function getReviewQueueBadge(session: WebSession): {
+	label: string;
+	tone: "neutral" | "accent" | "warning" | "success";
+} | null {
+	const status = session.plannerLearningDraft?.writeback?.status;
+	if (status === "promotion_conflicted") {
+		return { label: "Needs review", tone: "warning" };
+	}
+	if (status === "resolution_kept_current") {
+		return { label: "Reviewed", tone: "success" };
+	}
+	if (status === "promoted") {
+		return { label: "Promoted", tone: "success" };
+	}
+	if (status === "written") {
+		return { label: "Draft ready", tone: "accent" };
+	}
+	return null;
+}
+
 // ── Reusable session row for web sessions ──
 
 function WebSessionRow({
@@ -287,6 +400,17 @@ function WebSessionRow({
 	showFilePath?: boolean;
 }) {
 	const showMore = isHovered || isStreaming;
+	const planner = session.plannerPreflight;
+	const workspaceLabel = formatPlannerWorkspaceLabel(planner?.workspaceId);
+	const plannerTooltip = buildPlannerTooltip(session);
+	const reviewBadge = getReviewQueueBadge(session);
+	const reviewerActor = session.plannerLearningDraft?.writeback?.reviewer_actor?.trim() || null;
+	const reviewHref = reviewBadge ? `/review/ycrm?sessionId=${encodeURIComponent(session.id)}` : null;
+	const showPlannerStatus = Boolean(
+		(planner && (planner.shouldRouteToYcrm || planner.crossSystem || workspaceLabel))
+		|| reviewBadge
+		|| reviewerActor,
+	);
 	return (
 		<div
 			className="group relative"
@@ -333,9 +457,52 @@ function WebSessionRow({
 								{session.filePath}
 							</div>
 						)}
+						{showPlannerStatus && (
+							<div
+								className="mt-1 flex flex-wrap gap-1"
+								title={plannerTooltip ?? undefined}
+								aria-label={`Planner preflight for ${session.title || "Untitled chat"}`}
+							>
+								{planner?.shouldRouteToYcrm && (
+									<PlannerStatusChip label="Y-CRM" tone="accent" />
+								)}
+								{planner && (
+									<PlannerStatusChip label={planner.validationState === "validated" ? "Validated" : "Advisory"} />
+								)}
+								{planner?.crossSystem && (
+									<PlannerStatusChip label="Cross-system" tone="warning" />
+								)}
+								{workspaceLabel && (
+									<PlannerStatusChip label={`ws:${workspaceLabel}`} />
+								)}
+								{reviewBadge && (
+									<PlannerStatusChip label={reviewBadge.label} tone={reviewBadge.tone} />
+								)}
+								{reviewerActor && (
+									<PlannerStatusChip label={`by:${reviewerActor}`} />
+								)}
+							</div>
+						)}
 					</button>
 				)}
-				<div className={`shrink-0 flex items-center pr-1 gap-0.5 transition-opacity ${showMore ? "opacity-100" : "opacity-0"}`}>
+				<div className="shrink-0 flex items-center pr-1 gap-1">
+					{reviewHref && (
+						<a
+							href={reviewHref}
+							onClick={(event) => event.stopPropagation()}
+							className="inline-flex items-center rounded-full border px-2 py-1 text-[10px] font-medium transition-colors hover:opacity-90"
+							style={{
+								background: "rgba(0, 101, 162, 0.08)",
+								color: "var(--color-accent)",
+								borderColor: "rgba(0, 101, 162, 0.18)",
+							}}
+							aria-label={`Go to review for ${session.title || "Untitled chat"}`}
+							title="Open the formal Y-CRM review workspace for this session"
+						>
+							Go to review
+						</a>
+					)}
+					<div className={`flex items-center gap-0.5 transition-opacity ${showMore ? "opacity-100" : "opacity-0"}`}>
 					{isStreaming && onStop && (
 						<button type="button" onClick={(e) => { e.stopPropagation(); onStop(session.id); }}
 							className="flex items-center justify-center w-6 h-6 rounded-md transition-colors hover:bg-black/5"
@@ -362,8 +529,9 @@ function WebSessionRow({
 									Delete
 								</DropdownMenuItem>
 							</DropdownMenuContent>
-						</DropdownMenu>
-					)}
+							</DropdownMenu>
+						)}
+					</div>
 				</div>
 			</div>
 			{sessionSubagents && sessionSubagents.length > 0 && (
@@ -464,6 +632,7 @@ export function ChatSessionsSidebar({
 	const [renamingId, setRenamingId] = useState<string | null>(null);
 	const [renameValue, setRenameValue] = useState("");
 	const [activeFilter, setActiveFilter] = useState("denchclaw");
+	const [reviewQueueFilter, setReviewQueueFilter] = useState<ReviewQueueFilter>("all");
 
 	const handleSelect = useCallback(
 		(id: string) => { onSelectSession(id); onClose?.(); },
@@ -517,7 +686,40 @@ export function ChatSessionsSidebar({
 		[sessions],
 	);
 
-	const grouped = groupSessions(denchClawSessions);
+	const filteredDenchClawSessions = useMemo(() => {
+		if (reviewQueueFilter === "draft_ready") {
+			return denchClawSessions.filter(
+				(session) => session.plannerLearningDraft?.writeback?.status === "written",
+			);
+		}
+		if (reviewQueueFilter === "needs_review") {
+			return denchClawSessions.filter(
+				(session) => session.plannerLearningDraft?.writeback?.status === "promotion_conflicted",
+			);
+		}
+		if (reviewQueueFilter === "reviewed") {
+			return denchClawSessions.filter((session) => {
+				const status = session.plannerLearningDraft?.writeback?.status;
+				return status === "resolution_kept_current" || status === "promoted";
+			});
+		}
+		return denchClawSessions;
+	}, [denchClawSessions, reviewQueueFilter]);
+
+	const grouped = groupSessions(filteredDenchClawSessions);
+	const reviewQueueCounts = useMemo(() => ({
+		all: denchClawSessions.length,
+		draft_ready: denchClawSessions.filter(
+			(session) => session.plannerLearningDraft?.writeback?.status === "written",
+		).length,
+		needs_review: denchClawSessions.filter(
+			(session) => session.plannerLearningDraft?.writeback?.status === "promotion_conflicted",
+		).length,
+		reviewed: denchClawSessions.filter((session) => {
+			const status = session.plannerLearningDraft?.writeback?.status;
+			return status === "resolution_kept_current" || status === "promoted";
+		}).length,
+	}), [denchClawSessions]);
 
 	const channelStatusMap = useMemo(() => {
 		const map = new Map<string, SidebarChannelStatus>();
@@ -615,6 +817,72 @@ export function ChatSessionsSidebar({
 			}
 			return (
 				<div className="px-2 py-1">
+					<div
+						className="mb-2 rounded-xl border px-3 py-2"
+						style={{
+							background: "var(--color-surface-hover)",
+							borderColor: "var(--color-border)",
+						}}
+					>
+						<div className="flex flex-wrap items-center gap-1.5">
+							<span className="text-[10px] font-semibold uppercase tracking-[0.16em]" style={{ color: "var(--color-text-muted)" }}>
+								Review Queue
+							</span>
+							<span className="rounded-full px-2 py-0.5 text-[10px] font-medium" style={{ background: "var(--color-accent-light)", color: "var(--color-accent)" }}>
+								Draft ready {reviewQueueCounts.draft_ready}
+							</span>
+							<span className="rounded-full px-2 py-0.5 text-[10px] font-medium" style={{ background: "rgba(217, 119, 6, 0.12)", color: "var(--color-warning)" }}>
+								Needs review {reviewQueueCounts.needs_review}
+							</span>
+							<span className="rounded-full px-2 py-0.5 text-[10px] font-medium" style={{ background: "rgba(22, 163, 74, 0.12)", color: "var(--color-success)" }}>
+								Reviewed {reviewQueueCounts.reviewed}
+							</span>
+						</div>
+						<p className="mt-2 text-[11px] leading-5" style={{ color: "var(--color-text-muted)" }}>
+							{reviewQueueCounts.needs_review > 0
+								? `${reviewQueueCounts.needs_review} session${reviewQueueCounts.needs_review === 1 ? "" : "s"} ${reviewQueueCounts.needs_review === 1 ? "currently needs" : "currently need"} manual review before promotion.`
+								: reviewQueueCounts.draft_ready > 0
+									? `${reviewQueueCounts.draft_ready} session${reviewQueueCounts.draft_ready === 1 ? " is" : "s are"} waiting at the draft-ready checkpoint.`
+									: reviewQueueCounts.reviewed > 0
+										? `${reviewQueueCounts.reviewed} session${reviewQueueCounts.reviewed === 1 ? " has" : "s have"} already been reviewed.`
+										: "No sessions are currently in the review queue."}
+						</p>
+					</div>
+					<div className="mb-2 flex flex-wrap gap-1.5 px-1">
+						{([
+							{ id: "all", label: `All (${reviewQueueCounts.all})` },
+							{ id: "draft_ready", label: `Draft ready (${reviewQueueCounts.draft_ready})` },
+							{ id: "needs_review", label: `Needs review (${reviewQueueCounts.needs_review})` },
+							{ id: "reviewed", label: `Reviewed (${reviewQueueCounts.reviewed})` },
+						] as const).map((item) => (
+							<button
+								key={item.id}
+								type="button"
+								onClick={() => setReviewQueueFilter(item.id)}
+								className="cursor-pointer rounded-full border px-2 py-1 text-[10px] font-medium transition-colors"
+								style={{
+									background: reviewQueueFilter === item.id ? "var(--color-accent-light)" : "transparent",
+									color: reviewQueueFilter === item.id ? "var(--color-accent)" : "var(--color-text-muted)",
+									borderColor: reviewQueueFilter === item.id ? "rgba(0, 101, 162, 0.18)" : "var(--color-border)",
+								}}
+							>
+								{item.label}
+							</button>
+						))}
+					</div>
+					{filteredDenchClawSessions.length === 0 ? (
+						<div className="px-3 py-6 text-center">
+							<p className="text-[11px]" style={{ color: "var(--color-text-muted)" }}>
+								{reviewQueueFilter === "draft_ready"
+									? "No sessions are waiting at the draft-ready checkpoint."
+									: reviewQueueFilter === "needs_review"
+										? "No sessions currently need manual review."
+										: reviewQueueFilter === "reviewed"
+											? "No sessions have been reviewed yet."
+											: "No sessions match the current review filter."}
+							</p>
+						</div>
+					) : null}
 					{grouped.map((group) => (
 						<div key={group.label}>
 							<div className="px-2 pt-3 pb-1 text-[10px] font-medium uppercase tracking-wider" style={{ color: "var(--color-text-muted)" }}>

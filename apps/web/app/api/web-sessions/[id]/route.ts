@@ -2,7 +2,7 @@ import { readFileSync, existsSync, readdirSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { resolveWebChatDir, resolveOpenClawStateDir } from "@/lib/workspace";
 import { enrichSubagentSessionFromTranscript } from "@/lib/active-runs";
-import { readIndex, writeIndex } from "../shared";
+import { getSessionMeta, readIndex, writeIndex } from "../shared";
 
 export const dynamic = "force-dynamic";
 
@@ -217,6 +217,7 @@ export async function GET(
   const filePath = join(resolveWebChatDir(), `${id}.jsonl`);
 
   if (existsSync(filePath)) {
+    const session = getSessionMeta(id) ?? null;
     const content = readFileSync(filePath, "utf-8");
     const messages: ChatLine[] = content
       .trim()
@@ -226,16 +227,17 @@ export async function GET(
         try { return JSON.parse(line) as ChatLine; } catch { return null; }
       })
       .filter((m): m is ChatLine => m !== null);
-    return Response.json({ id, messages });
+    return Response.json({ id, session, messages });
   }
 
   // Fallback: search agent session directories (cron runs, CLI sessions)
   const agentFile = findAgentSessionFile(id);
   if (agentFile) {
+    const session = getSessionMeta(id) ?? null;
     const content = readFileSync(agentFile, "utf-8");
     const messages = parseAgentTranscriptToChatLines(content);
     return Response.json(
-      { id, messages },
+      { id, session, messages },
       { headers: { "X-Session-Source": "agent" } },
     );
   }

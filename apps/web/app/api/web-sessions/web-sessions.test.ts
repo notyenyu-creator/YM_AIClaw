@@ -97,6 +97,94 @@ describe("Web Sessions API", () => {
       const json = await res.json();
       expect(json.sessions).toEqual([]);
     });
+
+    it("returns planner learning draft queue metadata when includeAll=true", async () => {
+      const { readFileSync: mockReadFile, existsSync: mockExists } = await import("node:fs");
+      vi.mocked(mockExists).mockReturnValue(true);
+      const sessions = [
+        {
+          id: "s-ycrm-review",
+          title: "Needs review chat",
+          createdAt: 10,
+          updatedAt: 11,
+          messageCount: 4,
+          plannerPreflight: {
+            system: "ycrm",
+            updatedAt: 12,
+            intent: "entity_summary",
+            confidence: "high",
+            shouldRouteToYcrm: true,
+            workspaceId: "workspace_3jox",
+            needsWorkspaceValidation: false,
+            warnings: [],
+            blockers: [],
+            crossSystem: false,
+            targetSystems: [],
+          },
+          plannerLearningDraft: {
+            session_id: "s-ycrm-review",
+            status: "ready",
+            learning_focus: "entity_summary",
+            summary: "Draft is ready for review.",
+            meta: {
+              generated_at: 1710000000000,
+              generation_mode: "minimal_evidence",
+              token_guardrails: ["single_session_single_draft"],
+              cached: true,
+              source: "session_cache",
+            },
+            writeback: {
+              status: "promotion_conflicted",
+              updated_at: 1710000001000,
+              files: ["wiki/entities/customers/workspace_3jox-review-customer-summary.md"],
+              skipped_files: [],
+              promoted_files: [],
+              promotion_skipped_files: [],
+              promotion_conflict_files: ["wiki/entities/customers/workspace_3jox-review-customer-summary.md"],
+              approved_at: null,
+              approved_via: null,
+              resolution_action: null,
+              resolved_at: null,
+              review_reason: "Needs manual merge",
+              reviewer_note: "Customer summary overlaps with an existing page.",
+              reviewer_actor: "qa-reviewer",
+            },
+            evidence: {
+              latest_user_message: "整理 Calleen Hong 的客戶背景",
+              latest_assistant_reply: "我先整理目前可見的 Y-CRM 客戶脈絡。",
+              live_query_steps: ["read_real_data", "resolve_workspace_member_fk"],
+            },
+            drafts: {
+              wiki: [],
+              playbooks: [],
+              memory: [],
+            },
+            history: [],
+          },
+        },
+        {
+          id: "s-file",
+          title: "Scoped chat",
+          createdAt: 20,
+          updatedAt: 21,
+          messageCount: 2,
+          filePath: "docs/demo.md",
+        },
+      ];
+      vi.mocked(mockReadFile).mockReturnValue(JSON.stringify(sessions) as never);
+
+      const { GET } = await import("./route.js");
+      const req = new Request("http://localhost/api/web-sessions?includeAll=true");
+      const res = await GET(req);
+      const json = await res.json();
+
+      expect(json.sessions).toHaveLength(2);
+      expect(json.sessions[0].id).toBe("s-ycrm-review");
+      expect(json.sessions[0].plannerLearningDraft?.writeback?.status).toBe("promotion_conflicted");
+      expect(json.sessions[0].plannerLearningDraft?.writeback?.reviewer_actor).toBe("qa-reviewer");
+      expect(json.sessions[0].plannerLearningDraft?.writeback?.review_reason).toBe("Needs manual merge");
+      expect(json.sessions[1].filePath).toBe("docs/demo.md");
+    });
   });
 
   // ─── POST /api/web-sessions ────────────────────────────────────
@@ -184,7 +272,102 @@ describe("Web Sessions API", () => {
         JSON.stringify({ id: "m1", role: "user", content: "hello" }),
         JSON.stringify({ id: "m2", role: "assistant", content: "hi" }),
       ].join("\n");
-      vi.mocked(mockReadFile).mockReturnValue(lines as never);
+      vi.mocked(mockReadFile).mockImplementation((path) => {
+        const value = String(path);
+        if (value.endsWith("index.json")) {
+          return JSON.stringify([
+            {
+              id: "s1",
+              title: "Planner Chat",
+              createdAt: 1,
+              updatedAt: 2,
+              messageCount: 2,
+              plannerPreflight: {
+                system: "ycrm",
+                updatedAt: 3,
+                intent: "entity_summary",
+                confidence: "high",
+                shouldRouteToYcrm: true,
+                workspaceId: "workspace_3jox",
+                needsWorkspaceValidation: false,
+                warnings: [],
+                blockers: [],
+                crossSystem: false,
+                targetSystems: [],
+              },
+              plannerContextPack: {
+                planner: {
+                  system: "ycrm",
+                  updatedAt: 3,
+                  intent: "entity_summary",
+                  confidence: "high",
+                  shouldRouteToYcrm: true,
+                  workspaceId: "workspace_3jox",
+                  needsWorkspaceValidation: false,
+                  warnings: [],
+                  blockers: [],
+                  crossSystem: false,
+                  targetSystems: [],
+                },
+                read_first: [
+                  "skills/ycrm/SKILL.md",
+                  "schema/integration-profiles/ycrm.md",
+                ],
+                references: [],
+                wiki: ["wiki/entities/customers/YCRM_CUSTOMER_SUMMARY_TEMPLATE.md"],
+                playbooks: [],
+                memory_keys: ["known_rule:person_name_is_not_workspace"],
+                live_query_steps: ["read_real_data", "read_auto_schema_first", "resolve_workspace_member_fk"],
+                execution_hints: ["Read the matching auto-schema reference before writing SQL or assuming field names."],
+              },
+              plannerLearningDraft: {
+                session_id: "s1",
+                status: "ready",
+                learning_focus: "entity_summary",
+                summary: "Generated a first-pass Y-CRM learning draft from the persisted session context for intent \"entity_summary\".",
+                meta: {
+                  generated_at: 1710000000000,
+                  generation_mode: "minimal_evidence",
+                  token_guardrails: ["single_session_single_draft"],
+                  cached: true,
+                  source: "session_cache",
+                },
+                writeback: {
+                  status: "not_written",
+                  updated_at: null,
+                  files: [],
+                  skipped_files: [],
+                },
+                evidence: {
+                  latest_user_message: "hello",
+                  latest_assistant_reply: "hi",
+                  live_query_steps: ["read_real_data", "resolve_workspace_member_fk"],
+                },
+                drafts: {
+                  wiki: [
+                    {
+                      kind: "customer_summary",
+                      suggested_path: "wiki/entities/customers/workspace_3jo-s1-customer-summary.md",
+                      title: "Y-CRM Customer Summary Draft",
+                      reason: "Reusable customer summary.",
+                      outline: ["客戶背景", "商機狀態", "下一步"],
+                    },
+                  ],
+                  playbooks: [],
+                  memory: [
+                    {
+                      key: "known_rule:person_name_requires_workspace_member_fk",
+                      value: "Resolve workspaceMember first.",
+                      reason: "This session used person-name lookup.",
+                    },
+                  ],
+                },
+              },
+            },
+          ]) as never;
+        }
+        return lines as never;
+      });
 
       const { GET } = await import("./[id]/route.js");
       const res = await GET(
@@ -193,6 +376,11 @@ describe("Web Sessions API", () => {
       );
       const json = await res.json();
       expect(json.id).toBe("s1");
+      expect(json.session?.plannerPreflight?.intent).toBe("entity_summary");
+      expect(json.session?.plannerContextPack?.planner?.intent).toBe("entity_summary");
+      expect(json.session?.plannerContextPack?.live_query_steps).toContain("resolve_workspace_member_fk");
+      expect(json.session?.plannerLearningDraft?.learning_focus).toBe("entity_summary");
+      expect(json.session?.plannerLearningDraft?.drafts?.memory?.[0]?.key).toContain("workspace_member_fk");
       expect(json.messages).toHaveLength(2);
     });
 
