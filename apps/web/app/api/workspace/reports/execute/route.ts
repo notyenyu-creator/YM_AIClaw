@@ -1,10 +1,17 @@
-import { duckdbQueryAsync } from "@/lib/workspace";
+import { duckdbQueryAsync, duckdbQueryExternalPgAsync } from "@/lib/workspace";
 import { buildFilterClauses, injectFilters, checkSqlSafety } from "@/lib/report-filters";
 import type { FilterEntry } from "@/lib/report-filters";
 import { trackServer } from "@/lib/telemetry";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
+
+const YCRM_PG_CONNECTION =
+  "dbname=default user=postgres password=postgres host=localhost port=5432";
+
+function shouldRunAgainstYcrmExternalPg(sql: string): boolean {
+  return /\bycrm\./i.test(sql);
+}
 
 /**
  * POST /api/workspace/reports/execute
@@ -44,7 +51,9 @@ export async function POST(req: Request) {
   const finalSql = injectFilters(sql, filterClauses);
 
   try {
-		const rows = await duckdbQueryAsync(finalSql);
+		const rows = shouldRunAgainstYcrmExternalPg(finalSql)
+      ? await duckdbQueryExternalPgAsync(YCRM_PG_CONNECTION, finalSql, "ycrm")
+      : await duckdbQueryAsync(finalSql);
     trackServer("report_executed");
     return Response.json({ rows, sql: finalSql });
   } catch (err) {

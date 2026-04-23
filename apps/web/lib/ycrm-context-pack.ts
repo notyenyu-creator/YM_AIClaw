@@ -33,7 +33,7 @@ function selectCompactExecutionHints(
 	const selected: string[] = [];
 
 	for (const hint of pack.execution_hints) {
-		if (selected.length >= 5) {
+		if (selected.length >= 4) {
 			break;
 		}
 		pushUnique(selected, hint);
@@ -42,8 +42,13 @@ function selectCompactExecutionHints(
 	const criticalMatchers = [
 		"For charts, query real CRM data first and only then emit report-json VALUES payloads.",
 		"Do not emit any report-json or chart card unless you already have non-empty aggregated chart data from a real query.",
+		"The user only made chart rendering optional. Keep the primary response as an entity summary and use charts only as supporting visuals.",
 		"Read the matching auto-schema reference before writing SQL or assuming field names.",
 		"Resolve workspaceMember IDs first, then follow owner/assignee foreign keys instead of display labels.",
+		"Do not start from workspace README.md for Y-CRM routing; use planner.read_first entries first because README may be absent.",
+		"Only read schema references that match the resolved Y-CRM workspace in planner.read_first. Do not probe other workspace auto-schema files.",
+		"Owner/assignee foreign keys are table-scoped. Never reuse a field like fuZeYeWuId on person/company unless that table's auto-schema explicitly shows it.",
+		"When token pressure is high, prefer a concise text summary and skip optional charts, extra panels, and raw result dumps.",
 	];
 
 	for (const critical of criticalMatchers) {
@@ -53,7 +58,7 @@ function selectCompactExecutionHints(
 		}
 	}
 
-	return selected.slice(0, 7);
+	return selected.slice(0, 12);
 }
 
 function buildLiveQuerySteps(plan: YcrmContextBuilderOutput): string[] {
@@ -88,6 +93,9 @@ function buildExecutionHints(plan: YcrmContextBuilderOutput): string[] {
 		"Keep Y-CRM as the source-of-truth for customer, contact, and opportunity semantics.",
 		"Do not fabricate CRM records; verify live data before making operational claims.",
 		"Do not start from workspace README.md for Y-CRM routing; use planner.read_first entries first because README may be absent.",
+		"Only read schema references that match the resolved Y-CRM workspace in planner.read_first. Do not probe other workspace auto-schema files.",
+		"Owner/assignee foreign keys are table-scoped. Never reuse a field like fuZeYeWuId on person/company unless that table's auto-schema explicitly shows it.",
+		"When token pressure is high, prefer a concise text summary and skip optional charts, extra panels, and raw result dumps.",
 	];
 
 	if (plan.live_requirements.auto_schema_required) {
@@ -99,10 +107,10 @@ function buildExecutionHints(plan: YcrmContextBuilderOutput): string[] {
 	if (plan.live_requirements.report_json_values_required) {
 		hints.push("For charts, query real CRM data first and only then emit report-json VALUES payloads.");
 	}
-	if (plan.presentation.optional_chart_requested && !plan.presentation.chart_render_allowed) {
-		hints.push("The user only made chart rendering optional. Keep the primary response as an entity summary.");
+	if (plan.presentation.chart_guardrail_reason === "chart_optional_if_non_empty_aggregates_available") {
+		hints.push("The user only made chart rendering optional. Keep the primary response as an entity summary and use charts only as supporting visuals.");
 		hints.push("Do not emit any report-json or chart card unless you already have non-empty aggregated chart data from a real query.");
-		hints.push("If a chart would be empty, omit the chart card entirely and explain in plain text that grouped chart data is not available yet.");
+		hints.push("If grouped chart data is empty, omit the chart card entirely and explain in plain text that grouped chart data is not available yet.");
 	}
 	if (plan.presentation.optional_chart_requested && plan.presentation.chart_render_allowed) {
 		hints.push(`If you render charts, keep them compact and do not exceed ${plan.presentation.max_chart_panels} panels.`);
@@ -165,10 +173,14 @@ export function decorateMessageWithYcrmContextPack(
 		"runtime.orchestration=hermes_style",
 		"runtime.knowledge_layer=ai_wiki",
 		"runtime.pack_mode=compact",
+		"runtime.token_budget_mode=compact_guarded",
 		`planner.intent=${pack.planner.intent}`,
 		`planner.confidence=${pack.planner.confidence}`,
 		`planner.workspace=${pack.planner.workspaceId ?? "unresolved"}`,
+		`planner.system_scope=ycrm:${pack.planner.workspaceId ?? "unresolved"}`,
 		`planner.needs_workspace_validation=${pack.planner.needsWorkspaceValidation ? "true" : "false"}`,
+		`planner.allowed_auto_schema=${compactReadFirst.filter((entry) => entry.includes("auto-schema-")).join(" | ") || "none"}`,
+		"planner.owner_fk_policy=table_scoped_from_auto_schema_only",
 		`planner.cross_system=${pack.planner.crossSystem ? pack.planner.targetSystems.join(",") : "no"}`,
 		`planner.read_first=${compactReadFirst.length > 0 ? compactReadFirst.join(" | ") : "none"}`,
 		`planner.wiki=${compactWiki.length > 0 ? compactWiki.join(" | ") : "none"}`,

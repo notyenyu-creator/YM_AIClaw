@@ -266,4 +266,87 @@ describe("Chat session planner persistence integration", () => {
 		expect(sessionJson.messages).toHaveLength(2);
 		expect(sessionJson.messages[1].content).toBe("hello");
 	});
+
+	it("keeps Y-CRM continuity for follow-up chart requests in the same session", async () => {
+		seedSession("s-followup");
+
+		const { POST } = await import("./route.js");
+		const { GET } = await import("../web-sessions/[id]/route.js");
+
+		await POST(new Request("http://localhost/api/chat", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				sessionId: "s-followup",
+				messages: [
+					{
+						id: "m1",
+						role: "user",
+						parts: [
+							{
+								type: "text",
+								text: "請幫我整理 Y-CRM 工作區裡面的 Calleen Hong 目前負責的客戶背景。",
+							},
+						],
+					},
+				],
+			}),
+		}));
+
+		await POST(new Request("http://localhost/api/chat", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				sessionId: "s-followup",
+				messages: [
+					{
+						id: "m1",
+						role: "user",
+						parts: [
+							{
+								type: "text",
+								text: "請幫我整理 Y-CRM 工作區裡面的 Calleen Hong 目前負責的客戶背景。",
+							},
+						],
+					},
+					{
+						id: "m2",
+						role: "assistant",
+						parts: [
+							{
+								type: "text",
+								text: "以下是初步摘要。",
+							},
+						],
+					},
+					{
+						id: "m3",
+						role: "user",
+						parts: [
+							{
+								type: "text",
+								text: "好，我需要全部資料，然後用圖表呈現。",
+							},
+						],
+					},
+				],
+			}),
+		}));
+
+		const sessionResponse = await GET(
+			new Request("http://localhost/api/web-sessions/s-followup"),
+			{ params: Promise.resolve({ id: "s-followup" }) },
+		);
+		const sessionJson = await sessionResponse.json();
+
+		expect(sessionJson.session?.plannerPreflight?.shouldRouteToYcrm).toBe(true);
+		expect(sessionJson.session?.plannerPreflight?.intent).toBe("entity_summary");
+		expect(sessionJson.session?.plannerPreflight?.workspaceId).toBe("workspace_3joxkr9ofo5hlxjan164egffx");
+		expect(sessionJson.session?.plannerPreflight?.confidence).toBe("high");
+		expect(sessionJson.session?.plannerPreflight?.warnings ?? []).not.toContain("person_name_may_be_misread_as_workspace");
+		expect(sessionJson.session?.plannerContextPack?.planner?.workspaceId).toBe("workspace_3joxkr9ofo5hlxjan164egffx");
+		expect(sessionJson.session?.plannerContextPack?.planner?.shouldRouteToYcrm).toBe(true);
+		expect(sessionJson.messages).toHaveLength(2);
+		expect(sessionJson.messages[1].content).toContain("好，我需要全部資料");
+	});
 });

@@ -22,6 +22,7 @@ export type YcrmContextBuilderInput = {
     user_message: string;
     current_system_hint: string | null;
     requested_workspace: string | null;
+    prior_intent_hint: YcrmIntent | null;
     user_locale: string | null;
   };
   runtime_state: {
@@ -62,6 +63,7 @@ export function createDefaultYcrmContextInput(
       user_message: userMessage,
       current_system_hint: null,
       requested_workspace: null,
+      prior_intent_hint: null,
       user_locale: "zh-TW",
     },
     runtime_state: {
@@ -182,6 +184,30 @@ function hasEntitySummaryVerb(message: string): boolean {
   ].some((keyword) => lowerIncludes(message, keyword));
 }
 
+function isShortFollowupExpansionMessage(message: string): boolean {
+  const normalized = normalizeWhitespace(message).toLowerCase();
+  if (!normalized || normalized.length > 80) {
+    return false;
+  }
+
+  return [
+    "圖表",
+    "chart",
+    "全部",
+    "完整",
+    "展開",
+    "更多",
+    "明細",
+    "細節",
+    "用圖",
+    "畫圖",
+    "分布",
+    "總數",
+    "金額",
+    "件數",
+  ].some((keyword) => normalized.includes(keyword.toLowerCase()));
+}
+
 function hasCrossSystemKeyword(message: string): boolean {
   return [
     "訂單", "order",
@@ -195,7 +221,10 @@ function hasCrossSystemKeyword(message: string): boolean {
   ].some((keyword) => lowerIncludes(message, keyword));
 }
 
-function detectIntent(message: string): YcrmIntent {
+function detectIntent(message: string, priorIntentHint: YcrmIntent | null): YcrmIntent {
+  if (priorIntentHint === "entity_summary" && isShortFollowupExpansionMessage(message)) {
+    return "entity_summary";
+  }
   if (hasCrossSystemKeyword(message)) {
     return "cross_system_request";
   }
@@ -428,9 +457,9 @@ function buildPresentation(
 
   return {
     optional_chart_requested: true,
-    chart_render_allowed: false,
-    chart_guardrail_reason: "chart_optional_but_primary_task_is_entity_summary",
-    max_chart_panels: 0,
+    chart_render_allowed: true,
+    chart_guardrail_reason: "chart_optional_if_non_empty_aggregates_available",
+    max_chart_panels: 2,
   };
 }
 
@@ -456,8 +485,8 @@ function buildNotes(
   if (intent === "sales_report" && liveRequirements.report_json_values_required) {
     warnings.push("chart_request_requires_real_data_first");
   }
-  if (presentation.optional_chart_requested && !presentation.chart_render_allowed) {
-    warnings.push("chart_optional_fallback_to_text_summary");
+  if (presentation.chart_guardrail_reason === "chart_optional_if_non_empty_aggregates_available") {
+    warnings.push("chart_optional_requires_non_empty_aggregates");
   }
   if (intent === "unknown") {
     blockers.push("intent_unknown");
@@ -497,7 +526,7 @@ function riskFor(intent: YcrmIntent): YcrmContextBuilderOutput["risk"] {
 export function buildYcrmContext(input: YcrmContextBuilderInput): YcrmContextBuilderOutput {
   const message = normalizeWhitespace(input.request.user_message);
   const defaultWorkspaceId = input.defaults.default_workspace_id || DEFAULT_WORKSPACE_ID;
-  const intent = detectIntent(message);
+  const intent = detectIntent(message, input.request.prior_intent_hint);
   const shouldRoute = shouldRouteToYcrm(message, input.request.current_system_hint, intent);
   const workspace = resolveWorkspace(message, input.request.requested_workspace, defaultWorkspaceId);
   const contextBundle = buildContextBundle(input, intent, workspace.resolved_workspace_id);

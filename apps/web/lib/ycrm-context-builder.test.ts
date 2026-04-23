@@ -53,6 +53,12 @@ describe("buildYcrmContext", () => {
     expect(result.live_requirements.real_query_required).toBe(true);
     expect(result.live_requirements.auto_schema_required).toBe(true);
     expect(result.live_requirements.workspace_member_lookup_required).toBe(true);
+    expect(result.context_bundle.references).toContain(
+      "skills/ycrm/reference/auto-schema-workspace_3joxkr9ofo5hlxjan164egffx.md",
+    );
+    expect(
+      result.context_bundle.references.some((path) => path.includes("workspace_407lopjyyvm7bxeutk1tvqkpo")),
+    ).toBe(false);
     expect(result.handoff.cross_system).toBe(false);
   });
 
@@ -94,9 +100,31 @@ describe("buildYcrmContext", () => {
     expect(result.decision.intent).toBe("entity_summary");
     expect(result.live_requirements.report_json_values_required).toBe(false);
     expect(result.presentation.optional_chart_requested).toBe(true);
-    expect(result.presentation.chart_render_allowed).toBe(false);
-    expect(result.presentation.chart_guardrail_reason).toBe("chart_optional_but_primary_task_is_entity_summary");
-    expect(result.notes.warnings).toContain("chart_optional_fallback_to_text_summary");
+    expect(result.presentation.chart_render_allowed).toBe(true);
+    expect(result.presentation.chart_guardrail_reason).toBe("chart_optional_if_non_empty_aggregates_available");
+    expect(result.presentation.max_chart_panels).toBe(2);
+    expect(result.notes.warnings).toContain("chart_optional_requires_non_empty_aggregates");
+  });
+
+  it("keeps entity summaries primary for short follow-up chart expansion requests when prior intent is entity_summary", () => {
+    const result = buildYcrmContext(makeInput(
+      "好，我需要全部資料，然後用圖表呈現。",
+      {
+        request: {
+          current_system_hint: "ycrm",
+          requested_workspace: "workspace_3joxkr9ofo5hlxjan164egffx",
+          prior_intent_hint: "entity_summary",
+        },
+      },
+    ));
+
+    expect(result.decision.should_route_to_ycrm).toBe(true);
+    expect(result.decision.intent).toBe("entity_summary");
+    expect(result.decision.confidence).toBe("high");
+    expect(result.presentation.optional_chart_requested).toBe(true);
+    expect(result.presentation.chart_render_allowed).toBe(true);
+    expect(result.presentation.chart_guardrail_reason).toBe("chart_optional_if_non_empty_aggregates_available");
+    expect(result.notes.blockers).not.toContain("intent_unknown");
   });
 
   it("routes line interaction review with relevant wiki", () => {

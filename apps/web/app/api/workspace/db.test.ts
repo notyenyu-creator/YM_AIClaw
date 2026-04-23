@@ -8,6 +8,7 @@ vi.mock("@/lib/workspace", () => ({
   duckdbPath: vi.fn(() => null),
   duckdbQuery: vi.fn(() => []),
   duckdbQueryAsync: vi.fn(async () => []),
+  duckdbQueryExternalPgAsync: vi.fn(async () => []),
   duckdbQueryOnFile: vi.fn(() => []),
   duckdbQueryOnFileAsync: vi.fn(async () => []),
   duckdbExecOnFile: vi.fn(() => true),
@@ -32,6 +33,7 @@ describe("Workspace DB & Reports API", () => {
       duckdbPath: vi.fn(() => null),
       duckdbQuery: vi.fn(() => []),
       duckdbQueryAsync: vi.fn(async () => []),
+      duckdbQueryExternalPgAsync: vi.fn(async () => []),
       duckdbQueryOnFile: vi.fn(() => []),
       duckdbQueryOnFileAsync: vi.fn(async () => []),
       duckdbExecOnFile: vi.fn(() => true),
@@ -203,6 +205,30 @@ describe("Workspace DB & Reports API", () => {
       expect(res.status).toBe(200);
       const json = await res.json();
       expect(json.rows).toEqual([{ count: 42 }]);
+    });
+
+    it("routes ycrm-qualified report SQL to external postgres execution", async () => {
+      const { checkSqlSafety } = await import("@/lib/report-filters");
+      vi.mocked(checkSqlSafety).mockReturnValue(null);
+      const { duckdbQueryAsync, duckdbQueryExternalPgAsync } = await import("@/lib/workspace");
+      vi.mocked(duckdbQueryAsync).mockClear();
+      vi.mocked(duckdbQueryExternalPgAsync).mockClear();
+      vi.mocked(duckdbQueryExternalPgAsync).mockResolvedValue([{ stage: "需求確認", cnt: 9 }]);
+
+      const { POST } = await import("./reports/execute/route.js");
+      const req = new Request("http://localhost/api/workspace/reports/execute", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sql: "SELECT * FROM ycrm.workspace_3joxkr9ofo5hlxjan164egffx.opportunity",
+        }),
+      });
+      const res = await POST(req);
+      expect(res.status).toBe(200);
+      const json = await res.json();
+      expect(json.rows).toEqual([{ stage: "需求確認", cnt: 9 }]);
+      expect(duckdbQueryExternalPgAsync).toHaveBeenCalled();
+      expect(duckdbQueryAsync).not.toHaveBeenCalled();
     });
 
     it("applies filters to SQL", async () => {

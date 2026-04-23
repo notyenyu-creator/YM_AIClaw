@@ -1,5 +1,11 @@
 # DenchClaw + Y-CRM 系統架構說明
 
+> 延伸準則請一併參考：
+> [DenchClaw_跨系統串接與Agent設計原則.md](/Users/ym/DenchClaw/docs/DenchClaw_跨系統串接與Agent設計原則.md)
+>
+> 工程檢查清單：
+> [DenchClaw_系統串接工程檢查清單.md](/Users/ym/DenchClaw/docs/DenchClaw_系統串接工程檢查清單.md)
+
 ## 目前架構總覽
 
 ```

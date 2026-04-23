@@ -39,6 +39,8 @@ import {
 	createDefaultYcrmContextInput,
 	shouldPersistYcrmPlannerPreflight,
 	summarizeYcrmContextPlan,
+	type YcrmContextBuilderInput,
+	type YcrmIntent,
 } from "@/lib/ycrm-context-builder";
 import {
 	buildYcrmContextPack,
@@ -101,6 +103,145 @@ function extractImageAttachmentsFromMessage(
 		}
 	}
 	return attachments;
+}
+
+function extractTextParts(message: UIMessage | undefined): string {
+	if (!message?.parts) {
+		return "";
+	}
+	return message.parts
+		.filter(
+			(part): part is { type: "text"; text: string } => part.type === "text",
+		)
+		.map((part) => part.text)
+		.join("\n")
+		.trim();
+}
+
+function shouldAugmentPlannerMessageWithFollowupContext(
+	currentUserText: string,
+	previousUserText: string,
+): boolean {
+	const current = currentUserText.trim();
+	const previous = previousUserText.trim();
+
+	if (!current || !previous) {
+		return false;
+	}
+
+	const currentLower = current.toLowerCase();
+	const referencesYcrmDirectly = currentLower.includes("y-crm")
+		|| currentLower.includes("ycrm");
+	const referencesChartOrExpansion = [
+		"圖表",
+		"chart",
+		"全部",
+		"完整",
+		"展開",
+		"更多",
+		"明細",
+		"細節",
+		"用圖",
+		"畫圖",
+		"分布",
+		"總數",
+		"金額",
+		"件數",
+	].some((keyword) => currentLower.includes(keyword.toLowerCase()));
+
+	const shortFollowup = current.length <= 80;
+	return !referencesYcrmDirectly && shortFollowup && referencesChartOrExpansion;
+}
+
+function shouldReusePriorYcrmScope(currentUserText: string): boolean {
+	const current = currentUserText.trim().toLowerCase();
+	if (!current) {
+		return false;
+	}
+
+	return [
+		"y-crm",
+		"ycrm",
+		"客戶",
+		"公司",
+		"聯絡人",
+		"商機",
+		"業務",
+		"背景",
+		"名單",
+		"圖表",
+		"chart",
+		"報表",
+		"分布",
+		"pipeline",
+		"line",
+	].some((keyword) => current.includes(keyword));
+}
+
+function coercePriorYcrmIntent(value: string): YcrmIntent | null {
+	const supportedIntents = new Set<YcrmIntent>([
+		"product_help",
+		"entity_summary",
+		"opportunity_analysis",
+		"line_interaction_review",
+		"sales_report",
+		"write_intent",
+		"cross_system_request",
+		"unknown",
+	]);
+
+	return supportedIntents.has(value as YcrmIntent)
+		? (value as YcrmIntent)
+		: null;
+}
+
+function buildPlannerInputFromSession(
+	agentMessage: string,
+	messages: UIMessage[],
+	sessionMeta: ReturnType<typeof getSessionMeta>,
+): YcrmContextBuilderInput {
+	const input = createDefaultYcrmContextInput(agentMessage);
+	const priorPreflight = sessionMeta?.plannerPreflight;
+
+	if (priorPreflight?.system !== "ycrm" || !priorPreflight.shouldRouteToYcrm) {
+		return input;
+	}
+
+	const previousUserMessage = [...messages]
+		.slice(0, -1)
+		.reverse()
+		.find((message) => message.role === "user");
+	const previousUserText = extractTextParts(previousUserMessage);
+	const shouldAugmentWithPrevious = shouldAugmentPlannerMessageWithFollowupContext(
+		agentMessage,
+		previousUserText,
+	);
+
+	if (!shouldReusePriorYcrmScope(agentMessage) && !shouldAugmentWithPrevious) {
+		return input;
+	}
+
+	input.request.current_system_hint = "ycrm";
+	input.request.requested_workspace = priorPreflight.workspaceId ?? null;
+	input.request.prior_intent_hint = coercePriorYcrmIntent(priorPreflight.intent);
+
+	if (
+		priorPreflight.workspaceId
+		&& !input.runtime_state.available_auto_schema_workspaces.includes(priorPreflight.workspaceId)
+	) {
+		input.runtime_state.available_auto_schema_workspaces.push(priorPreflight.workspaceId);
+	}
+
+	if (shouldAugmentWithPrevious) {
+		input.request.user_message = [
+			"[Session follow-up context]",
+			previousUserText,
+			"[/Session follow-up context]",
+			agentMessage,
+		].join("\n");
+	}
+
+	return input;
 }
 
 function deriveSubagentInfo(sessionKey: string): { parentSessionId: string; task: string } | null {
@@ -283,7 +424,11 @@ export async function POST(req: Request) {
 			sessionMeta?.workspaceAgentId
 			?? resolveActiveAgentId();
 		const gatewayThreadId = sessionMeta?.gatewaySessionId ?? sessionId;
-		const ycrmPlannerInput = createDefaultYcrmContextInput(agentMessage);
+		const ycrmPlannerInput = buildPlannerInputFromSession(
+			agentMessage,
+			messages,
+			sessionMeta,
+		);
 		const ycrmPlannerPlan = buildYcrmContext(ycrmPlannerInput);
 		const ycrmPlannerSummary = summarizeYcrmContextPlan(ycrmPlannerPlan);
 		const ycrmContextPack = buildYcrmContextPack(ycrmPlannerPlan);
