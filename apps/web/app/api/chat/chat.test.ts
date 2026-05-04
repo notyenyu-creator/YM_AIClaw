@@ -538,6 +538,71 @@ describe("Chat API routes", () => {
       );
     });
 
+    it("injects ERP routing context when ERP keywords are present and Y-CRM does not claim the message", async () => {
+      const { startRun, hasActiveRun, subscribeToRun } = await import("@/lib/active-runs");
+      const {
+        updateSessionPlannerPreflight,
+        updateSessionPlannerContextPack,
+      } = await import("@/app/api/web-sessions/shared");
+      vi.mocked(hasActiveRun).mockReturnValue(false);
+      vi.mocked(subscribeToRun).mockReturnValue(() => {});
+      vi.mocked(updateSessionPlannerPreflight).mockClear();
+      vi.mocked(updateSessionPlannerContextPack).mockClear();
+
+      const { POST } = await import("./route.js");
+      const req = new Request("http://localhost/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          messages: [
+            {
+              id: "m1",
+              role: "user",
+              parts: [{ type: "text", text: "請幫我查 OOCHAIN 本月還沒出貨的訂單。" }],
+            },
+          ],
+          sessionId: "s-erp",
+        }),
+      });
+
+      await POST(req);
+
+      expect(updateSessionPlannerPreflight).toHaveBeenCalledWith(
+        "s-erp",
+        expect.objectContaining({
+          system: "ycrm",
+          intent: "cross_system_request",
+          shouldRouteToYcrm: false,
+          crossSystem: true,
+        }),
+      );
+      expect(updateSessionPlannerContextPack).toHaveBeenCalledWith(
+        "s-erp",
+        expect.objectContaining({
+          planner: expect.objectContaining({
+            system: "ycrm",
+            intent: "cross_system_request",
+            shouldRouteToYcrm: false,
+          }),
+        }),
+      );
+      expect(startRun).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: expect.stringContaining("[ERP Routing Context]"),
+        }),
+      );
+      expect(startRun).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: expect.stringContaining("intent: sales_order"),
+        }),
+      );
+      expect(startRun).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: expect.stringContaining('erp.public."SO"'),
+        }),
+      );
+    });
+
     it("adds compact rolling context only for follow-up turns that need continuity", async () => {
       const { startRun, hasActiveRun, subscribeToRun } = await import("@/lib/active-runs");
       vi.mocked(hasActiveRun).mockReturnValue(false);

@@ -13,6 +13,10 @@ vi.mock("./chat-agent-registry", () => ({
 	markChatAgentIdle: vi.fn(),
 }));
 
+vi.mock("./ycrm-learning-auto-trigger", () => ({
+	triggerAutoLearningDraftIfEligible: vi.fn(),
+}));
+
 // Mock agent-runner to control spawnAgentProcess
 vi.mock("./agent-runner", () => ({
 	spawnAgentProcess: vi.fn(),
@@ -123,6 +127,10 @@ describe("active-runs", () => {
 
 		vi.mock("./chat-agent-registry", () => ({
 			markChatAgentIdle: vi.fn(),
+		}));
+
+		vi.mock("./ycrm-learning-auto-trigger", () => ({
+			triggerAutoLearningDraftIfEligible: vi.fn(),
 		}));
 
 		// Re-wire mocks after resetModules
@@ -883,6 +891,9 @@ describe("active-runs", () => {
 		it("marks status as completed after clean exit", async () => {
 			const { child, startRun, hasActiveRun, getActiveRun } =
 				await setup();
+			const { triggerAutoLearningDraftIfEligible } = await import(
+				"./ycrm-learning-auto-trigger.js"
+			);
 
 			startRun({
 				sessionId: "s-done",
@@ -896,6 +907,9 @@ describe("active-runs", () => {
 
 			expect(hasActiveRun("s-done")).toBe(false);
 			expect(getActiveRun("s-done")?.status).toBe("completed");
+			expect(triggerAutoLearningDraftIfEligible).toHaveBeenCalledWith(
+				"s-done",
+			);
 		});
 
 		it("marks status as error after non-zero exit", async () => {

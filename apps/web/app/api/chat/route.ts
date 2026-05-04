@@ -47,6 +47,11 @@ import {
 	decorateMessageWithYcrmContextPack,
 } from "@/lib/ycrm-context-pack";
 import {
+	buildErpContext,
+	decorateMessageWithErpContext,
+	shouldPersistErpPlannerPreflight,
+} from "@/lib/erp-context-builder";
+import {
 	buildRollingChatContext,
 	decorateMessageWithRollingContext,
 } from "@/lib/chat-rolling-context";
@@ -444,6 +449,18 @@ export async function POST(req: Request) {
 
 		if (ycrmPlannerSummary.shouldRouteToYcrm) {
 			agentMessage = decorateMessageWithYcrmContextPack(agentMessage, ycrmContextPack);
+		}
+
+		// ERP routing: only attempt when Y-CRM did not claim the message.
+		// This keeps the two systems mutually exclusive at the routing layer
+		// while still letting future cross-system flows pull both in.
+		if (!ycrmPlannerSummary.shouldRouteToYcrm) {
+			const erpPreflight = buildErpContext({
+				request: { user_message: agentMessage },
+			});
+			if (shouldPersistErpPlannerPreflight(erpPreflight)) {
+				agentMessage = decorateMessageWithErpContext(agentMessage, erpPreflight);
+			}
 		}
 
 		const rollingContext = buildRollingChatContext(messages, userText);

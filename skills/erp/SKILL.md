@@ -47,78 +47,232 @@ metadata: { "openclaw": { "always": true, "emoji": "🏭" } }
 
 ## 連線方式
 
-> 目前此 Skill 是 phase-1 骨架。
-> 正式 ERP 連線資訊尚未落地前，不應假裝已可連線。
+### UAT 連線資訊（已可用）
 
-### 建議讀取通道
+```
+類型：PostgreSQL 17.9
+Host：118.168.188.27
+Port：5433
+Database：ErpUAT_local
+Username：erp_local
+Password：erp_local
+Schema：public（單一 schema，108 張表）
+Web UI：http://118.168.188.27:5173/
+```
 
-- 類型：DuckDB `postgres_scanner` 或對應資料庫 scanner
-- 模式：`:memory:` + `READ_ONLY`
-- 目標：ERP 正式資料庫或唯讀副本
+### 讀取通道（生產建議）
 
-### 建議寫入通道
+- 類型：DuckDB `postgres_scanner`
+- 模式：`:memory:` + `READ_ONLY`（**必須**）
+- 範例命令：
 
-- 類型：ERP 自身的 REST / GraphQL / RPC API
+```bash
+duckdb -json ':memory:' "
+INSTALL postgres_scanner;
+LOAD postgres_scanner;
+ATTACH 'host=118.168.188.27 port=5433 dbname=ErpUAT_local user=erp_local password=erp_local' AS erp (TYPE postgres, READ_ONLY);
+SELECT customer_id, customer_name FROM erp.public.\"B_CUSTOMER\" LIMIT 10;
+"
+```
+
+### 寫入通道
+
+- 類型：ERP 自身的 REST API（未來才接，目前 phase-1 不啟用）
 - phase-1 原則：**暫不開啟正式寫入**
 
 ---
 
 ## 查詢流程
 
-### Step 1: 確認 tenant / company / site / warehouse scope
+### Step 1: 確認 company / site scope
 
-ERP 很少只有一個平面工作區，查詢前先確認：
+這套 ERP 是多公司多廠區架構，幾乎所有交易表都有 `(company_id, site_id, doc_id)` 複合主鍵。
 
-- 公司別
-- 廠別
-- 倉別
-- 業務單位
-- 系統租戶
+UAT 預設 scope（目前只有一家公司一個廠）：
+- 從 `B_COMPANY` 查 `company_id`（目前只有 1 筆）
+- 從 `B_SITE` 查 `site_id`
 
-若使用者未指定，要明確說明目前用的是哪個預設 scope。
+若使用者未指定，明確說明使用預設 scope 並列出可用的公司/廠別。
 
-### Step 2: 探查 schema
+### Step 2: Schema 結構（已確定）
 
-```sql
-SELECT schema_name
-FROM erp.information_schema.schemata
-WHERE schema_name NOT IN ('information_schema', 'pg_catalog', 'pg_toast')
-ORDER BY schema_name;
-```
+- 只有一個 schema：**`public`**（108 張表）
+- 所有表名是**大寫 + 底線 + 雙引號包覆**
 
-### Step 3: 探查 tables
+完整欄位定義已整理在 `reference/auto-schema-erp.md`，查詢前優先讀那份文件。
 
-```sql
-SELECT table_name
-FROM erp.information_schema.tables
-WHERE table_schema = '<SCHEMA>'
-ORDER BY table_name;
-```
+### Step 3: 探查未知欄位
 
-### Step 4: 探查 columns
+若 reference 沒寫到某個欄位/表：
 
 ```sql
 SELECT column_name, data_type, is_nullable
 FROM erp.information_schema.columns
-WHERE table_schema = '<SCHEMA>' AND table_name = '<TABLE>'
+WHERE table_schema = 'public' AND table_name = '<TABLE>'
 ORDER BY ordinal_position;
 ```
 
-### Step 5: 取樣資料
+### Step 4: 取樣資料（必須先做）
 
 ```sql
-SELECT *
-FROM erp.<SCHEMA>."<TABLE>"
-LIMIT 5;
+SELECT * FROM erp.public."<TABLE>" LIMIT 5;
 ```
 
-### Step 6: 再寫正式查詢
+### Step 5: 寫正式查詢
 
 原則：
 
-- 加 `LIMIT`
-- 儘量先 summary、後 drill-down
-- 不要直接 dump 大量明細
+- 永遠 `LIMIT`（預設 100）
+- 永遠 `WHERE cancelled_at IS NULL`（排除作廢單）
+- 預設時間範圍：最近 30 天
+- 先 summary、後 drill-down
+- 不要 dump 全表
+
+---
+
+## 鐵則（違反就會出錯）
+
+### 1. 表名必須加雙引號 + 全大寫
+
+```sql
+-- ✅ 正確
+SELECT * FROM erp.public."SO" WHERE customer_id = 'C001';
+
+-- ❌ 錯誤（會報 relation does not exist）
+SELECT * FROM erp.public.SO;
+SELECT * FROM erp.public.so;
+```
+
+### 2. 多公司多廠區複合主鍵
+
+幾乎所有交易表的主鍵都是 `(company_id, site_id, doc_id)`：
+
+| 表 | 主鍵 |
+|----|------|
+| `SO` | `(company_id, site_id, so_id)` |
+| `SO_LINE` | `(company_id, site_id, so_id, line_no)` |
+| `DO` | `(company_id, site_id, do_id)` |
+| `PO` | `(company_id, site_id, po_id)` |
+| `WO` | `(company_id, site_id, wo_id)` |
+| `INVENTORY` | `(company_id, site_id, inv_id)` |
+
+JOIN 主檔↔明細時用 `USING (company_id, site_id, so_id)` 比 `ON` 簡潔。
+
+### 3. 永遠排除作廢單
+
+所有業務表都有 `cancelled_at`，必須：
+
+```sql
+WHERE cancelled_at IS NULL  -- 排除已作廢
+```
+
+### 4. 唯讀，禁止寫入
+
+DuckDB ATTACH 必須加 `READ_ONLY`，任何 INSERT/UPDATE/DELETE 都不允許產生。
+
+---
+
+## 核心查詢 Pattern
+
+### Pattern A：客戶 → 訂單 → 出貨進度
+
+```sql
+SELECT
+  c.customer_name, s.so_id, s.so_date, s.delivery_date,
+  s.total_amt, s.order_status, s.shipping_status,
+  COALESCE(SUM(d.ship_qty), 0) AS shipped_total
+FROM erp.public."SO" s
+JOIN erp.public."B_CUSTOMER" c ON c.customer_id = s.customer_id
+LEFT JOIN erp.public."DO_LINE" d
+  ON d.company_id = s.company_id AND d.site_id = s.site_id AND d.so_id = s.so_id
+WHERE s.cancelled_at IS NULL
+  AND s.so_date >= CURRENT_DATE - INTERVAL 30 DAY
+GROUP BY c.customer_name, s.so_id, s.so_date, s.delivery_date,
+         s.total_amt, s.order_status, s.shipping_status
+ORDER BY s.so_date DESC
+LIMIT 100;
+```
+
+### Pattern B：訂單明細 + 商品
+
+```sql
+SELECT s.so_id, c.customer_name,
+  l.line_no, i.item_name, l.qty, l.unit_price, l.line_amt,
+  l.picked_qty, l.shipped_qty, l.delivery_date AS line_due_date
+FROM erp.public."SO" s
+JOIN erp.public."SO_LINE" l USING (company_id, site_id, so_id)
+JOIN erp.public."B_CUSTOMER" c ON c.customer_id = s.customer_id
+JOIN erp.public."B_ITEM" i ON i.item_id = l.item_id
+WHERE s.so_id = 'SO20260101' AND s.cancelled_at IS NULL;
+```
+
+### Pattern C：庫存即時狀態
+
+```sql
+SELECT i.item_id, i.item_name,
+  SUM(inv.on_hand_qty) AS on_hand,
+  SUM(inv.available_qty) AS available,
+  SUM(inv.reserved_qty) AS reserved
+FROM erp.public."INVENTORY" inv
+JOIN erp.public."B_ITEM" i ON i.item_id = inv.item_id
+WHERE i.cancelled_at IS NULL
+GROUP BY i.item_id, i.item_name
+ORDER BY available DESC
+LIMIT 50;
+```
+
+### Pattern D：訂單延誤分析
+
+```sql
+SELECT s.so_id, c.customer_name,
+  s.delivery_date, s.shipping_status,
+  CURRENT_DATE - s.delivery_date AS days_overdue
+FROM erp.public."SO" s
+JOIN erp.public."B_CUSTOMER" c ON c.customer_id = s.customer_id
+WHERE s.cancelled_at IS NULL
+  AND s.delivery_date < CURRENT_DATE
+  AND s.shipping_status NOT IN ('SHIPPED', 'CLOSED')
+ORDER BY days_overdue DESC;
+```
+
+---
+
+## 表名速查（核心 30 個）
+
+| 模組 | 主檔 | 明細 |
+|------|------|------|
+| 客戶/品項 | `B_CUSTOMER`, `B_ITEM`, `B_VENDOR`, `B_COMPANY`, `B_SITE` | — |
+| 報價 | `QUOTE` | `QUOTE_LINE` |
+| 銷售 | `SO` | `SO_LINE` |
+| 出貨 | `DO` | `DO_LINE` |
+| 揀貨 | `PICK` | `PICK_LINE` |
+| 請購 | `PR` | `PR_LINE` |
+| 採購 | `PO` | `PO_LINE` |
+| 進貨 | `GR` | `GR_LINE` |
+| 退購 | `PO_RTN` | `PO_RTN_LINE` |
+| 庫存 | `INVENTORY`, `INV_TRANS` | — |
+| 入庫 | `INV_IN` | `INV_IN_LINE` |
+| 出庫 | `INV_OUT` | `INV_OUT_LINE` |
+| 調撥 | `TFR` | `TFR_LINE` |
+| 盤點 | `CNT` | `CNT_LINE` |
+| 調整 | `ADJ` | `ADJ_LINE` |
+| 領料 | `ISSUE` | `ISSUE_LINE` |
+| 退料 | `ISSUE_REVERSE` | `ISSUE_REVERSE_LINE` |
+| 成品入庫 | `SR` | `SR_LINE` |
+| 工單（含 MES）| `WO` | `WO_LINE`, `WO_PROCESS`, `WO_PROCESS_REPORT` |
+| BOM | `B_BOM` | `B_BOM_LINE`, `B_BOM_PROCESS` |
+| 服務 | `SV_TICKET` | `SV_TICKET_PART`, `SV_TICKET_WORKLOG` |
+| 財務 | `B_DOC` | `B_DOC_INV` |
+
+完整欄位定義請讀 `reference/auto-schema-erp.md`。
+
+## 重要欄位語義
+
+- `SO.order_status` / `shipping_status` / `picking_status` / `invoice_status`：狀態碼，需從 `B_EXT_DICT` 查中文標籤
+- `SO_LINE.qty` / `picked_qty` / `shipped_qty` / `returned_qty`：訂購、已揀、已出、已退數量
+- `INVENTORY.on_hand_qty` / `available_qty` / `reserved_qty` / `allocated_qty`：在手、可用、保留、已分配
+- `cancelled_at` IS NULL：未作廢單
+- `closed_at` IS NULL：未結案單
 
 ---
 
@@ -207,18 +361,28 @@ ERP 常會和其他系統交會：
 
 ---
 
-## Phase-1 狀態
+## Phase-1 狀態（已連線可用）
 
-目前 ERP Skill 的定位是：
+目前 ERP Skill 已具備：
 
-- phase-1 規劃骨架
-- 用來固定查詢流程、scope 意識、風險分級、source-of-truth 原則
-- 不是已完成的正式 ERP 連線實作
+- ✅ 實際 DB 連線（UAT：`118.168.188.27:5433/ErpUAT_local`）
+- ✅ 完整 schema 知識（108 表，主要 30 表已記錄）
+- ✅ 查詢 Pattern（A/B/C/D，銷售→出貨→庫存→延誤）
+- ✅ 鐵則（雙引號、複合主鍵、cancelled_at、READ_ONLY）
+- ✅ 跨系統規則（與 Y-CRM 對接的 source-of-truth）
 
-後續接入 ERP 時，應先補：
+尚未補完：
 
-- 實際 DB / API 連線資訊
-- integration profile
-- schema mapping
-- query examples
-- chart/report templates
+- ⏳ ERP 寫入 API（phase-2 才接，目前唯讀）
+- ⏳ Learning loop（phase-2 複製 Y-CRM 樣板）
+- ⏳ Wiki ingest / lint（phase-2）
+
+## 使用者問題範例
+
+| 問題類型 | 範例 | 用 Pattern |
+|---------|------|-----------|
+| 訂單概況 | 「OOCHAIN 公司本月訂單？」 | A |
+| 訂單明細 | 「SO20260101 這張單有什麼商品？」 | B |
+| 庫存查詢 | 「目前可用庫存最多的前 10 個商品？」 | C |
+| 延誤分析 | 「現在有哪些訂單已過交期還沒出貨？」 | D |
+| 客戶分析 | 「客戶 C001 的訂單金額趨勢」 | A + report-json |

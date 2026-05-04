@@ -23,6 +23,7 @@ import {
 	writeFile,
 } from "node:fs/promises";
 import { resolveWebChatDir, resolveOpenClawStateDir, resolveActiveAgentId } from "./workspace";
+import { triggerAutoLearningDraftIfEligible } from "./ycrm-learning-auto-trigger";
 import {
 	type AgentProcessHandle,
 	type AgentEvent,
@@ -2302,6 +2303,11 @@ function wireChildProcess(run: ActiveRun): void {
 		// Normal completion path.
 		run.status = exitedClean ? "completed" : "error";
 
+		// Auto-generate Y-CRM learning draft (fire-and-forget, never blocks).
+		if (exitedClean) {
+			triggerAutoLearningDraftIfEligible(run.sessionId);
+		}
+
 		// Final persistence flush (removes _streaming flag).
 		flushPersistence(run).catch(() => {});
 
@@ -2433,6 +2439,9 @@ function finalizeWaitingRun(run: ActiveRun): void {
 	resetSubscribeRetryState(run);
 
 	stopSubscribeProcess(run);
+
+	// Auto-generate Y-CRM learning draft (fire-and-forget, never blocks).
+	triggerAutoLearningDraftIfEligible(run.sessionId);
 
 	flushPersistence(run).catch(() => {});
 
