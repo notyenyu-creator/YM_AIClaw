@@ -88,4 +88,41 @@ describe("PlannerPreflightHeader", () => {
 			screen.getByText("Promoted: this draft was force-promoted after manual approval."),
 		).toBeInTheDocument();
 	});
+
+	it("renders ERP planner state without disturbing the Y-CRM review model", () => {
+		render(
+			<PlannerPreflightHeader
+				plannerPreflight={{
+					system: "ycrm",
+					updatedAt: Date.now(),
+					validationState: "heuristic",
+					intent: "cross_system_request",
+					confidence: "medium",
+					shouldRouteToYcrm: false,
+					workspaceId: null,
+					needsWorkspaceValidation: false,
+					warnings: [],
+					blockers: [],
+					crossSystem: true,
+					targetSystems: ["erp"],
+				}}
+				erpPlannerPreflight={{
+					system: "erp",
+					updatedAt: Date.now(),
+					intent: "sales_order",
+					confidence: "high",
+					shouldRouteToErp: true,
+					matchedKeywords: ["訂單", "出貨"],
+					warnings: [],
+				}}
+			/>,
+		);
+
+		expect(screen.getByText("ERP")).toBeInTheDocument();
+		expect(screen.getByText("Advisory")).toBeInTheDocument();
+		expect(screen.getByText("intent:sales_order")).toBeInTheDocument();
+		expect(screen.getByText("conf:high")).toBeInTheDocument();
+		expect(screen.getByText("Cross-system")).toBeInTheDocument();
+		expect(screen.queryByText("Y-CRM")).not.toBeInTheDocument();
+	});
 });

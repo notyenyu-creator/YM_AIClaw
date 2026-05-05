@@ -56,6 +56,15 @@
 - 更新 `wiki/index.md`
 - 目的：讓 Y-CRM 成為第一個可落地的 AI Wiki / Learning Loop 試點
 
+## [2026-05-04] bootstrap | 建立 ERP wiki templates
+
+- 建立 `wiki/entities/orders/ERP_SALES_ORDER_SUMMARY_TEMPLATE.md`
+- 建立 `wiki/entities/items/ERP_INVENTORY_SNAPSHOT_TEMPLATE.md`
+- 建立 `wiki/operations/erp/ERP_SHIPMENT_TRACKING_TEMPLATE.md`
+- 建立 `wiki/playbooks/erp/ERP_ORDER_FULFILLMENT_PLAYBOOK_TEMPLATE.md`
+- 更新 `wiki/index.md`
+- 目的：讓 ERP 具備與 Y-CRM 對齊的 AI Wiki / Playbook 基礎層
+
 ---
 
 ## 4. 後續待補

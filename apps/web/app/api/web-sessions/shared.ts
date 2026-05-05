@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
+import type { ErpPlannerPreflight } from "@/lib/erp-context-builder";
+import type { ErpContextPack } from "@/lib/erp-context-pack";
 import type { YcrmContextPack } from "@/lib/ycrm-context-pack";
 import type { YcrmLearningDraft } from "@/lib/ycrm-learning-draft";
 import { resolveActiveAgentId, resolveWebChatDir } from "@/lib/workspace";
@@ -54,6 +56,10 @@ export type WebSessionMeta = {
   plannerContextPack?: YcrmContextPack;
   /** Latest learning draft generated from the persisted planner context and session transcript. */
   plannerLearningDraft?: YcrmLearningDraft;
+  /** Latest ERP planner preflight captured before a chat run starts. */
+  erpPlannerPreflight?: ErpPlannerPreflight;
+  /** Latest ERP planner context pack captured before a chat run starts. */
+  erpPlannerContextPack?: ErpContextPack;
 };
 
 export function ensureDir() {
@@ -191,11 +197,34 @@ export function updateSessionPlannerPreflight(
   writeIndex(sessions);
 }
 
+export function updateSessionErpPlannerPreflight(
+  sessionId: string,
+  plannerPreflight: ErpPlannerPreflight,
+): void {
+  const sessions = readIndex();
+  const session = sessions.find((entry) => entry.id === sessionId);
+  if (!session) {
+    return;
+  }
+  session.erpPlannerPreflight = plannerPreflight;
+  session.updatedAt = Date.now();
+  writeIndex(sessions);
+}
+
 function isTerminalLearningDraftStatus(status: YcrmLearningDraft["writeback"]["status"] | undefined): boolean {
   return status === "promoted" || status === "resolution_kept_current";
 }
 
 export function invalidateSessionPlannerArtifacts(
+  sessionId: string,
+  options?: {
+    preserveReviewedLearningDraft?: boolean;
+  },
+): void {
+  invalidateSessionYcrmPlannerArtifacts(sessionId, options);
+}
+
+export function invalidateSessionYcrmPlannerArtifacts(
   sessionId: string,
   options?: {
     preserveReviewedLearningDraft?: boolean;
@@ -244,6 +273,20 @@ export function updateSessionPlannerContextPack(
   writeIndex(sessions);
 }
 
+export function updateSessionErpPlannerContextPack(
+  sessionId: string,
+  plannerContextPack: ErpContextPack,
+): void {
+  const sessions = readIndex();
+  const session = sessions.find((entry) => entry.id === sessionId);
+  if (!session) {
+    return;
+  }
+  session.erpPlannerContextPack = plannerContextPack;
+  session.updatedAt = Date.now();
+  writeIndex(sessions);
+}
+
 export function updateSessionPlannerLearningDraft(
   sessionId: string,
   plannerLearningDraft: YcrmLearningDraft,
@@ -254,6 +297,30 @@ export function updateSessionPlannerLearningDraft(
     return;
   }
   session.plannerLearningDraft = plannerLearningDraft;
+  session.updatedAt = Date.now();
+  writeIndex(sessions);
+}
+
+export function invalidateSessionErpPlannerArtifacts(
+  sessionId: string,
+): void {
+  const sessions = readIndex();
+  const session = sessions.find((entry) => entry.id === sessionId);
+  if (!session) {
+    return;
+  }
+
+  const hadPlannerArtifacts = Boolean(
+    session.erpPlannerPreflight
+    || session.erpPlannerContextPack,
+  );
+
+  if (!hadPlannerArtifacts) {
+    return;
+  }
+
+  delete session.erpPlannerPreflight;
+  delete session.erpPlannerContextPack;
   session.updatedAt = Date.now();
   writeIndex(sessions);
 }

@@ -14,6 +14,7 @@ SKIP_BUILD="false"
 
 PID_FILE=""
 LOG_FILE=""
+SCREEN_NAME=""
 
 usage() {
   cat <<'EOF'
@@ -89,6 +90,7 @@ parse_args() {
 
   PID_FILE="/tmp/denchclaw-web-${PORT}.pid"
   LOG_FILE="/tmp/denchclaw-web-${PORT}.log"
+  SCREEN_NAME="denchclaw-web-${PORT}"
 }
 
 find_listener_pids() {
@@ -156,6 +158,10 @@ stop_server() {
     rm -f "$PID_FILE"
   fi
 
+  if command -v screen >/dev/null 2>&1; then
+    screen -S "$SCREEN_NAME" -X quit >/dev/null 2>&1 || true
+  fi
+
   for _ in {1..20}; do
     if [[ -z "$(find_listener_pids)" ]]; then
       echo "[dench-web] port $PORT is clear"
@@ -172,11 +178,16 @@ start_detached() {
 
   : >"$LOG_FILE"
 
-  (
-    cd "$APP_DIR"
-    nohup env PORT="$PORT" HOSTNAME="$HOST" node "$server_entry" >>"$LOG_FILE" 2>&1 < /dev/null &
-    echo $! >"$PID_FILE"
-  )
+  if command -v screen >/dev/null 2>&1; then
+    screen -S "$SCREEN_NAME" -X quit >/dev/null 2>&1 || true
+    screen -dmS "$SCREEN_NAME" bash -lc "echo \$\$ > '$PID_FILE'; cd '$APP_DIR'; exec env PORT='$PORT' HOSTNAME='$HOST' node '$server_entry' >>'$LOG_FILE' 2>&1"
+  else
+    (
+      cd "$APP_DIR"
+      nohup env PORT="$PORT" HOSTNAME="$HOST" node "$server_entry" >>"$LOG_FILE" 2>&1 < /dev/null &
+      echo $! >"$PID_FILE"
+    )
+  fi
 
   if ! wait_for_http; then
     echo "[dench-web] startup log:" >&2
@@ -187,6 +198,9 @@ start_detached() {
   echo "[dench-web] started in background"
   echo "[dench-web] pid file: $PID_FILE"
   echo "[dench-web] log file: $LOG_FILE"
+  if command -v screen >/dev/null 2>&1; then
+    echo "[dench-web] screen session: $SCREEN_NAME"
+  fi
   show_listener_summary
 }
 
@@ -205,9 +219,14 @@ status_server() {
   echo "[dench-web] host: $HOST"
   echo "[dench-web] pid file: $PID_FILE"
   echo "[dench-web] log file: $LOG_FILE"
+  echo "[dench-web] screen session: $SCREEN_NAME"
 
   if [[ -f "$PID_FILE" ]]; then
     echo "[dench-web] recorded pid: $(cat "$PID_FILE" 2>/dev/null || true)"
+  fi
+
+  if command -v screen >/dev/null 2>&1; then
+    screen -ls | grep -F "$SCREEN_NAME" || true
   fi
 
   if show_listener_summary | grep -q .; then

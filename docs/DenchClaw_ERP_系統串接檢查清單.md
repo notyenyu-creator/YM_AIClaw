@@ -1,5 +1,8 @@
 # DenchClaw ERP 系統串接檢查清單
 
+> 更新日期：2026-05-04
+> 目前狀態：已完成 `skill + context builder + context pack + runtime workspace sync + session planner metadata persistence` 的第一層骨架
+
 本清單是 `ERP` 接入 DenchClaw 的第一版工程檢查模板。
 
 它建立在這兩份共用文件之上：

@@ -30,6 +30,15 @@ export type WebSession = {
 		crossSystem: boolean;
 		targetSystems: string[];
 	};
+	erpPlannerPreflight?: {
+		system: "erp";
+		updatedAt: number;
+		intent: string;
+		confidence: string;
+		shouldRouteToErp: boolean;
+		matchedKeywords: string[];
+		warnings: string[];
+	};
 	plannerLearningDraft?: {
 		writeback?: {
 			status?: "not_written" | "written" | "promoted" | "promotion_conflicted" | "resolution_kept_current";
@@ -340,20 +349,33 @@ function formatPlannerWorkspaceLabel(workspaceId: string | null | undefined): st
 
 function buildPlannerTooltip(session: WebSession): string | null {
 	const planner = session.plannerPreflight;
-	if (!planner) {
+	const erpPlanner = session.erpPlannerPreflight;
+	if (!planner && !erpPlanner) {
 		return null;
 	}
 
-	const lines = [
-		`state: ${planner.validationState ?? "heuristic"}`,
-		`intent: ${planner.intent}`,
-		`confidence: ${planner.confidence}`,
-		`route_to_ycrm: ${planner.shouldRouteToYcrm ? "yes" : "no"}`,
-		`cross_system: ${planner.crossSystem ? "yes" : "no"}`,
-	];
+	const lines: string[] = [];
 
-	if (planner.workspaceId) {
-		lines.push(`workspace: ${planner.workspaceId}`);
+	if (planner) {
+		lines.push(
+			`ycrm.state: ${planner.validationState ?? "heuristic"}`,
+			`ycrm.intent: ${planner.intent}`,
+			`ycrm.confidence: ${planner.confidence}`,
+			`route_to_ycrm: ${planner.shouldRouteToYcrm ? "yes" : "no"}`,
+			`cross_system: ${planner.crossSystem ? "yes" : "no"}`,
+		);
+
+		if (planner.workspaceId) {
+			lines.push(`workspace: ${planner.workspaceId}`);
+		}
+	}
+
+	if (erpPlanner) {
+		lines.push(
+			`erp.intent: ${erpPlanner.intent}`,
+			`erp.confidence: ${erpPlanner.confidence}`,
+			`route_to_erp: ${erpPlanner.shouldRouteToErp ? "yes" : "no"}`,
+		);
 	}
 
 	return lines.join("\n");
@@ -400,14 +422,17 @@ function WebSessionRow({
 	showFilePath?: boolean;
 }) {
 	const showMore = isHovered || isStreaming;
-	const planner = session.plannerPreflight;
-	const workspaceLabel = formatPlannerWorkspaceLabel(planner?.workspaceId);
+	const ycrmPlanner = session.plannerPreflight;
+	const erpPlanner = session.erpPlannerPreflight;
+	const effectivePlanner = erpPlanner?.shouldRouteToErp ? erpPlanner : ycrmPlanner;
+	const workspaceLabel = formatPlannerWorkspaceLabel(ycrmPlanner?.workspaceId);
 	const plannerTooltip = buildPlannerTooltip(session);
 	const reviewBadge = getReviewQueueBadge(session);
 	const reviewerActor = session.plannerLearningDraft?.writeback?.reviewer_actor?.trim() || null;
 	const reviewHref = reviewBadge ? `/review/ycrm?sessionId=${encodeURIComponent(session.id)}` : null;
 	const showPlannerStatus = Boolean(
-		(planner && (planner.shouldRouteToYcrm || planner.crossSystem || workspaceLabel))
+		(ycrmPlanner && (ycrmPlanner.shouldRouteToYcrm || ycrmPlanner.crossSystem || workspaceLabel))
+		|| erpPlanner?.shouldRouteToErp
 		|| reviewBadge
 		|| reviewerActor,
 	);
@@ -463,13 +488,22 @@ function WebSessionRow({
 								title={plannerTooltip ?? undefined}
 								aria-label={`Planner preflight for ${session.title || "Untitled chat"}`}
 							>
-								{planner?.shouldRouteToYcrm && (
+								{ycrmPlanner?.shouldRouteToYcrm && (
 									<PlannerStatusChip label="Y-CRM" tone="accent" />
 								)}
-								{planner && (
-									<PlannerStatusChip label={planner.validationState === "validated" ? "Validated" : "Advisory"} />
+								{erpPlanner?.shouldRouteToErp && (
+									<PlannerStatusChip label="ERP" tone="accent" />
 								)}
-								{planner?.crossSystem && (
+								{effectivePlanner && (
+									<PlannerStatusChip
+										label={
+											"validationState" in effectivePlanner && effectivePlanner.validationState === "validated"
+												? "Validated"
+												: "Advisory"
+										}
+									/>
+								)}
+								{ycrmPlanner?.crossSystem && (
 									<PlannerStatusChip label="Cross-system" tone="warning" />
 								)}
 								{workspaceLabel && (

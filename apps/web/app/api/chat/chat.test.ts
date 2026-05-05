@@ -30,8 +30,11 @@ vi.mock("@/lib/workspace", () => ({
 vi.mock("@/app/api/web-sessions/shared", () => ({
   getSessionMeta: vi.fn(() => undefined),
   hasRotatedGatewayThread: vi.fn(() => false),
-  invalidateSessionPlannerArtifacts: vi.fn(),
+  invalidateSessionErpPlannerArtifacts: vi.fn(),
+  invalidateSessionYcrmPlannerArtifacts: vi.fn(),
   rotateGatewaySessionThreadForModelReset: vi.fn(),
+  updateSessionErpPlannerContextPack: vi.fn(),
+  updateSessionErpPlannerPreflight: vi.fn(),
   updateSessionPlannerPreflight: vi.fn(),
   updateSessionPlannerContextPack: vi.fn(),
   resolveSessionKey: vi.fn(
@@ -76,8 +79,11 @@ describe("Chat API routes", () => {
     vi.mock("@/app/api/web-sessions/shared", () => ({
       getSessionMeta: vi.fn(() => undefined),
       hasRotatedGatewayThread: vi.fn(() => false),
-      invalidateSessionPlannerArtifacts: vi.fn(),
+      invalidateSessionErpPlannerArtifacts: vi.fn(),
+      invalidateSessionYcrmPlannerArtifacts: vi.fn(),
       rotateGatewaySessionThreadForModelReset: vi.fn(),
+      updateSessionErpPlannerContextPack: vi.fn(),
+      updateSessionErpPlannerPreflight: vi.fn(),
       updateSessionPlannerPreflight: vi.fn(),
       updateSessionPlannerContextPack: vi.fn(),
       resolveSessionKey: vi.fn(
@@ -160,7 +166,7 @@ describe("Chat API routes", () => {
     it("clears stale planner artifacts when the latest turn no longer persists Y-CRM routing state", async () => {
       const { hasActiveRun, subscribeToRun } = await import("@/lib/active-runs");
       const {
-        invalidateSessionPlannerArtifacts,
+        invalidateSessionYcrmPlannerArtifacts,
         updateSessionPlannerPreflight,
         updateSessionPlannerContextPack,
       } = await import("@/app/api/web-sessions/shared");
@@ -182,7 +188,7 @@ describe("Chat API routes", () => {
       const res = await POST(req);
 
       expect(res.status).toBe(200);
-      expect(invalidateSessionPlannerArtifacts).toHaveBeenCalledWith("s-stale", {
+      expect(invalidateSessionYcrmPlannerArtifacts).toHaveBeenCalledWith("s-stale", {
         preserveReviewedLearningDraft: true,
       });
       expect(updateSessionPlannerPreflight).not.toHaveBeenCalled();
@@ -538,14 +544,20 @@ describe("Chat API routes", () => {
       );
     });
 
-    it("injects ERP routing context when ERP keywords are present and Y-CRM does not claim the message", async () => {
+    it("injects ERP context pack when ERP keywords are present and Y-CRM does not claim the message", async () => {
       const { startRun, hasActiveRun, subscribeToRun } = await import("@/lib/active-runs");
       const {
+        invalidateSessionYcrmPlannerArtifacts,
+        updateSessionErpPlannerContextPack,
+        updateSessionErpPlannerPreflight,
         updateSessionPlannerPreflight,
         updateSessionPlannerContextPack,
       } = await import("@/app/api/web-sessions/shared");
       vi.mocked(hasActiveRun).mockReturnValue(false);
       vi.mocked(subscribeToRun).mockReturnValue(() => {});
+      vi.mocked(invalidateSessionYcrmPlannerArtifacts).mockClear();
+      vi.mocked(updateSessionErpPlannerPreflight).mockClear();
+      vi.mocked(updateSessionErpPlannerContextPack).mockClear();
       vi.mocked(updateSessionPlannerPreflight).mockClear();
       vi.mocked(updateSessionPlannerContextPack).mockClear();
 
@@ -586,19 +598,42 @@ describe("Chat API routes", () => {
           }),
         }),
       );
-      expect(startRun).toHaveBeenCalledWith(
+      expect(invalidateSessionYcrmPlannerArtifacts).not.toHaveBeenCalled();
+      expect(updateSessionErpPlannerPreflight).toHaveBeenCalledWith(
+        "s-erp",
         expect.objectContaining({
-          message: expect.stringContaining("[ERP Routing Context]"),
+          system: "erp",
+          intent: "sales_order",
+          shouldRouteToErp: true,
+        }),
+      );
+      expect(updateSessionErpPlannerContextPack).toHaveBeenCalledWith(
+        "s-erp",
+        expect.objectContaining({
+          planner: expect.objectContaining({
+            system: "erp",
+            intent: "sales_order",
+            shouldRouteToErp: true,
+          }),
+          read_first: expect.arrayContaining([
+            "skills/erp/SKILL.md",
+            "skills/erp/reference/auto-schema-erp.md",
+          ]),
         }),
       );
       expect(startRun).toHaveBeenCalledWith(
         expect.objectContaining({
-          message: expect.stringContaining("intent: sales_order"),
+          message: expect.stringContaining("[ERP Context Pack]"),
         }),
       );
       expect(startRun).toHaveBeenCalledWith(
         expect.objectContaining({
-          message: expect.stringContaining('erp.public."SO"'),
+          message: expect.stringContaining("planner.intent=sales_order"),
+        }),
+      );
+      expect(startRun).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: expect.stringContaining("runtime.orchestration=hermes_style"),
         }),
       );
     });

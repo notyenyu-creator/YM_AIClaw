@@ -1,7 +1,9 @@
 import type { SessionPlannerPreflight } from "@/app/api/web-sessions/shared";
+import type { ErpPlannerPreflight } from "@/lib/erp-context-builder";
 import type { YcrmLearningDraft } from "@/lib/ycrm-learning-draft";
 
 export type PlannerPreflightSummary = SessionPlannerPreflight;
+export type ErpPlannerPreflightSummary = ErpPlannerPreflight;
 export type PlannerLearningDraftSummary = Pick<YcrmLearningDraft, "writeback"> | null;
 
 function formatPlannerWorkspaceLabel(workspaceId: string | null | undefined): string | null {
@@ -54,16 +56,19 @@ function PlannerStatusPill({
 	);
 }
 
-function buildPlannerTitle(plannerPreflight: PlannerPreflightSummary): string {
+function buildPlannerTitle(
+	plannerPreflight: PlannerPreflightSummary | ErpPlannerPreflightSummary,
+): string {
 	const lines = [
-		`state: ${plannerPreflight.validationState ?? "heuristic"}`,
+		`system: ${plannerPreflight.system}`,
+		`state: ${"validationState" in plannerPreflight ? (plannerPreflight.validationState ?? "heuristic") : "heuristic"}`,
 		`intent: ${plannerPreflight.intent}`,
 		`confidence: ${plannerPreflight.confidence}`,
 	];
 	if (plannerPreflight.warnings.length > 0) {
 		lines.push(`warnings: ${plannerPreflight.warnings.join(", ")}`);
 	}
-	if (plannerPreflight.blockers.length > 0) {
+	if ("blockers" in plannerPreflight && plannerPreflight.blockers.length > 0) {
 		lines.push(`blockers: ${plannerPreflight.blockers.join(", ")}`);
 	}
 	return lines.join("\n");
@@ -109,33 +114,49 @@ function getLearningDraftNextAction(plannerLearningDraft: PlannerLearningDraftSu
 
 export function PlannerPreflightHeader({
 	plannerPreflight,
+	erpPlannerPreflight = null,
 	plannerLearningDraft = null,
 	sessionId = null,
 }: {
 	plannerPreflight: PlannerPreflightSummary | null;
+	erpPlannerPreflight?: ErpPlannerPreflightSummary | null;
 	plannerLearningDraft?: PlannerLearningDraftSummary;
 	sessionId?: string | null;
 }) {
-	if (!plannerPreflight && !plannerLearningDraft) {
+	if (!plannerPreflight && !erpPlannerPreflight && !plannerLearningDraft) {
 		return null;
 	}
 
+	const effectivePlanner = erpPlannerPreflight?.shouldRouteToErp
+		? erpPlannerPreflight
+		: plannerPreflight;
 	const workspaceLabel = formatPlannerWorkspaceLabel(plannerPreflight?.workspaceId);
-	const warningCount = plannerPreflight?.warnings.length ?? 0;
+	const warningCount = effectivePlanner?.warnings.length ?? 0;
 	const blockerCount = plannerPreflight?.blockers.length ?? 0;
 	const learningDraftStatus = getLearningDraftStatusPill(plannerLearningDraft);
 	const learningDraftNextAction = getLearningDraftNextAction(plannerLearningDraft);
 	const reviewerActor = plannerLearningDraft?.writeback?.reviewer_actor?.trim() || null;
 
 	return (
-		<div aria-label="Planner preflight status" title={plannerPreflight ? buildPlannerTitle(plannerPreflight) : undefined}>
+		<div aria-label="Planner preflight status" title={effectivePlanner ? buildPlannerTitle(effectivePlanner) : undefined}>
 			<div className="mt-1 flex flex-wrap gap-1.5">
 				{plannerPreflight?.shouldRouteToYcrm && (
 					<PlannerStatusPill label="Y-CRM" tone="accent" />
 				)}
-				{plannerPreflight ? <PlannerStatusPill label={plannerPreflight.validationState === "validated" ? "Validated" : "Advisory"} /> : null}
-				{plannerPreflight ? <PlannerStatusPill label={`intent:${plannerPreflight.intent}`} /> : null}
-				{plannerPreflight ? <PlannerStatusPill label={`conf:${plannerPreflight.confidence}`} /> : null}
+				{erpPlannerPreflight?.shouldRouteToErp && (
+					<PlannerStatusPill label="ERP" tone="accent" />
+				)}
+				{effectivePlanner ? (
+					<PlannerStatusPill
+						label={
+							"validationState" in effectivePlanner && effectivePlanner.validationState === "validated"
+								? "Validated"
+								: "Advisory"
+						}
+					/>
+				) : null}
+				{effectivePlanner ? <PlannerStatusPill label={`intent:${effectivePlanner.intent}`} /> : null}
+				{effectivePlanner ? <PlannerStatusPill label={`conf:${effectivePlanner.confidence}`} /> : null}
 				{plannerPreflight?.crossSystem && (
 					<PlannerStatusPill label="Cross-system" tone="warning" />
 				)}

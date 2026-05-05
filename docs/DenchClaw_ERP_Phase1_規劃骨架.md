@@ -1,7 +1,7 @@
 # DenchClaw ERP Phase-1 規劃骨架
 
-> 更新日期：2026-04-22
-> 狀態：規劃中
+> 更新日期：2026-05-04
+> 狀態：phase-1 骨架進行中
 > 目標：在不破壞既有 `OpenClaw Gateway + Hermes-style orchestration + AI Wiki` 架構下，建立 `ERP` 的第一版安全接入樣板。
 
 ---
@@ -139,16 +139,22 @@ ERP phase-1 若要算成功，至少要做到：
 - `ERP checklist`
 - `ERP integration profile`
 - `ERP skill skeleton`
+- `ERP runtime workspace skill sync`
+- `ERP context builder`
+- `ERP context pack`
+- `ERP session planner metadata persistence`
+- `ERP wiki / schema phase-1 骨架`
 
 下一步最合理的是：
 
-1. 補 ERP 真實連線條件
+1. 補 ERP 真實連線條件驗證
 2. 定義 ERP phase-1 目標資料範圍
 3. 決定第一批要支援的查詢：
    - 訂單
    - 庫存
    - 出貨
    - 應收應付
+4. 再往下補 `review / learning loop / writeback`，但不影響既有 Y-CRM 主流程
 
 ---
 

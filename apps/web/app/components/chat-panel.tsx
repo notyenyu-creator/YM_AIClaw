@@ -25,6 +25,7 @@ import {
 import { UnicodeSpinner } from "./unicode-spinner";
 import { Dialog, DialogContent } from "./ui/dialog";
 import type { SessionPlannerPreflight } from "@/app/api/web-sessions/shared";
+import type { ErpPlannerPreflight } from "@/lib/erp-context-builder";
 import type { YcrmLearningDraft } from "@/lib/ycrm-learning-draft";
 import type { ChatPanelRuntimeState } from "@/lib/chat-session-registry";
 import {
@@ -873,6 +874,7 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 			string | null
 		>(null);
 		const [plannerPreflight, setPlannerPreflight] = useState<SessionPlannerPreflight | null>(null);
+		const [erpPlannerPreflight, setErpPlannerPreflight] = useState<ErpPlannerPreflight | null>(null);
 		const [plannerLearningDraft, setPlannerLearningDraft] = useState<YcrmLearningDraft | null>(null);
 		const [loadingSession, setLoadingSession] = useState(false);
 		const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -952,11 +954,13 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 					const data = await response.json() as {
 						session?: {
 							plannerPreflight?: SessionPlannerPreflight | null;
+							erpPlannerPreflight?: ErpPlannerPreflight | null;
 							plannerLearningDraft?: YcrmLearningDraft | null;
 						} | null;
 					};
 					if (sessionIdRef.current === sessionId) {
 						setPlannerPreflight(data.session?.plannerPreflight ?? null);
+						setErpPlannerPreflight(data.session?.erpPlannerPreflight ?? null);
 						setPlannerLearningDraft(data.session?.plannerLearningDraft ?? null);
 					}
 				} catch {
@@ -1350,6 +1354,7 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 			onActiveSessionChange?.(null);
 			setMessages([]);
 			setPlannerPreflight(null);
+			setErpPlannerPreflight(null);
 			setPlannerLearningDraft(null);
 			savedMessageIdsRef.current.clear();
 			isFirstFileMessageRef.current = true;
@@ -1380,6 +1385,7 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 						}
 						const msgData = await msgRes.json();
 						setPlannerPreflight(msgData.session?.plannerPreflight ?? null);
+						setErpPlannerPreflight(msgData.session?.erpPlannerPreflight ?? null);
 						setPlannerLearningDraft(msgData.session?.plannerLearningDraft ?? null);
 						const sessionMessages: Array<{
 							id: string;
@@ -1934,6 +1940,7 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 				setLoadingSession(true);
 				setCurrentSessionId(sessionId);
 				setPlannerPreflight(null);
+				setErpPlannerPreflight(null);
 				setPlannerLearningDraft(null);
 				sessionIdRef.current = sessionId;
 				onActiveSessionChange?.(sessionId);
@@ -1949,6 +1956,7 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 						console.warn(`Session ${sessionId} not found (${response.status}), starting fresh.`);
 						setMessages([]);
 						setPlannerPreflight(null);
+						setErpPlannerPreflight(null);
 						setPlannerLearningDraft(null);
 						setLoadingSession(false);
 						return;
@@ -1956,6 +1964,7 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 
 					const data = await response.json();
 					setPlannerPreflight(data.session?.plannerPreflight ?? null);
+					setErpPlannerPreflight(data.session?.erpPlannerPreflight ?? null);
 					setPlannerLearningDraft(data.session?.plannerLearningDraft ?? null);
 					const sessionMessages: Array<{
 						id: string;
@@ -2034,6 +2043,7 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 			onActiveSessionChange?.(null);
 			setMessages([]);
 			setPlannerPreflight(null);
+			setErpPlannerPreflight(null);
 			setPlannerLearningDraft(null);
 			savedMessageIdsRef.current.clear();
 			userHtmlMapRef.current.clear();
@@ -2061,6 +2071,7 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 					const sessionId = await createSession(title);
 					setCurrentSessionId(sessionId);
 					setPlannerPreflight(null);
+					setErpPlannerPreflight(null);
 					setPlannerLearningDraft(null);
 					sessionIdRef.current = sessionId;
 					onActiveSessionChange?.(sessionId);
@@ -2469,6 +2480,7 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 								{currentSessionId && (
 									<PlannerPreflightHeader
 										plannerPreflight={plannerPreflight}
+										erpPlannerPreflight={erpPlannerPreflight}
 										plannerLearningDraft={plannerLearningDraft}
 										sessionId={currentSessionId}
 									/>
@@ -2486,6 +2498,7 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 								</h2>
 								<PlannerPreflightHeader
 									plannerPreflight={plannerPreflight}
+									erpPlannerPreflight={erpPlannerPreflight}
 									plannerLearningDraft={plannerLearningDraft}
 									sessionId={currentSessionId}
 								/>

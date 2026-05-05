@@ -37,18 +37,22 @@
 |------|------|----------|----------|
 | `wiki/entities/customers/YCRM_CUSTOMER_SUMMARY_TEMPLATE.md` | Y-CRM 客戶摘要模板，整理客戶、聯絡人、商機與互動脈絡 | Y-CRM | 2026-04-16 |
 | `wiki/entities/opportunities/YCRM_OPPORTUNITY_SUMMARY_TEMPLATE.md` | Y-CRM 商機摘要模板，整理階段、金額、風險與下一步 | Y-CRM | 2026-04-16 |
+| `wiki/entities/orders/ERP_SALES_ORDER_SUMMARY_TEMPLATE.md` | ERP 訂單摘要模板，整理單據狀態、金額與交付風險 | ERP | 2026-05-04 |
+| `wiki/entities/items/ERP_INVENTORY_SNAPSHOT_TEMPLATE.md` | ERP 庫存快照模板，整理 on-hand / available / reserved 與成本 | ERP | 2026-05-04 |
 
 ### Operations
 
 | 頁面 | 摘要 | 來源系統 | 最後更新 |
 |------|------|----------|----------|
 | `wiki/operations/ycrm/YCRM_LINE_INTERACTION_SUMMARY_TEMPLATE.md` | Y-CRM LINE 互動摘要模板，整理對話脈絡與待辦訊號 | Y-CRM | 2026-04-16 |
+| `wiki/operations/erp/ERP_SHIPMENT_TRACKING_TEMPLATE.md` | ERP 出貨追蹤模板，整理出貨、揀貨與追蹤狀態 | ERP | 2026-05-04 |
 
 ### Playbooks
 
 | 頁面 | 摘要 | 來源系統 | 最後更新 |
 |------|------|----------|----------|
 | `wiki/playbooks/ycrm/YCRM_SALES_ANALYSIS_PLAYBOOK_TEMPLATE.md` | Y-CRM 業務分析 playbook 模板，用於商機、業務、客戶分析 | Y-CRM | 2026-04-16 |
+| `wiki/playbooks/erp/ERP_ORDER_FULFILLMENT_PLAYBOOK_TEMPLATE.md` | ERP 訂單履約 playbook 模板，用於訂單、出貨、交期與風險分析 | ERP | 2026-05-04 |
 
 ### Analysis
 

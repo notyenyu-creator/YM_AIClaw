@@ -23,8 +23,11 @@ import { join, basename, extname } from "node:path";
 import {
 	getSessionMeta,
 	hasRotatedGatewayThread,
-	invalidateSessionPlannerArtifacts,
+	invalidateSessionErpPlannerArtifacts,
+	invalidateSessionYcrmPlannerArtifacts,
 	rotateGatewaySessionThreadForModelReset,
+	updateSessionErpPlannerContextPack,
+	updateSessionErpPlannerPreflight,
 	updateSessionPlannerContextPack,
 	updateSessionPlannerPreflight,
 } from "@/app/api/web-sessions/shared";
@@ -48,9 +51,12 @@ import {
 } from "@/lib/ycrm-context-pack";
 import {
 	buildErpContext,
-	decorateMessageWithErpContext,
 	shouldPersistErpPlannerPreflight,
 } from "@/lib/erp-context-builder";
+import {
+	buildErpContextPack,
+	decorateMessageWithErpContextPack,
+} from "@/lib/erp-context-pack";
 import {
 	buildRollingChatContext,
 	decorateMessageWithRollingContext,
@@ -441,8 +447,9 @@ export async function POST(req: Request) {
 		if (shouldPersistYcrmPlannerPreflight(ycrmPlannerSummary)) {
 			updateSessionPlannerPreflight(sessionId, ycrmPlannerSummary);
 			updateSessionPlannerContextPack(sessionId, ycrmContextPack);
+			invalidateSessionErpPlannerArtifacts(sessionId);
 		} else {
-			invalidateSessionPlannerArtifacts(sessionId, {
+			invalidateSessionYcrmPlannerArtifacts(sessionId, {
 				preserveReviewedLearningDraft: true,
 			});
 		}
@@ -459,7 +466,17 @@ export async function POST(req: Request) {
 				request: { user_message: agentMessage },
 			});
 			if (shouldPersistErpPlannerPreflight(erpPreflight)) {
-				agentMessage = decorateMessageWithErpContext(agentMessage, erpPreflight);
+				const erpContextPack = buildErpContextPack(erpPreflight, {
+					userMessage: userText,
+				});
+				updateSessionErpPlannerPreflight(sessionId, erpPreflight);
+				updateSessionErpPlannerContextPack(sessionId, erpContextPack);
+				agentMessage = decorateMessageWithErpContextPack(
+					agentMessage,
+					erpContextPack,
+				);
+			} else {
+				invalidateSessionErpPlannerArtifacts(sessionId);
 			}
 		}
 

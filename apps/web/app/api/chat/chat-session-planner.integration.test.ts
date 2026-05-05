@@ -349,4 +349,46 @@ describe("Chat session planner persistence integration", () => {
 		expect(sessionJson.messages).toHaveLength(2);
 		expect(sessionJson.messages[1].content).toContain("好，我需要全部資料");
 	});
+
+	it("persists ERP planner metadata while leaving Y-CRM learning artifacts untouched", async () => {
+		seedSession("s-erp");
+
+		const { POST } = await import("./route.js");
+		const { GET } = await import("../web-sessions/[id]/route.js");
+
+		await POST(new Request("http://localhost/api/chat", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				sessionId: "s-erp",
+				messages: [
+					{
+						id: "m1",
+						role: "user",
+						parts: [
+							{
+								type: "text",
+								text: "請幫我查 OOCHAIN 本月還沒出貨的訂單。",
+							},
+						],
+					},
+				],
+			}),
+		}));
+
+		const sessionResponse = await GET(
+			new Request("http://localhost/api/web-sessions/s-erp"),
+			{ params: Promise.resolve({ id: "s-erp" }) },
+		);
+		const sessionJson = await sessionResponse.json();
+
+		expect(sessionJson.session?.plannerPreflight?.system).toBe("ycrm");
+		expect(sessionJson.session?.plannerPreflight?.intent).toBe("cross_system_request");
+		expect(sessionJson.session?.erpPlannerPreflight?.system).toBe("erp");
+		expect(sessionJson.session?.erpPlannerPreflight?.intent).toBe("sales_order");
+		expect(sessionJson.session?.erpPlannerPreflight?.shouldRouteToErp).toBe(true);
+		expect(sessionJson.session?.erpPlannerContextPack?.planner?.intent).toBe("sales_order");
+		expect(sessionJson.session?.erpPlannerContextPack?.read_first).toContain("skills/erp/SKILL.md");
+		expect(sessionJson.session?.plannerLearningDraft ?? null).toBeNull();
+	});
 });
