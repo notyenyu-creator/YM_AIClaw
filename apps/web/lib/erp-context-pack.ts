@@ -146,6 +146,12 @@ function buildExecutionHints(
 	}
 
 	if (preflight.intent === "inventory_status") {
+		hints.push(
+			'For INVENTORY queries: use available_qty for "available/可用" stock and on_hand_qty for "on-hand/在手" stock. NEVER use allocated_qty for available-stock questions — it is almost always 0 in UAT.',
+		);
+		hints.push(
+			"Always JOIN B_ITEM to retrieve item_name; do not claim item_name is empty without checking B_ITEM.",
+		);
 		hints.push("Aggregate inventory facts before visualizing them, and avoid charting raw item-by-item dumps.");
 	}
 

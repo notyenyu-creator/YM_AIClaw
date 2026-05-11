@@ -270,9 +270,50 @@ ORDER BY days_overdue DESC;
 
 - `SO.order_status` / `shipping_status` / `picking_status` / `invoice_status`：狀態碼，需從 `B_EXT_DICT` 查中文標籤
 - `SO_LINE.qty` / `picked_qty` / `shipped_qty` / `returned_qty`：訂購、已揀、已出、已退數量
-- `INVENTORY.on_hand_qty` / `available_qty` / `reserved_qty` / `allocated_qty`：在手、可用、保留、已分配
 - `cancelled_at` IS NULL：未作廢單
 - `closed_at` IS NULL：未結案單
+
+---
+
+## 🚨 INVENTORY 欄位黃金規則（最常出錯，必讀）
+
+| 使用者問什麼 | ✅ 該用的欄位 | ❌ 絕不可用 | 中文意義 |
+|------------|------------|-----------|---------|
+| 「庫存多少」「有多少貨」 | `on_hand_qty` | `allocated_qty` | 在手實際庫存 |
+| 「可用多少」「能賣多少」「可用庫存最多」 | `available_qty` | `allocated_qty` | 可用量 = on_hand − reserved |
+| 「保留多少」「鎖了多少」 | `reserved_qty` | — | 已被保留 |
+| 「已分配給訂單多少」 | `allocated_qty` | — | 已分配給特定訂單 |
+| 「在驗收」「品檢中」 | `in_inspect_qty` | — | 待品檢 |
+| 「運送中」「在途」 | `in_transit_qty` | — | 在途數量 |
+
+### ⚠️ 最常見錯誤：把 `allocated_qty` 當「可用量」
+
+`allocated_qty`（已分配）= 已被特定訂單佔走的數量。
+
+**UAT 環境多數情況 `allocated_qty` 都是 0**（因為沒有訂單真正分配），用它做「可用庫存」排名永遠得到全 0。
+
+**鐵則**：使用者問「可用庫存」「能賣多少」「庫存排名」一律用 **`available_qty`**。
+
+### 範例對照
+
+```sql
+-- ❌ 錯誤：用 allocated_qty 做「可用庫存排名」（結果全是 0）
+SELECT item_id, SUM(allocated_qty) AS qty
+FROM erp.public."INVENTORY"
+GROUP BY item_id ORDER BY qty DESC LIMIT 10;
+
+-- ✅ 正確：用 available_qty
+SELECT item_id, SUM(available_qty) AS available_qty
+FROM erp.public."INVENTORY"
+GROUP BY item_id ORDER BY available_qty DESC LIMIT 10;
+```
+
+### B_ITEM 欄位提醒
+
+- `item_name`：商品名稱（**有值，不要說「空白」**）
+- `short_name`：簡稱
+- `spec1..spec5`：規格欄位（多數為 NULL，正常）
+- 查商品時請一律 JOIN `B_ITEM ON i.item_id = inv.item_id` 取得 `item_name`
 
 ---
 
