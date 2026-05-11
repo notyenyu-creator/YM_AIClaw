@@ -387,12 +387,15 @@ function buildPlannerTooltip(session: WebSession): string | null {
 	return lines.join("\n");
 }
 
+type LearningWritebackStatus =
+	| "not_written"
+	| "written"
+	| "promoted"
+	| "promotion_conflicted"
+	| "resolution_kept_current";
+
 function statusToBadge(
-	status: WebSession["plannerLearningDraft"] extends infer T
-		? T extends { writeback?: { status?: infer S } }
-			? S
-			: never
-		: never,
+	status: LearningWritebackStatus | undefined,
 	systemLabel: "Y-CRM" | "ERP",
 ): { label: string; tone: "neutral" | "accent" | "warning" | "success" } | null {
 	if (status === "promotion_conflicted") {
@@ -780,11 +783,14 @@ export function ChatSessionsSidebar({
 
 	// Status helpers that accept either Y-CRM or ERP learning draft state.
 	// A session enters the review queue when either side has a relevant status.
-	const sessionLearningStatuses = (session: WebSession): string[] =>
-		[
-			session.plannerLearningDraft?.writeback?.status,
-			session.erpPlannerLearningDraft?.writeback?.status,
-		].filter((status): status is string => typeof status === "string");
+	const sessionLearningStatuses = (session: WebSession): string[] => {
+		const statuses: string[] = [];
+		const ycrm = session.plannerLearningDraft?.writeback?.status;
+		const erp = session.erpPlannerLearningDraft?.writeback?.status;
+		if (typeof ycrm === "string") statuses.push(ycrm);
+		if (typeof erp === "string") statuses.push(erp);
+		return statuses;
+	};
 
 	const filteredDenchClawSessions = useMemo(() => {
 		if (reviewQueueFilter === "draft_ready") {
