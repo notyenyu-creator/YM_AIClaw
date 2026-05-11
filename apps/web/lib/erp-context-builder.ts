@@ -22,6 +22,17 @@ export type ErpContextBuilderInput = {
   };
 };
 
+export function createDefaultErpContextInput(
+  userMessage: string,
+): ErpContextBuilderInput {
+  return {
+    request: {
+      user_message: userMessage,
+      current_system_hint: "erp",
+    },
+  };
+}
+
 export type ErpPlannerPreflight = {
   system: "erp";
   updatedAt: number;
@@ -30,7 +41,19 @@ export type ErpPlannerPreflight = {
   shouldRouteToErp: boolean;
   matchedKeywords: string[];
   warnings: string[];
+  presentation: {
+    optional_chart_requested: boolean;
+    chart_render_allowed: boolean;
+    chart_guardrail_reason: string | null;
+    max_chart_panels: number;
+  };
 };
+
+const CHART_KEYWORDS = [
+  "圖表", "chart", "圖", "bar", "pie", "line",
+  "分布", "趨勢", "占比", "比例", "排名", "ranking",
+  "報表", "分析圖", "長條圖", "圓餅圖",
+];
 
 const INTENT_KEYWORDS: Record<ErpIntent, string[]> = {
   sales_order: [
@@ -157,6 +180,17 @@ export function buildErpContext(
     warnings.push("routed_without_clear_intent");
   }
 
+  const chartHits = countMatches(message, CHART_KEYWORDS);
+  const optionalChartRequested = chartHits.count > 0;
+  const presentation = {
+    optional_chart_requested: optionalChartRequested,
+    chart_render_allowed: optionalChartRequested && shouldRouteToErp,
+    chart_guardrail_reason: optionalChartRequested
+      ? "chart_optional_if_non_empty_aggregates_available"
+      : null,
+    max_chart_panels: optionalChartRequested ? 2 : 0,
+  };
+
   return {
     system: "erp",
     updatedAt: Date.now(),
@@ -165,6 +199,7 @@ export function buildErpContext(
     shouldRouteToErp,
     matchedKeywords,
     warnings,
+    presentation,
   };
 }
 

@@ -115,6 +115,7 @@ describe("PlannerPreflightHeader", () => {
 					matchedKeywords: ["訂單", "出貨"],
 					warnings: [],
 				}}
+				sessionId="erp-review-1"
 			/>,
 		);
 
@@ -124,5 +125,9 @@ describe("PlannerPreflightHeader", () => {
 		expect(screen.getByText("conf:high")).toBeInTheDocument();
 		expect(screen.getByText("Cross-system")).toBeInTheDocument();
 		expect(screen.queryByText("Y-CRM")).not.toBeInTheDocument();
+		expect(screen.getByRole("link", { name: "Open review" })).toHaveAttribute(
+			"href",
+			"/review/erp?sessionId=erp-review-1",
+		);
 	});
 });

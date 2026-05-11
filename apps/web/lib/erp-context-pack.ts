@@ -23,24 +23,6 @@ function pushUnique(target: string[], value: string) {
 	}
 }
 
-function hasChartRequest(message: string): boolean {
-	const normalized = message.trim().toLowerCase();
-	if (!normalized) {
-		return false;
-	}
-
-	return [
-		"圖表",
-		"chart",
-		"報表",
-		"分析圖",
-		"分布",
-		"趨勢",
-		"長條圖",
-		"圓餅圖",
-	].some((keyword) => normalized.includes(keyword.toLowerCase()));
-}
-
 function buildReferences(preflight: ErpPlannerPreflight): string[] {
 	const references = [
 		"skills/erp/reference/auto-schema-erp.md",
@@ -176,21 +158,10 @@ function buildExecutionHints(
 
 export function buildErpContextPack(
 	preflight: ErpPlannerPreflight,
-	options: { userMessage?: string } = {},
 ): ErpContextPack {
-	const optionalChartRequested = hasChartRequest(options.userMessage ?? "");
-	const presentation = {
-		optional_chart_requested: optionalChartRequested,
-		chart_render_allowed: optionalChartRequested,
-		chart_guardrail_reason: optionalChartRequested
-			? "chart_optional_if_non_empty_aggregates_available"
-			: null,
-		max_chart_panels: optionalChartRequested ? 2 : 0,
-	};
-
 	return {
 		planner: preflight,
-		presentation,
+		presentation: preflight.presentation,
 		read_first: [
 			"skills/erp/SKILL.md",
 			"skills/erp/reference/auto-schema-erp.md",
@@ -200,7 +171,7 @@ export function buildErpContextPack(
 		playbooks: buildPlaybooks(preflight),
 		memory_keys: buildMemoryKeys(preflight),
 		live_query_steps: buildLiveQuerySteps(preflight),
-		execution_hints: buildExecutionHints(preflight, presentation),
+		execution_hints: buildExecutionHints(preflight, preflight.presentation),
 	};
 }
 

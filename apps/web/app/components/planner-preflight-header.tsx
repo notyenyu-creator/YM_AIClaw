@@ -136,6 +136,16 @@ export function PlannerPreflightHeader({
 	const learningDraftStatus = getLearningDraftStatusPill(plannerLearningDraft);
 	const learningDraftNextAction = getLearningDraftNextAction(plannerLearningDraft);
 	const reviewerActor = plannerLearningDraft?.writeback?.reviewer_actor?.trim() || null;
+	const reviewHref = sessionId
+		? learningDraftStatus
+			? `/review/ycrm?sessionId=${encodeURIComponent(sessionId)}`
+			: erpPlannerPreflight?.shouldRouteToErp
+				? `/review/erp?sessionId=${encodeURIComponent(sessionId)}`
+				: null
+		: null;
+	const reviewTitle = learningDraftStatus
+		? "Open the formal Y-CRM review workspace for this session"
+		: "Open the formal ERP review workspace for this session";
 
 	return (
 		<div aria-label="Planner preflight status" title={effectivePlanner ? buildPlannerTitle(effectivePlanner) : undefined}>
@@ -175,15 +185,16 @@ export function PlannerPreflightHeader({
 				{reviewerActor ? (
 					<PlannerStatusPill label={`by:${reviewerActor}`} />
 				) : null}
-				{sessionId && learningDraftStatus ? (
+				{reviewHref ? (
 					<a
-						href={`/review/ycrm?sessionId=${encodeURIComponent(sessionId)}`}
+						href={reviewHref}
 						className="inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-medium transition-colors hover:opacity-90"
 						style={{
 							background: "rgba(0, 101, 162, 0.08)",
 							color: "var(--color-accent)",
 							borderColor: "rgba(0, 101, 162, 0.18)",
 						}}
+						title={reviewTitle}
 					>
 						Open review
 					</a>

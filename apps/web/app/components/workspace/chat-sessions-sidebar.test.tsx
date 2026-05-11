@@ -113,6 +113,10 @@ describe("ChatSessionsSidebar", () => {
     expect(screen.getByText("Advisory")).toBeInTheDocument();
     expect(screen.getByText("Cross-system")).toBeInTheDocument();
     expect(screen.queryByText("Y-CRM")).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Go to ERP review for ERP Planner Chat" })).toHaveAttribute(
+      "href",
+      "/review/erp?sessionId=s-erp",
+    );
   });
 
   it("renders reviewed badge for sessions that were manually resolved", () => {

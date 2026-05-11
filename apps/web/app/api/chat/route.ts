@@ -466,9 +466,7 @@ export async function POST(req: Request) {
 				request: { user_message: agentMessage },
 			});
 			if (shouldPersistErpPlannerPreflight(erpPreflight)) {
-				const erpContextPack = buildErpContextPack(erpPreflight, {
-					userMessage: userText,
-				});
+				const erpContextPack = buildErpContextPack(erpPreflight);
 				updateSessionErpPlannerPreflight(sessionId, erpPreflight);
 				updateSessionErpPlannerContextPack(sessionId, erpContextPack);
 				agentMessage = decorateMessageWithErpContextPack(

@@ -429,7 +429,17 @@ function WebSessionRow({
 	const plannerTooltip = buildPlannerTooltip(session);
 	const reviewBadge = getReviewQueueBadge(session);
 	const reviewerActor = session.plannerLearningDraft?.writeback?.reviewer_actor?.trim() || null;
-	const reviewHref = reviewBadge ? `/review/ycrm?sessionId=${encodeURIComponent(session.id)}` : null;
+	const reviewHref = reviewBadge
+		? `/review/ycrm?sessionId=${encodeURIComponent(session.id)}`
+		: erpPlanner?.shouldRouteToErp
+			? `/review/erp?sessionId=${encodeURIComponent(session.id)}`
+			: null;
+	const reviewAriaLabel = reviewBadge
+		? `Go to review for ${session.title || "Untitled chat"}`
+		: `Go to ERP review for ${session.title || "Untitled chat"}`;
+	const reviewTitle = reviewBadge
+		? "Open the formal Y-CRM review workspace for this session"
+		: "Open the formal ERP review workspace for this session";
 	const showPlannerStatus = Boolean(
 		(ycrmPlanner && (ycrmPlanner.shouldRouteToYcrm || ycrmPlanner.crossSystem || workspaceLabel))
 		|| erpPlanner?.shouldRouteToErp
@@ -530,8 +540,8 @@ function WebSessionRow({
 								color: "var(--color-accent)",
 								borderColor: "rgba(0, 101, 162, 0.18)",
 							}}
-							aria-label={`Go to review for ${session.title || "Untitled chat"}`}
-							title="Open the formal Y-CRM review workspace for this session"
+							aria-label={reviewAriaLabel}
+							title={reviewTitle}
 						>
 							Go to review
 						</a>

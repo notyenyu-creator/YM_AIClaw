@@ -11,9 +11,7 @@ describe("buildErpContextPack", () => {
 			request: { user_message: "請幫我查 OOCHAIN 本月還沒出貨的訂單。" },
 		});
 
-		const pack = buildErpContextPack(preflight, {
-			userMessage: "請幫我查 OOCHAIN 本月還沒出貨的訂單。",
-		});
+		const pack = buildErpContextPack(preflight);
 
 		expect(pack.planner.intent).toBe("sales_order");
 		expect(pack.read_first).toContain("skills/erp/SKILL.md");
@@ -28,9 +26,7 @@ describe("buildErpContextPack", () => {
 			request: { user_message: "請用圖表分析目前可用庫存最多的前 10 個商品" },
 		});
 
-		const pack = buildErpContextPack(preflight, {
-			userMessage: "請用圖表分析目前可用庫存最多的前 10 個商品",
-		});
+		const pack = buildErpContextPack(preflight);
 
 		expect(pack.presentation.optional_chart_requested).toBe(true);
 		expect(pack.presentation.chart_render_allowed).toBe(true);
@@ -46,9 +42,7 @@ describe("decorateMessageWithErpContextPack", () => {
 		const preflight = buildErpContext({
 			request: { user_message: "請查詢目前庫存狀態" },
 		});
-		const pack = buildErpContextPack(preflight, {
-			userMessage: "請查詢目前庫存狀態",
-		});
+		const pack = buildErpContextPack(preflight);
 
 		const decorated = decorateMessageWithErpContextPack("原始訊息", pack);
 
@@ -65,9 +59,7 @@ describe("decorateMessageWithErpContextPack", () => {
 		const preflight = buildErpContext({
 			request: { user_message: "今天天氣如何？" },
 		});
-		const pack = buildErpContextPack(preflight, {
-			userMessage: "今天天氣如何？",
-		});
+		const pack = buildErpContextPack(preflight);
 
 		expect(decorateMessageWithErpContextPack("原始訊息", pack)).toBe("原始訊息");
 	});
