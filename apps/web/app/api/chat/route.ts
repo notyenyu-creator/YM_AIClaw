@@ -447,7 +447,9 @@ export async function POST(req: Request) {
 		if (shouldPersistYcrmPlannerPreflight(ycrmPlannerSummary)) {
 			updateSessionPlannerPreflight(sessionId, ycrmPlannerSummary);
 			updateSessionPlannerContextPack(sessionId, ycrmContextPack);
-			invalidateSessionErpPlannerArtifacts(sessionId);
+			invalidateSessionErpPlannerArtifacts(sessionId, {
+				preserveReviewedLearningDraft: true,
+			});
 		} else {
 			invalidateSessionYcrmPlannerArtifacts(sessionId, {
 				preserveReviewedLearningDraft: true,
@@ -474,7 +476,9 @@ export async function POST(req: Request) {
 					erpContextPack,
 				);
 			} else {
-				invalidateSessionErpPlannerArtifacts(sessionId);
+				invalidateSessionErpPlannerArtifacts(sessionId, {
+					preserveReviewedLearningDraft: true,
+				});
 			}
 		}
 

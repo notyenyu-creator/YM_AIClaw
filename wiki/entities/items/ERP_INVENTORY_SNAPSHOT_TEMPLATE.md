@@ -11,11 +11,16 @@
 
 ## 2. 數量摘要
 
-- On Hand:
-- Available:
-- Reserved:
-- In Transit:
-- In Inspect:
+| 標籤 | 欄位 | 中文意義 | 預設值說明 |
+|------|------|---------|-----------|
+| On Hand | `on_hand_qty` | 在手量 | |
+| Available | `available_qty` | 可用量（賣得出去）| |
+| Reserved | `reserved_qty` | 保留量 | UAT 多為 0 |
+| Allocated | `allocated_qty` | 已分配給訂單量 | UAT 多為 0，**不要當「可用量」用** |
+| In Transit | `in_transit_qty` | 在途量 | |
+| In Inspect | `in_inspect_qty` | 待品檢量 | |
+
+> ⚠️ 鐵則：使用者問「可用庫存」「能賣多少」一律用 `available_qty`，不要用 `allocated_qty`。
 
 ## 3. 成本資訊
 

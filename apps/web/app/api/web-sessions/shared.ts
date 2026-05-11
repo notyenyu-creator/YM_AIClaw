@@ -3,6 +3,7 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, statSy
 import { join } from "node:path";
 import type { ErpPlannerPreflight } from "@/lib/erp-context-builder";
 import type { ErpContextPack } from "@/lib/erp-context-pack";
+import type { ErpLearningDraft } from "@/lib/erp-learning-draft";
 import type { YcrmContextPack } from "@/lib/ycrm-context-pack";
 import type { YcrmLearningDraft } from "@/lib/ycrm-learning-draft";
 import { resolveActiveAgentId, resolveWebChatDir } from "@/lib/workspace";
@@ -60,6 +61,8 @@ export type WebSessionMeta = {
   erpPlannerPreflight?: ErpPlannerPreflight;
   /** Latest ERP planner context pack captured before a chat run starts. */
   erpPlannerContextPack?: ErpContextPack;
+  /** Latest ERP learning draft generated from the persisted planner context and session transcript. */
+  erpPlannerLearningDraft?: ErpLearningDraft;
 };
 
 export function ensureDir() {
@@ -211,7 +214,12 @@ export function updateSessionErpPlannerPreflight(
   writeIndex(sessions);
 }
 
-function isTerminalLearningDraftStatus(status: YcrmLearningDraft["writeback"]["status"] | undefined): boolean {
+function isTerminalLearningDraftStatus(
+  status:
+    | YcrmLearningDraft["writeback"]["status"]
+    | ErpLearningDraft["writeback"]["status"]
+    | undefined,
+): boolean {
   return status === "promoted" || status === "resolution_kept_current";
 }
 
@@ -301,8 +309,25 @@ export function updateSessionPlannerLearningDraft(
   writeIndex(sessions);
 }
 
+export function updateSessionErpPlannerLearningDraft(
+  sessionId: string,
+  erpPlannerLearningDraft: ErpLearningDraft,
+): void {
+  const sessions = readIndex();
+  const session = sessions.find((entry) => entry.id === sessionId);
+  if (!session) {
+    return;
+  }
+  session.erpPlannerLearningDraft = erpPlannerLearningDraft;
+  session.updatedAt = Date.now();
+  writeIndex(sessions);
+}
+
 export function invalidateSessionErpPlannerArtifacts(
   sessionId: string,
+  options?: {
+    preserveReviewedLearningDraft?: boolean;
+  },
 ): void {
   const sessions = readIndex();
   const session = sessions.find((entry) => entry.id === sessionId);
@@ -310,9 +335,16 @@ export function invalidateSessionErpPlannerArtifacts(
     return;
   }
 
+  const preserveReviewedLearningDraft =
+    options?.preserveReviewedLearningDraft === true
+    && isTerminalLearningDraftStatus(
+      session.erpPlannerLearningDraft?.writeback?.status,
+    );
+
   const hadPlannerArtifacts = Boolean(
     session.erpPlannerPreflight
-    || session.erpPlannerContextPack,
+    || session.erpPlannerContextPack
+    || (!preserveReviewedLearningDraft && session.erpPlannerLearningDraft),
   );
 
   if (!hadPlannerArtifacts) {
@@ -321,6 +353,9 @@ export function invalidateSessionErpPlannerArtifacts(
 
   delete session.erpPlannerPreflight;
   delete session.erpPlannerContextPack;
+  if (!preserveReviewedLearningDraft) {
+    delete session.erpPlannerLearningDraft;
+  }
   session.updatedAt = Date.now();
   writeIndex(sessions);
 }
