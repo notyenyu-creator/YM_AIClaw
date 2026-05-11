@@ -1,10 +1,12 @@
 import type { SessionPlannerPreflight } from "@/app/api/web-sessions/shared";
 import type { ErpPlannerPreflight } from "@/lib/erp-context-builder";
+import type { ErpLearningDraft } from "@/lib/erp-learning-draft";
 import type { YcrmLearningDraft } from "@/lib/ycrm-learning-draft";
 
 export type PlannerPreflightSummary = SessionPlannerPreflight;
 export type ErpPlannerPreflightSummary = ErpPlannerPreflight;
 export type PlannerLearningDraftSummary = Pick<YcrmLearningDraft, "writeback"> | null;
+export type ErpPlannerLearningDraftSummary = Pick<ErpLearningDraft, "writeback"> | null;
 
 function formatPlannerWorkspaceLabel(workspaceId: string | null | undefined): string | null {
 	if (!workspaceId) {
@@ -75,7 +77,7 @@ function buildPlannerTitle(
 }
 
 function getLearningDraftStatusPill(
-	plannerLearningDraft: PlannerLearningDraftSummary,
+	plannerLearningDraft: PlannerLearningDraftSummary | ErpPlannerLearningDraftSummary,
 ): { label: string; tone: "neutral" | "accent" | "warning" | "success" } | null {
 	const status = plannerLearningDraft?.writeback?.status;
 	if (status === "written") {
@@ -93,7 +95,9 @@ function getLearningDraftStatusPill(
 	return null;
 }
 
-function getLearningDraftNextAction(plannerLearningDraft: PlannerLearningDraftSummary): string | null {
+function getLearningDraftNextAction(
+	plannerLearningDraft: PlannerLearningDraftSummary | ErpPlannerLearningDraftSummary,
+): string | null {
 	const status = plannerLearningDraft?.writeback?.status;
 	if (status === "written") {
 		return "Next: review the draft and decide whether it should be promoted.";
@@ -116,14 +120,21 @@ export function PlannerPreflightHeader({
 	plannerPreflight,
 	erpPlannerPreflight = null,
 	plannerLearningDraft = null,
+	erpPlannerLearningDraft = null,
 	sessionId = null,
 }: {
 	plannerPreflight: PlannerPreflightSummary | null;
 	erpPlannerPreflight?: ErpPlannerPreflightSummary | null;
 	plannerLearningDraft?: PlannerLearningDraftSummary;
+	erpPlannerLearningDraft?: ErpPlannerLearningDraftSummary;
 	sessionId?: string | null;
 }) {
-	if (!plannerPreflight && !erpPlannerPreflight && !plannerLearningDraft) {
+	if (
+		!plannerPreflight
+		&& !erpPlannerPreflight
+		&& !plannerLearningDraft
+		&& !erpPlannerLearningDraft
+	) {
 		return null;
 	}
 
@@ -133,19 +144,39 @@ export function PlannerPreflightHeader({
 	const workspaceLabel = formatPlannerWorkspaceLabel(plannerPreflight?.workspaceId);
 	const warningCount = effectivePlanner?.warnings.length ?? 0;
 	const blockerCount = plannerPreflight?.blockers.length ?? 0;
-	const learningDraftStatus = getLearningDraftStatusPill(plannerLearningDraft);
-	const learningDraftNextAction = getLearningDraftNextAction(plannerLearningDraft);
-	const reviewerActor = plannerLearningDraft?.writeback?.reviewer_actor?.trim() || null;
+
+	// Pick which learning draft to surface: prefer the one whose pill is
+	// non-null and "louder" (warning > accent > success > neutral).
+	const ycrmPill = getLearningDraftStatusPill(plannerLearningDraft);
+	const erpPill = getLearningDraftStatusPill(erpPlannerLearningDraft);
+	const tonePriority = { warning: 3, accent: 2, success: 1, neutral: 0 } as const;
+	const activeDraft: {
+		system: "ycrm" | "erp";
+		draft: PlannerLearningDraftSummary | ErpPlannerLearningDraftSummary;
+		pill: { label: string; tone: "neutral" | "accent" | "warning" | "success" };
+	} | null = ycrmPill && (!erpPill || tonePriority[ycrmPill.tone] >= tonePriority[erpPill.tone])
+		? { system: "ycrm", draft: plannerLearningDraft, pill: ycrmPill }
+		: erpPill
+			? { system: "erp", draft: erpPlannerLearningDraft, pill: erpPill }
+			: null;
+
+	const learningDraftStatus = activeDraft?.pill ?? null;
+	const learningDraftNextAction = activeDraft
+		? getLearningDraftNextAction(activeDraft.draft as PlannerLearningDraftSummary)
+		: null;
+	const reviewerActor = activeDraft?.draft?.writeback?.reviewer_actor?.trim() || null;
+	const reviewSystem: "ycrm" | "erp" = activeDraft?.system
+		?? (erpPlannerPreflight?.shouldRouteToErp ? "erp" : "ycrm");
 	const reviewHref = sessionId
-		? learningDraftStatus
-			? `/review/ycrm?sessionId=${encodeURIComponent(sessionId)}`
+		? activeDraft
+			? `/review/${activeDraft.system}?sessionId=${encodeURIComponent(sessionId)}`
 			: erpPlannerPreflight?.shouldRouteToErp
 				? `/review/erp?sessionId=${encodeURIComponent(sessionId)}`
 				: null
 		: null;
-	const reviewTitle = learningDraftStatus
-		? "Open the formal Y-CRM review workspace for this session"
-		: "Open the formal ERP review workspace for this session";
+	const reviewTitle = reviewSystem === "erp"
+		? "Open the formal ERP review workspace for this session"
+		: "Open the formal Y-CRM review workspace for this session";
 
 	return (
 		<div aria-label="Planner preflight status" title={effectivePlanner ? buildPlannerTitle(effectivePlanner) : undefined}>

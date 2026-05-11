@@ -45,6 +45,12 @@ export type WebSession = {
 			reviewer_actor?: string | null;
 		};
 	};
+	erpPlannerLearningDraft?: {
+		writeback?: {
+			status?: "not_written" | "written" | "promoted" | "promotion_conflicted" | "resolution_kept_current";
+			reviewer_actor?: string | null;
+		};
+	};
 };
 
 export type SidebarSubagentInfo = {
@@ -381,23 +387,59 @@ function buildPlannerTooltip(session: WebSession): string | null {
 	return lines.join("\n");
 }
 
+function statusToBadge(
+	status: WebSession["plannerLearningDraft"] extends infer T
+		? T extends { writeback?: { status?: infer S } }
+			? S
+			: never
+		: never,
+	systemLabel: "Y-CRM" | "ERP",
+): { label: string; tone: "neutral" | "accent" | "warning" | "success" } | null {
+	if (status === "promotion_conflicted") {
+		return { label: `${systemLabel}: Needs review`, tone: "warning" };
+	}
+	if (status === "resolution_kept_current") {
+		return { label: `${systemLabel}: Reviewed`, tone: "success" };
+	}
+	if (status === "promoted") {
+		return { label: `${systemLabel}: Promoted`, tone: "success" };
+	}
+	if (status === "written") {
+		return { label: `${systemLabel}: Draft ready`, tone: "accent" };
+	}
+	return null;
+}
+
 function getReviewQueueBadge(session: WebSession): {
 	label: string;
 	tone: "neutral" | "accent" | "warning" | "success";
+	system: "ycrm" | "erp";
 } | null {
-	const status = session.plannerLearningDraft?.writeback?.status;
-	if (status === "promotion_conflicted") {
-		return { label: "Needs review", tone: "warning" };
+	// Conflicts always trump anything else (urgent review).
+	const ycrmStatus = session.plannerLearningDraft?.writeback?.status;
+	const erpStatus = session.erpPlannerLearningDraft?.writeback?.status;
+	if (ycrmStatus === "promotion_conflicted") {
+		const badge = statusToBadge(ycrmStatus, "Y-CRM");
+		if (badge) return { ...badge, system: "ycrm" };
 	}
-	if (status === "resolution_kept_current") {
-		return { label: "Reviewed", tone: "success" };
+	if (erpStatus === "promotion_conflicted") {
+		const badge = statusToBadge(erpStatus, "ERP");
+		if (badge) return { ...badge, system: "erp" };
 	}
-	if (status === "promoted") {
-		return { label: "Promoted", tone: "success" };
+	// Otherwise prefer whichever side has a pending action ("written") first.
+	if (ycrmStatus === "written") {
+		const badge = statusToBadge(ycrmStatus, "Y-CRM");
+		if (badge) return { ...badge, system: "ycrm" };
 	}
-	if (status === "written") {
-		return { label: "Draft ready", tone: "accent" };
+	if (erpStatus === "written") {
+		const badge = statusToBadge(erpStatus, "ERP");
+		if (badge) return { ...badge, system: "erp" };
 	}
+	// Fall back to any non-null terminal status.
+	const ycrmBadge = statusToBadge(ycrmStatus, "Y-CRM");
+	if (ycrmBadge) return { ...ycrmBadge, system: "ycrm" };
+	const erpBadge = statusToBadge(erpStatus, "ERP");
+	if (erpBadge) return { ...erpBadge, system: "erp" };
 	return null;
 }
 
@@ -428,17 +470,23 @@ function WebSessionRow({
 	const workspaceLabel = formatPlannerWorkspaceLabel(ycrmPlanner?.workspaceId);
 	const plannerTooltip = buildPlannerTooltip(session);
 	const reviewBadge = getReviewQueueBadge(session);
-	const reviewerActor = session.plannerLearningDraft?.writeback?.reviewer_actor?.trim() || null;
+	const reviewerActor =
+		(reviewBadge?.system === "erp"
+			? session.erpPlannerLearningDraft?.writeback?.reviewer_actor
+			: session.plannerLearningDraft?.writeback?.reviewer_actor)?.trim() || null;
 	const reviewHref = reviewBadge
-		? `/review/ycrm?sessionId=${encodeURIComponent(session.id)}`
+		? reviewBadge.system === "erp"
+			? `/review/erp?sessionId=${encodeURIComponent(session.id)}`
+			: `/review/ycrm?sessionId=${encodeURIComponent(session.id)}`
 		: erpPlanner?.shouldRouteToErp
 			? `/review/erp?sessionId=${encodeURIComponent(session.id)}`
 			: null;
+	const reviewSystemLabel = reviewBadge?.system === "erp" ? "ERP" : "Y-CRM";
 	const reviewAriaLabel = reviewBadge
-		? `Go to review for ${session.title || "Untitled chat"}`
+		? `Go to ${reviewSystemLabel} review for ${session.title || "Untitled chat"}`
 		: `Go to ERP review for ${session.title || "Untitled chat"}`;
 	const reviewTitle = reviewBadge
-		? "Open the formal Y-CRM review workspace for this session"
+		? `Open the formal ${reviewSystemLabel} review workspace for this session`
 		: "Open the formal ERP review workspace for this session";
 	const showPlannerStatus = Boolean(
 		(ycrmPlanner && (ycrmPlanner.shouldRouteToYcrm || ycrmPlanner.crossSystem || workspaceLabel))
@@ -730,21 +778,31 @@ export function ChatSessionsSidebar({
 		[sessions],
 	);
 
+	// Status helpers that accept either Y-CRM or ERP learning draft state.
+	// A session enters the review queue when either side has a relevant status.
+	const sessionLearningStatuses = (session: WebSession): string[] =>
+		[
+			session.plannerLearningDraft?.writeback?.status,
+			session.erpPlannerLearningDraft?.writeback?.status,
+		].filter((status): status is string => typeof status === "string");
+
 	const filteredDenchClawSessions = useMemo(() => {
 		if (reviewQueueFilter === "draft_ready") {
-			return denchClawSessions.filter(
-				(session) => session.plannerLearningDraft?.writeback?.status === "written",
+			return denchClawSessions.filter((session) =>
+				sessionLearningStatuses(session).includes("written"),
 			);
 		}
 		if (reviewQueueFilter === "needs_review") {
-			return denchClawSessions.filter(
-				(session) => session.plannerLearningDraft?.writeback?.status === "promotion_conflicted",
+			return denchClawSessions.filter((session) =>
+				sessionLearningStatuses(session).includes("promotion_conflicted"),
 			);
 		}
 		if (reviewQueueFilter === "reviewed") {
 			return denchClawSessions.filter((session) => {
-				const status = session.plannerLearningDraft?.writeback?.status;
-				return status === "resolution_kept_current" || status === "promoted";
+				const statuses = sessionLearningStatuses(session);
+				return statuses.some(
+					(status) => status === "resolution_kept_current" || status === "promoted",
+				);
 			});
 		}
 		return denchClawSessions;
@@ -753,15 +811,17 @@ export function ChatSessionsSidebar({
 	const grouped = groupSessions(filteredDenchClawSessions);
 	const reviewQueueCounts = useMemo(() => ({
 		all: denchClawSessions.length,
-		draft_ready: denchClawSessions.filter(
-			(session) => session.plannerLearningDraft?.writeback?.status === "written",
+		draft_ready: denchClawSessions.filter((session) =>
+			sessionLearningStatuses(session).includes("written"),
 		).length,
-		needs_review: denchClawSessions.filter(
-			(session) => session.plannerLearningDraft?.writeback?.status === "promotion_conflicted",
+		needs_review: denchClawSessions.filter((session) =>
+			sessionLearningStatuses(session).includes("promotion_conflicted"),
 		).length,
 		reviewed: denchClawSessions.filter((session) => {
-			const status = session.plannerLearningDraft?.writeback?.status;
-			return status === "resolution_kept_current" || status === "promoted";
+			const statuses = sessionLearningStatuses(session);
+			return statuses.some(
+				(status) => status === "resolution_kept_current" || status === "promoted",
+			);
 		}).length,
 	}), [denchClawSessions]);
 

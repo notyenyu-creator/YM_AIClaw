@@ -24,6 +24,7 @@ import {
 } from "node:fs/promises";
 import { resolveWebChatDir, resolveOpenClawStateDir, resolveActiveAgentId } from "./workspace";
 import { triggerAutoLearningDraftIfEligible } from "./ycrm-learning-auto-trigger";
+import { triggerAutoErpLearningDraftIfEligible } from "./erp-learning-auto-trigger";
 import {
 	type AgentProcessHandle,
 	type AgentEvent,
@@ -2303,9 +2304,13 @@ function wireChildProcess(run: ActiveRun): void {
 		// Normal completion path.
 		run.status = exitedClean ? "completed" : "error";
 
-		// Auto-generate Y-CRM learning draft (fire-and-forget, never blocks).
+		// Auto-generate Y-CRM / ERP learning drafts (fire-and-forget, never blocks).
+		// Both run independently; chat route routing already ensures only one
+		// system was the primary for this turn, so the inactive system's
+		// trigger will short-circuit via no_planner_artifacts.
 		if (exitedClean) {
 			triggerAutoLearningDraftIfEligible(run.sessionId);
+			triggerAutoErpLearningDraftIfEligible(run.sessionId);
 		}
 
 		// Final persistence flush (removes _streaming flag).
@@ -2440,8 +2445,9 @@ function finalizeWaitingRun(run: ActiveRun): void {
 
 	stopSubscribeProcess(run);
 
-	// Auto-generate Y-CRM learning draft (fire-and-forget, never blocks).
+	// Auto-generate Y-CRM / ERP learning drafts (fire-and-forget, never blocks).
 	triggerAutoLearningDraftIfEligible(run.sessionId);
+	triggerAutoErpLearningDraftIfEligible(run.sessionId);
 
 	flushPersistence(run).catch(() => {});
 

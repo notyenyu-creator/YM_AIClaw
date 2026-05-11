@@ -111,6 +111,14 @@ export type ErpLearningDraftHistoryEntry = {
   reviewer_actor?: string | null;
 };
 
+function normalizeOptionalReviewText(value: string | null | undefined): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const normalized = value.trim();
+  return normalized.length > 0 ? normalized : null;
+}
+
 function appendHistoryEntry(
   draft: ErpLearningDraft,
   entry: Omit<ErpLearningDraftHistoryEntry, "at"> & { at?: number },
@@ -461,6 +469,108 @@ export function applyErpLearningDraftWriteback(
           ? `Wrote ${result.files.length} ERP wiki draft file${result.files.length === 1 ? "" : "s"} for review.`
           : "Writeback completed without creating new ERP wiki draft files.",
       files: [...result.files, ...result.skipped_files],
+    }),
+  };
+}
+
+export function applyErpLearningDraftPromotion(
+  draft: ErpLearningDraft,
+  result: {
+    promoted_files: string[];
+    skipped_files: string[];
+    conflict_files?: string[];
+    approved_via?: "manual_promotion" | "manual_force_promotion";
+    resolution_action?: "force_promote_override" | null;
+    review_reason?: string | null;
+    reviewer_note?: string | null;
+    reviewer_actor?: string | null;
+  },
+): ErpLearningDraft {
+  const hasPromotedFiles = result.promoted_files.length > 0;
+  const hasConflicts = (result.conflict_files?.length ?? 0) > 0;
+  const approvedAt = hasPromotedFiles ? Date.now() : (draft.writeback.approved_at ?? null);
+  const approvedVia = hasPromotedFiles
+    ? (result.approved_via ?? "manual_promotion")
+    : (draft.writeback.approved_via ?? null);
+  const resolutionAction = hasPromotedFiles
+    ? (result.resolution_action ?? null)
+    : (draft.writeback.resolution_action ?? null);
+  const resolvedAt = hasPromotedFiles && result.resolution_action
+    ? Date.now()
+    : (draft.writeback.resolved_at ?? null);
+  const reviewReason = normalizeOptionalReviewText(result.review_reason) ?? (draft.writeback.review_reason ?? null);
+  const reviewerNote = normalizeOptionalReviewText(result.reviewer_note) ?? (draft.writeback.reviewer_note ?? null);
+  const reviewerActor = normalizeOptionalReviewText(result.reviewer_actor) ?? (draft.writeback.reviewer_actor ?? null);
+
+  return {
+    ...draft,
+    writeback: {
+      ...draft.writeback,
+      status: hasConflicts ? "promotion_conflicted" : "promoted",
+      updated_at: Date.now(),
+      promoted_files: [...result.promoted_files],
+      promotion_skipped_files: [...result.skipped_files],
+      promotion_conflict_files: [...(result.conflict_files ?? [])],
+      approved_at: approvedAt,
+      approved_via: approvedVia,
+      resolution_action: resolutionAction,
+      resolved_at: resolvedAt,
+      review_reason: reviewReason,
+      reviewer_note: reviewerNote,
+      reviewer_actor: reviewerActor,
+    },
+    history: appendHistoryEntry(draft, {
+      event: hasConflicts ? "promotion_conflicted" : "promotion_succeeded",
+      tone: hasConflicts ? "warning" : "success",
+      summary: hasConflicts
+        ? `Promotion paused because ${result.conflict_files?.length ?? 0} ERP wiki page conflict${(result.conflict_files?.length ?? 0) === 1 ? "" : "s"} need review.`
+        : result.approved_via === "manual_force_promotion"
+          ? `Force-promoted ${result.promoted_files.length} ERP wiki draft file${result.promoted_files.length === 1 ? "" : "s"} after manual override.`
+          : `Promoted ${result.promoted_files.length} ERP wiki draft file${result.promoted_files.length === 1 ? "" : "s"} into the wiki registry.`,
+      files: hasConflicts
+        ? [...(result.conflict_files ?? [])]
+        : [...result.promoted_files, ...result.skipped_files],
+      review_reason: reviewReason,
+      reviewer_note: reviewerNote,
+      reviewer_actor: reviewerActor,
+    }),
+  };
+}
+
+export function applyErpLearningDraftKeepCurrentResolution(
+  draft: ErpLearningDraft,
+  result: {
+    conflict_files: string[];
+    review_reason?: string | null;
+    reviewer_note?: string | null;
+    reviewer_actor?: string | null;
+  },
+): ErpLearningDraft {
+  const reviewReason = normalizeOptionalReviewText(result.review_reason) ?? (draft.writeback.review_reason ?? null);
+  const reviewerNote = normalizeOptionalReviewText(result.reviewer_note) ?? (draft.writeback.reviewer_note ?? null);
+  const reviewerActor = normalizeOptionalReviewText(result.reviewer_actor) ?? (draft.writeback.reviewer_actor ?? null);
+
+  return {
+    ...draft,
+    writeback: {
+      ...draft.writeback,
+      status: "resolution_kept_current",
+      updated_at: Date.now(),
+      promotion_conflict_files: [...result.conflict_files],
+      resolution_action: "keep_current_page",
+      resolved_at: Date.now(),
+      review_reason: reviewReason,
+      reviewer_note: reviewerNote,
+      reviewer_actor: reviewerActor,
+    },
+    history: appendHistoryEntry(draft, {
+      event: "resolution_kept_current",
+      tone: "warning",
+      summary: "Kept the current ERP wiki page and recorded the draft as reviewed without overwriting content.",
+      files: [...result.conflict_files],
+      review_reason: reviewReason,
+      reviewer_note: reviewerNote,
+      reviewer_actor: reviewerActor,
     }),
   };
 }

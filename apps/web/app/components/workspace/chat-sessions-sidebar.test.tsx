@@ -52,9 +52,9 @@ describe("ChatSessionsSidebar", () => {
     expect(screen.getByText("Advisory")).toBeInTheDocument();
     expect(screen.getByText("Cross-system")).toBeInTheDocument();
     expect(screen.getByText("ws:workspace_3jox")).toBeInTheDocument();
-    expect(screen.getByText("Needs review")).toBeInTheDocument();
+    expect(screen.getByText("Y-CRM: Needs review")).toBeInTheDocument();
     expect(screen.getByText("by:YM")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Go to review for Y-CRM Planner Chat" })).toHaveAttribute(
+    expect(screen.getByRole("link", { name: "Go to Y-CRM review for Y-CRM Planner Chat" })).toHaveAttribute(
       "href",
       "/review/ycrm?sessionId=s-ycrm",
     );
@@ -136,7 +136,7 @@ describe("ChatSessionsSidebar", () => {
       },
     ]);
 
-    expect(screen.getByText("Reviewed")).toBeInTheDocument();
+    expect(screen.getByText("Y-CRM: Reviewed")).toBeInTheDocument();
     expect(screen.getByText("by:Sales Ops")).toBeInTheDocument();
   });
 
@@ -200,7 +200,7 @@ describe("ChatSessionsSidebar", () => {
 
     await user.click(screen.getByRole("button", { name: "Draft ready (1)" }));
     expect(screen.getByText("Draft Ready Chat")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Go to review for Draft Ready Chat" })).toHaveAttribute(
+    expect(screen.getByRole("link", { name: "Go to Y-CRM review for Draft Ready Chat" })).toHaveAttribute(
       "href",
       "/review/ycrm?sessionId=s-draft-ready",
     );
@@ -210,7 +210,7 @@ describe("ChatSessionsSidebar", () => {
 
     await user.click(screen.getByRole("button", { name: "Needs review (1)" }));
     expect(screen.getByText("Needs Review Chat")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Go to review for Needs Review Chat" })).toHaveAttribute(
+    expect(screen.getByRole("link", { name: "Go to Y-CRM review for Needs Review Chat" })).toHaveAttribute(
       "href",
       "/review/ycrm?sessionId=s-needs-review",
     );

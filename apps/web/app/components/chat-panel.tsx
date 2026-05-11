@@ -27,6 +27,7 @@ import { Dialog, DialogContent } from "./ui/dialog";
 import type { SessionPlannerPreflight } from "@/app/api/web-sessions/shared";
 import type { ErpPlannerPreflight } from "@/lib/erp-context-builder";
 import type { YcrmLearningDraft } from "@/lib/ycrm-learning-draft";
+import type { ErpLearningDraft } from "@/lib/erp-learning-draft";
 import type { ChatPanelRuntimeState } from "@/lib/chat-session-registry";
 import {
 	getStreamActivityLabel,
@@ -876,6 +877,7 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 		const [plannerPreflight, setPlannerPreflight] = useState<SessionPlannerPreflight | null>(null);
 		const [erpPlannerPreflight, setErpPlannerPreflight] = useState<ErpPlannerPreflight | null>(null);
 		const [plannerLearningDraft, setPlannerLearningDraft] = useState<YcrmLearningDraft | null>(null);
+		const [erpPlannerLearningDraft, setErpPlannerLearningDraft] = useState<ErpLearningDraft | null>(null);
 		const [loadingSession, setLoadingSession] = useState(false);
 		const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -956,12 +958,14 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 							plannerPreflight?: SessionPlannerPreflight | null;
 							erpPlannerPreflight?: ErpPlannerPreflight | null;
 							plannerLearningDraft?: YcrmLearningDraft | null;
+							erpPlannerLearningDraft?: ErpLearningDraft | null;
 						} | null;
 					};
 					if (sessionIdRef.current === sessionId) {
 						setPlannerPreflight(data.session?.plannerPreflight ?? null);
 						setErpPlannerPreflight(data.session?.erpPlannerPreflight ?? null);
 						setPlannerLearningDraft(data.session?.plannerLearningDraft ?? null);
+						setErpPlannerLearningDraft(data.session?.erpPlannerLearningDraft ?? null);
 					}
 				} catch {
 					// Best-effort only; the chat should still function even if the planner badge lags behind.
@@ -1387,6 +1391,7 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 						setPlannerPreflight(msgData.session?.plannerPreflight ?? null);
 						setErpPlannerPreflight(msgData.session?.erpPlannerPreflight ?? null);
 						setPlannerLearningDraft(msgData.session?.plannerLearningDraft ?? null);
+						setErpPlannerLearningDraft(msgData.session?.erpPlannerLearningDraft ?? null);
 						const sessionMessages: Array<{
 							id: string;
 							role: "user" | "assistant";
@@ -1958,6 +1963,7 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 						setPlannerPreflight(null);
 						setErpPlannerPreflight(null);
 						setPlannerLearningDraft(null);
+						setErpPlannerLearningDraft(null);
 						setLoadingSession(false);
 						return;
 					}
@@ -1966,6 +1972,7 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 					setPlannerPreflight(data.session?.plannerPreflight ?? null);
 					setErpPlannerPreflight(data.session?.erpPlannerPreflight ?? null);
 					setPlannerLearningDraft(data.session?.plannerLearningDraft ?? null);
+					setErpPlannerLearningDraft(data.session?.erpPlannerLearningDraft ?? null);
 					const sessionMessages: Array<{
 						id: string;
 						role: "user" | "assistant";
@@ -2482,6 +2489,7 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 										plannerPreflight={plannerPreflight}
 										erpPlannerPreflight={erpPlannerPreflight}
 										plannerLearningDraft={plannerLearningDraft}
+										erpPlannerLearningDraft={erpPlannerLearningDraft}
 										sessionId={currentSessionId}
 									/>
 								)}
@@ -2500,6 +2508,7 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 									plannerPreflight={plannerPreflight}
 									erpPlannerPreflight={erpPlannerPreflight}
 									plannerLearningDraft={plannerLearningDraft}
+									erpPlannerLearningDraft={erpPlannerLearningDraft}
 									sessionId={currentSessionId}
 								/>
 							</>
