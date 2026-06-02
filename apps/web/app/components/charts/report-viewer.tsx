@@ -44,6 +44,12 @@ type PanelData = {
   error?: string;
 };
 
+function panelInlineRows(panel: PanelConfig): Record<string, unknown>[] | null {
+  if (Array.isArray(panel.rows)) {return panel.rows;}
+  if (Array.isArray(panel.data)) {return panel.data;}
+  return null;
+}
+
 /** Build filter entries for the API from active filter state + filter configs. */
 function buildFilterEntries(
   filterState: FilterState,
@@ -142,6 +148,32 @@ export function ReportViewer({ config: propConfig, reportPath }: ReportViewerPro
     // Execute all panels in parallel
     await Promise.all(
       config.panels.map(async (panel) => {
+        const inlineRows = panelInlineRows(panel);
+        if (inlineRows) {
+          setPanelData((prev) => ({
+            ...prev,
+            [panel.id]: {
+              panelId: panel.id,
+              rows: inlineRows,
+              loading: false,
+            },
+          }));
+          return;
+        }
+
+        if (!panel.sql) {
+          setPanelData((prev) => ({
+            ...prev,
+            [panel.id]: {
+              panelId: panel.id,
+              rows: [],
+              loading: false,
+              error: "Panel missing sql or rows",
+            },
+          }));
+          return;
+        }
+
         try {
           const res = await fetch("/api/workspace/reports/execute", {
             method: "POST",

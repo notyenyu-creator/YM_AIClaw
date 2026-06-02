@@ -170,6 +170,34 @@ export function hasAssistantPostToolText(message: UIMessage | null): boolean {
 	return message.parts.slice(lastToolIndex + 1).some((part) => hasNonEmptyTextPart(part));
 }
 
+export function hasCompletedAssistantReply(message: UIMessage | null): boolean {
+	if (!message || message.role !== "assistant") {
+		return false;
+	}
+	if (!hasAssistantToolActivity(message)) {
+		return hasAssistantText(message);
+	}
+	return hasAssistantPostToolText(message);
+}
+
+export function normalizeTransportErrorMessage(message: string | null | undefined): string | null {
+	if (!message) {
+		return null;
+	}
+	const trimmed = message.trim();
+	if (!trimmed) {
+		return null;
+	}
+	const lowered = trimmed.toLowerCase();
+	if (lowered === "failed to fetch" || lowered === "load failed") {
+		return "與聊天服務的連線中斷，請重新整理後再試。";
+	}
+	if (lowered.includes("networkerror")) {
+		return "聊天服務發生網路錯誤，請稍後再試。";
+	}
+	return trimmed;
+}
+
 export function getIncompleteAssistantReplyReason(message: UIMessage | null): string | null {
 	if (!message || message.role !== "assistant") {
 		return null;

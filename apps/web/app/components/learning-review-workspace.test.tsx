@@ -67,14 +67,19 @@ const conflictedDraft = {
   },
 };
 
-function mockSessionResponse(draft: unknown, system: "ycrm" | "erp" = "erp") {
+function mockSessionResponse(
+  draft: unknown,
+  system: "ycrm" | "erp" | "enms" = "erp",
+) {
   fetchMock.mockResolvedValueOnce({
     ok: true,
     status: 200,
     json: async () =>
       system === "erp"
         ? { id: "s-test", session: { erpPlannerLearningDraft: draft } }
-        : { id: "s-test", session: { plannerLearningDraft: draft } },
+        : system === "enms"
+          ? { id: "s-test", session: { enmsPlannerLearningDraft: draft } }
+          : { id: "s-test", session: { plannerLearningDraft: draft } },
   } as Response);
 }
 
@@ -141,6 +146,15 @@ describe("LearningReviewWorkspace", () => {
     mockSessionResponse(readyDraft, "ycrm");
     render(<LearningReviewWorkspace system="ycrm" sessionId="s-test" />);
     await screen.findByText("Y-CRM · Learning Review");
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith("/api/web-sessions/s-test");
+    });
+  });
+
+  it("uses the EnMS endpoint and key when system=enms", async () => {
+    mockSessionResponse(readyDraft, "enms");
+    render(<LearningReviewWorkspace system="enms" sessionId="s-test" />);
+    await screen.findByText("EnMS · Learning Review");
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith("/api/web-sessions/s-test");
     });

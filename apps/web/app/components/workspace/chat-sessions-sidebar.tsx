@@ -39,6 +39,15 @@ export type WebSession = {
 		matchedKeywords: string[];
 		warnings: string[];
 	};
+	enmsPlannerPreflight?: {
+		system: "enms";
+		updatedAt: number;
+		intent: string;
+		confidence: string;
+		shouldRouteToEnms: boolean;
+		matchedKeywords: string[];
+		warnings: string[];
+	};
 	plannerLearningDraft?: {
 		writeback?: {
 			status?: "not_written" | "written" | "promoted" | "promotion_conflicted" | "resolution_kept_current";
@@ -46,6 +55,12 @@ export type WebSession = {
 		};
 	};
 	erpPlannerLearningDraft?: {
+		writeback?: {
+			status?: "not_written" | "written" | "promoted" | "promotion_conflicted" | "resolution_kept_current";
+			reviewer_actor?: string | null;
+		};
+	};
+	enmsPlannerLearningDraft?: {
 		writeback?: {
 			status?: "not_written" | "written" | "promoted" | "promotion_conflicted" | "resolution_kept_current";
 			reviewer_actor?: string | null;
@@ -356,7 +371,8 @@ function formatPlannerWorkspaceLabel(workspaceId: string | null | undefined): st
 function buildPlannerTooltip(session: WebSession): string | null {
 	const planner = session.plannerPreflight;
 	const erpPlanner = session.erpPlannerPreflight;
-	if (!planner && !erpPlanner) {
+	const enmsPlanner = session.enmsPlannerPreflight;
+	if (!planner && !erpPlanner && !enmsPlanner) {
 		return null;
 	}
 
@@ -384,6 +400,14 @@ function buildPlannerTooltip(session: WebSession): string | null {
 		);
 	}
 
+	if (enmsPlanner) {
+		lines.push(
+			`enms.intent: ${enmsPlanner.intent}`,
+			`enms.confidence: ${enmsPlanner.confidence}`,
+			`route_to_enms: ${enmsPlanner.shouldRouteToEnms ? "yes" : "no"}`,
+		);
+	}
+
 	return lines.join("\n");
 }
 
@@ -396,7 +420,7 @@ type LearningWritebackStatus =
 
 function statusToBadge(
 	status: LearningWritebackStatus | undefined,
-	systemLabel: "Y-CRM" | "ERP",
+	systemLabel: "Y-CRM" | "ERP" | "EnMS",
 ): { label: string; tone: "neutral" | "accent" | "warning" | "success" } | null {
 	if (status === "promotion_conflicted") {
 		return { label: `${systemLabel}: Needs review`, tone: "warning" };
@@ -416,33 +440,42 @@ function statusToBadge(
 function getReviewQueueBadge(session: WebSession): {
 	label: string;
 	tone: "neutral" | "accent" | "warning" | "success";
-	system: "ycrm" | "erp";
+	system: "ycrm" | "erp" | "enms";
 } | null {
-	// Conflicts always trump anything else (urgent review).
-	const ycrmStatus = session.plannerLearningDraft?.writeback?.status;
-	const erpStatus = session.erpPlannerLearningDraft?.writeback?.status;
-	if (ycrmStatus === "promotion_conflicted") {
-		const badge = statusToBadge(ycrmStatus, "Y-CRM");
-		if (badge) return { ...badge, system: "ycrm" };
+	const candidates = [
+		{
+			system: "ycrm" as const,
+			systemLabel: "Y-CRM" as const,
+			status: session.plannerLearningDraft?.writeback?.status,
+		},
+		{
+			system: "erp" as const,
+			systemLabel: "ERP" as const,
+			status: session.erpPlannerLearningDraft?.writeback?.status,
+		},
+		{
+			system: "enms" as const,
+			systemLabel: "EnMS" as const,
+			status: session.enmsPlannerLearningDraft?.writeback?.status,
+		},
+	];
+	const statusPriority: LearningWritebackStatus[] = [
+		"promotion_conflicted",
+		"written",
+		"resolution_kept_current",
+		"promoted",
+	];
+	for (const targetStatus of statusPriority) {
+		for (const candidate of candidates) {
+			if (candidate.status !== targetStatus) {
+				continue;
+			}
+			const badge = statusToBadge(candidate.status, candidate.systemLabel);
+			if (badge) {
+				return { ...badge, system: candidate.system };
+			}
+		}
 	}
-	if (erpStatus === "promotion_conflicted") {
-		const badge = statusToBadge(erpStatus, "ERP");
-		if (badge) return { ...badge, system: "erp" };
-	}
-	// Otherwise prefer whichever side has a pending action ("written") first.
-	if (ycrmStatus === "written") {
-		const badge = statusToBadge(ycrmStatus, "Y-CRM");
-		if (badge) return { ...badge, system: "ycrm" };
-	}
-	if (erpStatus === "written") {
-		const badge = statusToBadge(erpStatus, "ERP");
-		if (badge) return { ...badge, system: "erp" };
-	}
-	// Fall back to any non-null terminal status.
-	const ycrmBadge = statusToBadge(ycrmStatus, "Y-CRM");
-	if (ycrmBadge) return { ...ycrmBadge, system: "ycrm" };
-	const erpBadge = statusToBadge(erpStatus, "ERP");
-	if (erpBadge) return { ...erpBadge, system: "erp" };
 	return null;
 }
 
@@ -469,31 +502,51 @@ function WebSessionRow({
 	const showMore = isHovered || isStreaming;
 	const ycrmPlanner = session.plannerPreflight;
 	const erpPlanner = session.erpPlannerPreflight;
-	const effectivePlanner = erpPlanner?.shouldRouteToErp ? erpPlanner : ycrmPlanner;
+	const enmsPlanner = session.enmsPlannerPreflight;
+	const effectivePlanner = enmsPlanner?.shouldRouteToEnms
+		? enmsPlanner
+		: erpPlanner?.shouldRouteToErp
+			? erpPlanner
+			: ycrmPlanner;
 	const workspaceLabel = formatPlannerWorkspaceLabel(ycrmPlanner?.workspaceId);
 	const plannerTooltip = buildPlannerTooltip(session);
 	const reviewBadge = getReviewQueueBadge(session);
 	const reviewerActor =
 		(reviewBadge?.system === "erp"
 			? session.erpPlannerLearningDraft?.writeback?.reviewer_actor
-			: session.plannerLearningDraft?.writeback?.reviewer_actor)?.trim() || null;
-	const reviewHref = reviewBadge
-		? reviewBadge.system === "erp"
-			? `/review/erp?sessionId=${encodeURIComponent(session.id)}`
-			: `/review/ycrm?sessionId=${encodeURIComponent(session.id)}`
-		: erpPlanner?.shouldRouteToErp
-			? `/review/erp?sessionId=${encodeURIComponent(session.id)}`
-			: null;
-	const reviewSystemLabel = reviewBadge?.system === "erp" ? "ERP" : "Y-CRM";
+			: reviewBadge?.system === "enms"
+				? session.enmsPlannerLearningDraft?.writeback?.reviewer_actor
+				: session.plannerLearningDraft?.writeback?.reviewer_actor)?.trim() || null;
+	const reviewSystem = reviewBadge?.system
+		?? (enmsPlanner?.shouldRouteToEnms
+			? "enms"
+			: erpPlanner?.shouldRouteToErp
+				? "erp"
+				: ycrmPlanner?.shouldRouteToYcrm
+					? "ycrm"
+					: null);
+	const reviewHref = reviewSystem
+		? `/review/${reviewSystem}?sessionId=${encodeURIComponent(session.id)}`
+		: null;
+	const reviewSystemLabel = reviewSystem === "erp"
+		? "ERP"
+		: reviewSystem === "enms"
+			? "EnMS"
+			: "Y-CRM";
 	const reviewAriaLabel = reviewBadge
 		? `Go to ${reviewSystemLabel} review for ${session.title || "Untitled chat"}`
-		: `Go to ERP review for ${session.title || "Untitled chat"}`;
+		: reviewSystem
+			? `Go to ${reviewSystemLabel} review for ${session.title || "Untitled chat"}`
+			: "Go to review";
 	const reviewTitle = reviewBadge
 		? `Open the formal ${reviewSystemLabel} review workspace for this session`
-		: "Open the formal ERP review workspace for this session";
+		: reviewSystem
+			? `Open the formal ${reviewSystemLabel} review workspace for this session`
+			: "Open the formal review workspace for this session";
 	const showPlannerStatus = Boolean(
 		(ycrmPlanner && (ycrmPlanner.shouldRouteToYcrm || ycrmPlanner.crossSystem || workspaceLabel))
 		|| erpPlanner?.shouldRouteToErp
+		|| enmsPlanner?.shouldRouteToEnms
 		|| reviewBadge
 		|| reviewerActor,
 	);
@@ -554,6 +607,9 @@ function WebSessionRow({
 								)}
 								{erpPlanner?.shouldRouteToErp && (
 									<PlannerStatusChip label="ERP" tone="accent" />
+								)}
+								{enmsPlanner?.shouldRouteToEnms && (
+									<PlannerStatusChip label="EnMS" tone="accent" />
 								)}
 								{effectivePlanner && (
 									<PlannerStatusChip
@@ -787,8 +843,10 @@ export function ChatSessionsSidebar({
 		const statuses: string[] = [];
 		const ycrm = session.plannerLearningDraft?.writeback?.status;
 		const erp = session.erpPlannerLearningDraft?.writeback?.status;
+		const enms = session.enmsPlannerLearningDraft?.writeback?.status;
 		if (typeof ycrm === "string") statuses.push(ycrm);
 		if (typeof erp === "string") statuses.push(erp);
+		if (typeof enms === "string") statuses.push(enms);
 		return statuses;
 	};
 

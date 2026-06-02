@@ -23,6 +23,7 @@ import {
 	writeFile,
 } from "node:fs/promises";
 import { resolveWebChatDir, resolveOpenClawStateDir, resolveActiveAgentId } from "./workspace";
+import { triggerAutoEnmsLearningDraftIfEligible } from "./enms-learning-auto-trigger";
 import { triggerAutoLearningDraftIfEligible } from "./ycrm-learning-auto-trigger";
 import { triggerAutoErpLearningDraftIfEligible } from "./erp-learning-auto-trigger";
 import {
@@ -2311,6 +2312,7 @@ function wireChildProcess(run: ActiveRun): void {
 		if (exitedClean) {
 			triggerAutoLearningDraftIfEligible(run.sessionId);
 			triggerAutoErpLearningDraftIfEligible(run.sessionId);
+			triggerAutoEnmsLearningDraftIfEligible(run.sessionId);
 		}
 
 		// Final persistence flush (removes _streaming flag).
@@ -2448,6 +2450,7 @@ function finalizeWaitingRun(run: ActiveRun): void {
 	// Auto-generate Y-CRM / ERP learning drafts (fire-and-forget, never blocks).
 	triggerAutoLearningDraftIfEligible(run.sessionId);
 	triggerAutoErpLearningDraftIfEligible(run.sessionId);
+	triggerAutoEnmsLearningDraftIfEligible(run.sessionId);
 
 	flushPersistence(run).catch(() => {});
 

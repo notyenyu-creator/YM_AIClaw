@@ -8,7 +8,9 @@ vi.mock("@/lib/workspace", () => ({
   duckdbPath: vi.fn(() => null),
   duckdbQuery: vi.fn(() => []),
   duckdbQueryAsync: vi.fn(async () => []),
+  duckdbQueryAsyncDetailed: vi.fn(async () => ({ rows: [], error: null })),
   duckdbQueryExternalPgAsync: vi.fn(async () => []),
+  duckdbQueryExternalPgAsyncDetailed: vi.fn(async () => ({ rows: [], error: null })),
   duckdbQueryOnFile: vi.fn(() => []),
   duckdbQueryOnFileAsync: vi.fn(async () => []),
   duckdbExecOnFile: vi.fn(() => true),
@@ -33,7 +35,9 @@ describe("Workspace DB & Reports API", () => {
       duckdbPath: vi.fn(() => null),
       duckdbQuery: vi.fn(() => []),
       duckdbQueryAsync: vi.fn(async () => []),
+      duckdbQueryAsyncDetailed: vi.fn(async () => ({ rows: [], error: null })),
       duckdbQueryExternalPgAsync: vi.fn(async () => []),
+      duckdbQueryExternalPgAsyncDetailed: vi.fn(async () => ({ rows: [], error: null })),
       duckdbQueryOnFile: vi.fn(() => []),
       duckdbQueryOnFileAsync: vi.fn(async () => []),
       duckdbExecOnFile: vi.fn(() => true),
@@ -192,8 +196,8 @@ describe("Workspace DB & Reports API", () => {
     it("executes report query successfully", async () => {
       const { checkSqlSafety } = await import("@/lib/report-filters");
       vi.mocked(checkSqlSafety).mockReturnValue(null);
-      const { duckdbQueryAsync } = await import("@/lib/workspace");
-      vi.mocked(duckdbQueryAsync).mockResolvedValue([{ count: 42 }]);
+      const { duckdbQueryAsyncDetailed } = await import("@/lib/workspace");
+      vi.mocked(duckdbQueryAsyncDetailed).mockResolvedValue({ rows: [{ count: 42 }], error: null });
 
       const { POST } = await import("./reports/execute/route.js");
       const req = new Request("http://localhost/api/workspace/reports/execute", {
@@ -210,10 +214,13 @@ describe("Workspace DB & Reports API", () => {
     it("routes ycrm-qualified report SQL to external postgres execution", async () => {
       const { checkSqlSafety } = await import("@/lib/report-filters");
       vi.mocked(checkSqlSafety).mockReturnValue(null);
-      const { duckdbQueryAsync, duckdbQueryExternalPgAsync } = await import("@/lib/workspace");
-      vi.mocked(duckdbQueryAsync).mockClear();
-      vi.mocked(duckdbQueryExternalPgAsync).mockClear();
-      vi.mocked(duckdbQueryExternalPgAsync).mockResolvedValue([{ stage: "需求確認", cnt: 9 }]);
+      const { duckdbQueryAsyncDetailed, duckdbQueryExternalPgAsyncDetailed } = await import("@/lib/workspace");
+      vi.mocked(duckdbQueryAsyncDetailed).mockClear();
+      vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockClear();
+      vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockResolvedValue({
+        rows: [{ stage: "需求確認", cnt: 9 }],
+        error: null,
+      });
 
       const { POST } = await import("./reports/execute/route.js");
       const req = new Request("http://localhost/api/workspace/reports/execute", {
@@ -227,8 +234,87 @@ describe("Workspace DB & Reports API", () => {
       expect(res.status).toBe(200);
       const json = await res.json();
       expect(json.rows).toEqual([{ stage: "需求確認", cnt: 9 }]);
-      expect(duckdbQueryExternalPgAsync).toHaveBeenCalled();
-      expect(duckdbQueryAsync).not.toHaveBeenCalled();
+      expect(duckdbQueryExternalPgAsyncDetailed).toHaveBeenCalled();
+      expect(duckdbQueryAsyncDetailed).not.toHaveBeenCalled();
+    });
+
+    it("routes erp-qualified report SQL to external postgres execution", async () => {
+      const { checkSqlSafety } = await import("@/lib/report-filters");
+      vi.mocked(checkSqlSafety).mockReturnValue(null);
+      const { duckdbQueryExternalPgAsyncDetailed } = await import("@/lib/workspace");
+      vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockResolvedValue({
+        rows: [{ customer_name: "OOCHAIN", cnt: 3 }],
+        error: null,
+      });
+
+      const { POST } = await import("./reports/execute/route.js");
+      const req = new Request("http://localhost/api/workspace/reports/execute", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sql: 'SELECT customer_name, COUNT(*) AS cnt FROM erp.public."SO" GROUP BY customer_name',
+        }),
+      });
+      const res = await POST(req);
+      expect(res.status).toBe(200);
+      const json = await res.json();
+      expect(json.rows).toEqual([{ customer_name: "OOCHAIN", cnt: 3 }]);
+      expect(duckdbQueryExternalPgAsyncDetailed).toHaveBeenCalledWith(
+        expect.stringContaining("ErpUAT_local"),
+        expect.any(String),
+        "erp",
+      );
+    });
+
+    it("routes enms-qualified report SQL to external postgres execution", async () => {
+      const { checkSqlSafety } = await import("@/lib/report-filters");
+      vi.mocked(checkSqlSafety).mockReturnValue(null);
+      const { duckdbQueryExternalPgAsyncDetailed } = await import("@/lib/workspace");
+      vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockResolvedValue({
+        rows: [{ RecordTime: "2026-05-28 16:00:00+08", MaxDemand: "0.0240" }],
+        error: null,
+      });
+
+      const { POST } = await import("./reports/execute/route.js");
+      const req = new Request("http://localhost/api/workspace/reports/execute", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sql: 'SELECT "RecordTime", "MaxDemand" FROM enms.public."DeviceDataSummaryView" LIMIT 1',
+        }),
+      });
+      const res = await POST(req);
+      expect(res.status).toBe(200);
+      const json = await res.json();
+      expect(json.rows).toEqual([{ RecordTime: "2026-05-28 16:00:00+08", MaxDemand: "0.0240" }]);
+      expect(duckdbQueryExternalPgAsyncDetailed).toHaveBeenCalledWith(
+        expect.stringContaining("dbname=EnMS"),
+        expect.any(String),
+        "enms",
+      );
+    });
+
+    it("surfaces query errors instead of silently returning empty rows", async () => {
+      const { checkSqlSafety } = await import("@/lib/report-filters");
+      vi.mocked(checkSqlSafety).mockReturnValue(null);
+      const { duckdbQueryAsyncDetailed } = await import("@/lib/workspace");
+      vi.mocked(duckdbQueryAsyncDetailed).mockResolvedValue({
+        rows: [],
+        error: 'Catalog Error: Table with name "salesQuote" does not exist',
+      });
+
+      const { POST } = await import("./reports/execute/route.js");
+      const req = new Request("http://localhost/api/workspace/reports/execute", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sql: "SELECT * FROM salesQuote",
+        }),
+      });
+      const res = await POST(req);
+      expect(res.status).toBe(500);
+      const json = await res.json();
+      expect(json.error).toContain("salesQuote");
     });
 
     it("applies filters to SQL", async () => {
@@ -236,8 +322,11 @@ describe("Workspace DB & Reports API", () => {
       vi.mocked(checkSqlSafety).mockReturnValue(null);
       vi.mocked(buildFilterClauses).mockReturnValue(['"Status" = \'Active\'']);
       vi.mocked(injectFilters).mockReturnValue("SELECT * FROM filtered");
-      const { duckdbQueryAsync } = await import("@/lib/workspace");
-      vi.mocked(duckdbQueryAsync).mockResolvedValue([{ count: 10 }]);
+      const { duckdbQueryAsyncDetailed } = await import("@/lib/workspace");
+      vi.mocked(duckdbQueryAsyncDetailed).mockResolvedValue({
+        rows: [{ count: 10 }],
+        error: null,
+      });
 
       const { POST } = await import("./reports/execute/route.js");
       const req = new Request("http://localhost/api/workspace/reports/execute", {

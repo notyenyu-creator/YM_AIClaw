@@ -1,4 +1,4 @@
-// ERP Learning Draft — Phase 2a
+// ERP Learning Draft
 //
 // Mirrors the Y-CRM learning-draft pattern. Generates a first-pass
 // knowledge-page draft from a session's persisted ERP planner artifacts
@@ -379,7 +379,7 @@ export function buildErpLearningDraft(
   });
   memory.push({
     key: "known_rule:erp_queries_must_be_read_only",
-    value: "ERP phase-1 is read-only via DuckDB postgres_scanner; never emit INSERT/UPDATE/DELETE.",
+    value: "ERP runtime is read-only via DuckDB postgres_scanner; never emit INSERT/UPDATE/DELETE.",
     reason: "This session queried ERP and reinforced the read-only rule.",
   });
 

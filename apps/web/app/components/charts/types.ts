@@ -30,7 +30,11 @@ export type PanelConfig = {
   id: string;
   title: string;
   type: ChartType;
-  sql: string;
+  sql?: string;
+  /** Optional static rows for inline / demo charts. */
+  rows?: Record<string, unknown>[];
+  /** Alias for rows to be tolerant of older/generated payloads. */
+  data?: Record<string, unknown>[];
   mapping: PanelMapping;
   size?: PanelSize;
 };

@@ -26,15 +26,19 @@ import { UnicodeSpinner } from "./unicode-spinner";
 import { Dialog, DialogContent } from "./ui/dialog";
 import type { SessionPlannerPreflight } from "@/app/api/web-sessions/shared";
 import type { ErpPlannerPreflight } from "@/lib/erp-context-builder";
+import type { EnmsPlannerPreflight } from "@/lib/enms-context-builder";
 import type { YcrmLearningDraft } from "@/lib/ycrm-learning-draft";
 import type { ErpLearningDraft } from "@/lib/erp-learning-draft";
+import type { EnmsLearningDraft } from "@/lib/enms-learning-draft";
 import type { ChatPanelRuntimeState } from "@/lib/chat-session-registry";
 import {
 	getStreamActivityLabel,
+	hasCompletedAssistantReply,
 	getIncompleteAssistantReplyReason,
 	hasAssistantPostToolText,
 	hasAssistantText,
 	hasAssistantToolActivity,
+	normalizeTransportErrorMessage,
 } from "./chat-stream-status";
 import type { ComposioChatAction } from "@/lib/composio-chat-actions";
 import type { ChatModelOption } from "@/lib/chat-models";
@@ -876,8 +880,10 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 		>(null);
 		const [plannerPreflight, setPlannerPreflight] = useState<SessionPlannerPreflight | null>(null);
 		const [erpPlannerPreflight, setErpPlannerPreflight] = useState<ErpPlannerPreflight | null>(null);
+		const [enmsPlannerPreflight, setEnmsPlannerPreflight] = useState<EnmsPlannerPreflight | null>(null);
 		const [plannerLearningDraft, setPlannerLearningDraft] = useState<YcrmLearningDraft | null>(null);
 		const [erpPlannerLearningDraft, setErpPlannerLearningDraft] = useState<ErpLearningDraft | null>(null);
+		const [enmsPlannerLearningDraft, setEnmsPlannerLearningDraft] = useState<EnmsLearningDraft | null>(null);
 		const [loadingSession, setLoadingSession] = useState(false);
 		const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -957,15 +963,19 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 						session?: {
 							plannerPreflight?: SessionPlannerPreflight | null;
 							erpPlannerPreflight?: ErpPlannerPreflight | null;
+							enmsPlannerPreflight?: EnmsPlannerPreflight | null;
 							plannerLearningDraft?: YcrmLearningDraft | null;
 							erpPlannerLearningDraft?: ErpLearningDraft | null;
+							enmsPlannerLearningDraft?: EnmsLearningDraft | null;
 						} | null;
 					};
 					if (sessionIdRef.current === sessionId) {
 						setPlannerPreflight(data.session?.plannerPreflight ?? null);
 						setErpPlannerPreflight(data.session?.erpPlannerPreflight ?? null);
+						setEnmsPlannerPreflight(data.session?.enmsPlannerPreflight ?? null);
 						setPlannerLearningDraft(data.session?.plannerLearningDraft ?? null);
 						setErpPlannerLearningDraft(data.session?.erpPlannerLearningDraft ?? null);
+						setEnmsPlannerLearningDraft(data.session?.enmsPlannerLearningDraft ?? null);
 					}
 				} catch {
 					// Best-effort only; the chat should still function even if the planner badge lags behind.
@@ -1014,13 +1024,30 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 		[],
 	);
 
-		const { messages, sendMessage, status, stop, error, setMessages } =
-			useChat({ transport });
+			const { messages, sendMessage, status, stop, error, setMessages } =
+				useChat({ transport });
 
-		const isStreaming =
-			status === "streaming" ||
-			status === "submitted" ||
-			isReconnecting;
+			const isStreaming =
+				status === "streaming" ||
+				status === "submitted" ||
+				isReconnecting;
+
+			const trailingAssistantMessage =
+				messages.length > 0 && messages[messages.length - 1]?.role === "assistant"
+					? (messages[messages.length - 1] as UIMessage)
+					: null;
+			const trailingAssistantHasVisibleReply =
+				hasCompletedAssistantReply(trailingAssistantMessage);
+			const transportErrorMessage = (() => {
+				const message = normalizeTransportErrorMessage(error?.message);
+				if (!message) {
+					return null;
+				}
+				if (status === "ready" && trailingAssistantHasVisibleReply) {
+					return null;
+				}
+				return message;
+			})();
 
 		// Keep cloud catalog + primary model in sync (hero, session switches, and after
 		// completed turns — agent tools may change agents.defaults.model.primary).
@@ -1359,7 +1386,10 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 			setMessages([]);
 			setPlannerPreflight(null);
 			setErpPlannerPreflight(null);
+			setEnmsPlannerPreflight(null);
 			setPlannerLearningDraft(null);
+			setErpPlannerLearningDraft(null);
+			setEnmsPlannerLearningDraft(null);
 			savedMessageIdsRef.current.clear();
 			isFirstFileMessageRef.current = true;
 
@@ -1390,8 +1420,10 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 						const msgData = await msgRes.json();
 						setPlannerPreflight(msgData.session?.plannerPreflight ?? null);
 						setErpPlannerPreflight(msgData.session?.erpPlannerPreflight ?? null);
+						setEnmsPlannerPreflight(msgData.session?.enmsPlannerPreflight ?? null);
 						setPlannerLearningDraft(msgData.session?.plannerLearningDraft ?? null);
 						setErpPlannerLearningDraft(msgData.session?.erpPlannerLearningDraft ?? null);
+						setEnmsPlannerLearningDraft(msgData.session?.enmsPlannerLearningDraft ?? null);
 						const sessionMessages: Array<{
 							id: string;
 							role: "user" | "assistant";
@@ -1722,13 +1754,13 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 						? hasAssistantPostToolText(lastMsg ?? null)
 						: hasAssistantText(lastMsg ?? null);
 					const incompleteReplyReason = getIncompleteAssistantReplyReason(lastMsg ?? null);
-					if (!hasVisibleReply && !hasToolOnlyActivity && !error) {
-						setStreamError("No response received from agent.");
-					} else if (!hasVisibleReply && hasToolOnlyActivity && !error) {
-						setStreamError(
-							incompleteReplyReason ?? "Agent finished tool activity but did not send a final text reply.",
-						);
-					} else {
+						if (!hasVisibleReply && !hasToolOnlyActivity && !transportErrorMessage) {
+							setStreamError("No response received from agent.");
+						} else if (!hasVisibleReply && hasToolOnlyActivity && !transportErrorMessage) {
+							setStreamError(
+								incompleteReplyReason ?? "Agent finished tool activity but did not send a final text reply.",
+							);
+						} else {
 						setStreamError(null);
 					}
 				}, 50);
@@ -1742,7 +1774,7 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 					emptyStreamTimerRef.current = null;
 				}
 			};
-		}, [previousStatus, status, messages, error]);
+			}, [previousStatus, status, messages, transportErrorMessage]);
 
 		useEffect(() => {
 			prevStatusRef.current = status;
@@ -1946,7 +1978,10 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 				setCurrentSessionId(sessionId);
 				setPlannerPreflight(null);
 				setErpPlannerPreflight(null);
+				setEnmsPlannerPreflight(null);
 				setPlannerLearningDraft(null);
+				setErpPlannerLearningDraft(null);
+				setEnmsPlannerLearningDraft(null);
 				sessionIdRef.current = sessionId;
 				onActiveSessionChange?.(sessionId);
 				savedMessageIdsRef.current.clear();
@@ -1962,8 +1997,10 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 						setMessages([]);
 						setPlannerPreflight(null);
 						setErpPlannerPreflight(null);
+						setEnmsPlannerPreflight(null);
 						setPlannerLearningDraft(null);
 						setErpPlannerLearningDraft(null);
+						setEnmsPlannerLearningDraft(null);
 						setLoadingSession(false);
 						return;
 					}
@@ -1971,8 +2008,10 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 					const data = await response.json();
 					setPlannerPreflight(data.session?.plannerPreflight ?? null);
 					setErpPlannerPreflight(data.session?.erpPlannerPreflight ?? null);
+					setEnmsPlannerPreflight(data.session?.enmsPlannerPreflight ?? null);
 					setPlannerLearningDraft(data.session?.plannerLearningDraft ?? null);
 					setErpPlannerLearningDraft(data.session?.erpPlannerLearningDraft ?? null);
+					setEnmsPlannerLearningDraft(data.session?.enmsPlannerLearningDraft ?? null);
 					const sessionMessages: Array<{
 						id: string;
 						role: "user" | "assistant";
@@ -2051,7 +2090,10 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 			setMessages([]);
 			setPlannerPreflight(null);
 			setErpPlannerPreflight(null);
+			setEnmsPlannerPreflight(null);
 			setPlannerLearningDraft(null);
+			setErpPlannerLearningDraft(null);
+			setEnmsPlannerLearningDraft(null);
 			savedMessageIdsRef.current.clear();
 			userHtmlMapRef.current.clear();
 			isFirstFileMessageRef.current = true;
@@ -2079,7 +2121,10 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 					setCurrentSessionId(sessionId);
 					setPlannerPreflight(null);
 					setErpPlannerPreflight(null);
+					setEnmsPlannerPreflight(null);
 					setPlannerLearningDraft(null);
+					setErpPlannerLearningDraft(null);
+					setEnmsPlannerLearningDraft(null);
 					sessionIdRef.current = sessionId;
 					onActiveSessionChange?.(sessionId);
 					onSessionsChange?.();
@@ -2488,8 +2533,10 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 									<PlannerPreflightHeader
 										plannerPreflight={plannerPreflight}
 										erpPlannerPreflight={erpPlannerPreflight}
+										enmsPlannerPreflight={enmsPlannerPreflight}
 										plannerLearningDraft={plannerLearningDraft}
 										erpPlannerLearningDraft={erpPlannerLearningDraft}
+										enmsPlannerLearningDraft={enmsPlannerLearningDraft}
 										sessionId={currentSessionId}
 									/>
 								)}
@@ -2507,8 +2554,10 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 								<PlannerPreflightHeader
 									plannerPreflight={plannerPreflight}
 									erpPlannerPreflight={erpPlannerPreflight}
+									enmsPlannerPreflight={enmsPlannerPreflight}
 									plannerLearningDraft={plannerLearningDraft}
 									erpPlannerLearningDraft={erpPlannerLearningDraft}
+									enmsPlannerLearningDraft={enmsPlannerLearningDraft}
 									sessionId={currentSessionId}
 								/>
 							</>
@@ -2736,8 +2785,8 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 				</div>
 
 				{/* Transport / stream-level error display */}
-				{(error || streamError) && (
-					<div
+					{(transportErrorMessage || streamError) && (
+						<div
 						className="px-3 py-2 flex items-center gap-2 sticky bottom-[72px] z-10"
 						style={{
 							background: `color-mix(in srgb, var(--color-error) 6%, var(--color-surface))`,
@@ -2770,9 +2819,9 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 								y2="16"
 							/>
 						</svg>
-						<p className="text-xs">{error?.message ?? streamError}</p>
-					</div>
-				)}
+							<p className="text-xs">{transportErrorMessage ?? streamError}</p>
+						</div>
+					)}
 				</div>
 
 				{/* Scroll to bottom button */}

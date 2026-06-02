@@ -398,6 +398,22 @@ describe("validateReportConfig", () => {
     expect(validateReportConfig(config)).toContain("mapping");
   });
 
+  it("accepts panel with inline rows instead of sql", () => {
+    const config = {
+      title: "Test",
+      panels: [{ id: "p", title: "P", type: "bar", rows: [{ stage: "A", count: 1 }], mapping: {} }],
+    };
+    expect(validateReportConfig(config)).toBeNull();
+  });
+
+  it("accepts panel with data alias instead of sql", () => {
+    const config = {
+      title: "Test",
+      panels: [{ id: "p", title: "P", type: "bar", data: [{ stage: "A", count: 1 }], mapping: {} }],
+    };
+    expect(validateReportConfig(config)).toBeNull();
+  });
+
   it("validates multiple panels", () => {
     const config = {
       title: "Test",

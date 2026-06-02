@@ -7,7 +7,7 @@ import Page from "./page";
 
 vi.mock("next/navigation", () => ({
   usePathname: vi.fn(() => "/debug/erp-context-builder"),
-  useSearchParams: vi.fn(() => new URLSearchParams()),
+  useSearchParams: vi.fn(() => new URLSearchParams() as never),
 }));
 
 describe("ERP context builder debug page", () => {
@@ -15,7 +15,7 @@ describe("ERP context builder debug page", () => {
     vi.restoreAllMocks();
     window.history.replaceState({}, "", "/debug/erp-context-builder");
     vi.mocked(usePathname).mockReturnValue("/debug/erp-context-builder");
-    vi.mocked(useSearchParams).mockReturnValue(new URLSearchParams());
+    vi.mocked(useSearchParams).mockReturnValue(new URLSearchParams() as never);
   });
 
   it("renders sample output from the debug route", async () => {
@@ -39,6 +39,18 @@ describe("ERP context builder debug page", () => {
           },
         })));
       }
+      if (url === "/api/web-sessions/erp-session-1") {
+        return Promise.resolve(new Response(JSON.stringify({
+          id: "erp-session-1",
+          session: {
+            erpPlannerLearningDraft: {
+              session_id: "erp-session-1",
+              status: "ready",
+              writeback: { status: "not_written" },
+            },
+          },
+        })));
+      }
       throw new Error(`Unexpected fetch: ${url}`);
     }) as typeof fetch;
 
@@ -54,7 +66,7 @@ describe("ERP context builder debug page", () => {
 
   it("renders review-mode heading when opened from the formal review route", async () => {
     vi.mocked(usePathname).mockReturnValue("/review/erp");
-    vi.mocked(useSearchParams).mockReturnValue(new URLSearchParams("sessionId=erp-session-1"));
+    vi.mocked(useSearchParams).mockReturnValue(new URLSearchParams("sessionId=erp-session-1") as never);
 
     global.fetch = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
@@ -87,6 +99,7 @@ describe("ERP context builder debug page", () => {
     expect(screen.getByText("Review Queue")).toBeInTheDocument();
     expect(screen.getByText("Review route ready")).toBeInTheDocument();
     expect(screen.getByDisplayValue("erp-session-1")).toBeInTheDocument();
+    expect(screen.getByText("ERP Learning Review")).toBeInTheDocument();
   });
 
   it("submits a message and renders the returned ERP planner", async () => {

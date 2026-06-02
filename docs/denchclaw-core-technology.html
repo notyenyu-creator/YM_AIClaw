@@ -1,0 +1,290 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>DenchClaw 核心技術短版</title>
+    <style>
+      :root {
+        --bg: #f4f7f8;
+        --surface: #ffffff;
+        --text: #102330;
+        --text-soft: #5a6b7a;
+        --line: rgba(16, 35, 48, 0.1);
+        --teal: #0f766e;
+        --blue: #145da0;
+        --amber: #d97706;
+        --shadow: 0 20px 56px rgba(10, 24, 34, 0.08);
+        --max: 1080px;
+      }
+
+      * { box-sizing: border-box; }
+
+      body {
+        margin: 0;
+        font-family: "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", sans-serif;
+        color: var(--text);
+        line-height: 1.7;
+        background:
+          radial-gradient(circle at top left, rgba(15, 118, 110, 0.1), transparent 24rem),
+          linear-gradient(180deg, #fbfcfc 0%, var(--bg) 100%);
+      }
+
+      .shell {
+        max-width: var(--max);
+        margin: 0 auto;
+        padding: 28px 20px 72px;
+      }
+
+      .hero, .section {
+        border: 1px solid var(--line);
+        border-radius: 28px;
+        padding: 28px;
+        background: rgba(255, 255, 255, 0.88);
+        box-shadow: var(--shadow);
+      }
+
+      .hero {
+        color: #ebf5f7;
+        background:
+          radial-gradient(circle at 90% 0%, rgba(133, 244, 209, 0.18), transparent 20rem),
+          linear-gradient(135deg, #082131 0%, #0d4255 52%, #145da0 100%);
+      }
+
+      .eyebrow, .chip {
+        display: inline-flex;
+        align-items: center;
+        border-radius: 999px;
+        padding: 8px 14px;
+        font-size: 12px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      .eyebrow {
+        border: 1px solid rgba(255,255,255,0.16);
+        background: rgba(255,255,255,0.08);
+      }
+
+      h1, h2 {
+        margin: 0 0 12px;
+        font-family: "Noto Serif TC", "PMingLiU", serif;
+        letter-spacing: -0.03em;
+      }
+
+      h1 { font-size: clamp(34px, 5vw, 56px); line-height: 1.05; margin-top: 16px; }
+      h2 { font-size: clamp(26px, 3vw, 38px); line-height: 1.08; }
+
+      p { margin: 0; color: var(--text-soft); }
+      .hero p { color: rgba(235,245,247,0.9); }
+
+      .toplinks {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        margin-top: 22px;
+      }
+
+      .toplinks a, .chip {
+        text-decoration: none;
+        font-weight: 700;
+      }
+
+      .toplinks a {
+        color: #082131;
+        background: linear-gradient(135deg, #d8fbf2 0%, #c5ebff 100%);
+        border-radius: 999px;
+        padding: 11px 16px;
+      }
+
+      .section { margin-top: 20px; }
+
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 16px;
+      }
+
+      .card {
+        border: 1px solid var(--line);
+        border-radius: 22px;
+        padding: 18px;
+        background: var(--surface);
+      }
+
+      .chip {
+        margin-bottom: 12px;
+        background: rgba(20, 93, 160, 0.1);
+        color: var(--blue);
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 14px;
+      }
+
+      th, td {
+        border: 1px solid var(--line);
+        padding: 12px;
+        text-align: left;
+        vertical-align: top;
+      }
+
+      th {
+        background: #eef5f7;
+      }
+
+      code {
+        font-family: "SFMono-Regular", "JetBrains Mono", Consolas, monospace;
+        font-size: 12px;
+        color: var(--blue);
+      }
+
+      ul {
+        margin: 10px 0 0;
+        padding-left: 18px;
+        color: var(--text-soft);
+      }
+
+      @media (max-width: 860px) {
+        .grid { grid-template-columns: 1fr; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="shell">
+      <header class="hero">
+        <span class="eyebrow">DenchClaw / 核心技術短版</span>
+        <h1>核心技術不是自研大模型，而是可治理的 AI 執行框架。</h1>
+        <p>
+          DenchClaw 的技術重點是把模型層、企業資料層、domain routing、reviewable learning loop，
+          收斂成同一條可持續擴充的 runtime。模型可以替換，但執行治理、資料語意、知識沉澱與跨系統 contract 才是核心資產。
+        </p>
+        <div class="toplinks">
+          <a href="./denchclaw-ai-architecture-investor.html">回總覽首頁</a>
+          <a href="./denchclaw-enms-ai.html">看 EnMS 專頁</a>
+          <a href="./denchclaw-validation-prompts.html">看驗證題庫</a>
+        </div>
+      </header>
+
+      <section class="section">
+        <h2>最值得講的五個核心</h2>
+        <div class="grid">
+          <article class="card">
+            <span class="chip">1. Gateway</span>
+            <p>以 OpenClaw Gateway 承接 chat 入口、session runtime、工具橋接、模型呼叫與 metadata 保存。</p>
+          </article>
+          <article class="card">
+            <span class="chip">2. Planner / Context</span>
+            <p>在模型前先做 intent、domain routing、source-of-truth 判斷、risk guardrail、context pack 組裝。</p>
+          </article>
+          <article class="card">
+            <span class="chip">3. Domain Adapter</span>
+            <p>Y-CRM、ERP、EnMS 不是同一份 prompt，而是各自的 builder、pack、skill、join rule 與操作策略。</p>
+          </article>
+          <article class="card">
+            <span class="chip">4. Reviewable Learning</span>
+            <p>回答後進入 draft → review → promotion，不直接把模型輸出當正式知識或正式資料。</p>
+          </article>
+          <article class="card">
+            <span class="chip">5. Model Strategy</span>
+            <p>主力是 Dench Cloud Gateway API，可切換 Claude / GPT 類模型；本地優先指部署與資料治理，不是本地 LLM 主線。</p>
+          </article>
+          <article class="card">
+            <span class="chip">附加價值</span>
+            <p>EnMS 現在已補上需量預警、異常偵測、告警治理模組，代表不是只有聊天理解，也有數值化 analytics path。</p>
+          </article>
+          <article class="card">
+            <span class="chip">6. Bootstrap / Gaps</span>
+            <p>主聊天在進模型前，會先做 schema bootstrap，並把缺資料來源明確標示進 prompt，避免模型硬猜欄位或契約語意。</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="section">
+        <h2>缺資料時怎麼處理</h2>
+        <div class="grid">
+          <article class="card">
+            <span class="chip">Bootstrap Snapshot</span>
+            <p><code>apps/web/lib/domain-bootstrap.ts</code> 會在 Y-CRM / ERP / EnMS 被命中時，先補一段 schema、join、availability 摘要。</p>
+          </article>
+          <article class="card">
+            <span class="chip">Missing-Data Contract</span>
+            <p>若資料不足，回答必須分成 <strong>已確認</strong>、<strong>缺少資料</strong>、<strong>目前可回答</strong>、<strong>建議下一步</strong>，而不是只說資料限制。</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="section">
+        <h2>跟市面上常見說法最不同的地方</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>問題</th>
+              <th>DenchClaw 的答案</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>你們的核心是不是某個自研大模型？</td>
+              <td>不是。核心是 runtime、domain adapter、analytics engine、reviewable knowledge ops。</td>
+            </tr>
+            <tr>
+              <td>為什麼不自己做本地模型？</td>
+              <td>對現階段小團隊，模型層外包給穩定 API 更務實；真正價值在資料語意、工作流、治理與垂直 know-how。</td>
+            </tr>
+            <tr>
+              <td>你們跟聊天型 AI 有什麼差別？</td>
+              <td>不是只有回答，而是先做 routing、再做 analysis、最後可進 review / promotion。</td>
+            </tr>
+            <tr>
+              <td>你們跟單一 BI Copilot 有什麼差別？</td>
+              <td>可跨 Y-CRM / ERP / EnMS 做統一 contract，不是只對一套 schema 問答。</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section class="section">
+        <h2>最短 code proof</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>模組</th>
+              <th>檔案</th>
+              <th>它證明什麼</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Gateway / Session</td>
+              <td><code>apps/web/app/api/chat/route.ts</code><br /><code>apps/web/app/api/web-sessions/shared.ts</code></td>
+              <td>這不是只有前端聊天頁，而是有自己的 session runtime 與 planner artifacts persist。</td>
+            </tr>
+            <tr>
+              <td>Planner / Context</td>
+              <td><code>apps/web/lib/ycrm-context-builder.ts</code><br /><code>apps/web/lib/erp-context-builder.ts</code><br /><code>apps/web/lib/enms-context-builder.ts</code></td>
+              <td>三個 domain 都有程式化 routing，不是直接把問題丟進模型。</td>
+            </tr>
+            <tr>
+              <td>AI Wiki / Review</td>
+              <td><code>apps/web/lib/*-learning-writeback.ts</code><br /><code>apps/web/lib/*-learning-promotion.ts</code><br /><code>apps/web/app/components/learning-review-workspace.tsx</code></td>
+              <td>知識沉澱有人工 review 邊界，不是模型說什麼就算什麼。</td>
+            </tr>
+            <tr>
+              <td>EnMS Analytics</td>
+              <td><code>apps/web/lib/enms-demand-forecast-engine.ts</code><br /><code>apps/web/lib/enms-anomaly-detection-engine.ts</code><br /><code>apps/web/lib/enms-alert-governance-engine.ts</code></td>
+              <td>EnMS 已有第一版 analytics modules，不只是能耗聊天摘要。</td>
+            </tr>
+            <tr>
+              <td>Bootstrap / Gaps</td>
+              <td><code>apps/web/lib/domain-bootstrap.ts</code><br /><code>apps/web/lib/domain-bootstrap.test.ts</code></td>
+              <td>三系統在進模型前先補 schema / join / data-gap 摘要，避免模糊回答。</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+    </div>
+  </body>
+</html>

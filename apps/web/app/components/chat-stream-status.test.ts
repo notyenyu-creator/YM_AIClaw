@@ -2,10 +2,13 @@ import { readFileSync } from "node:fs";
 import type { UIMessage } from "ai";
 import { describe, expect, it } from "vitest";
 import {
+	getIncompleteAssistantReplyReason,
 	getStreamActivityLabel,
+	hasCompletedAssistantReply,
 	hasAssistantToolActivity,
 	hasAssistantText,
 	isStatusReasoningText,
+	normalizeTransportErrorMessage,
 } from "./chat-stream-status";
 
 function assistantMessage(parts: UIMessage["parts"]): UIMessage {
@@ -106,5 +109,20 @@ describe("chat stream status helpers", () => {
 
 		expect(hasAssistantText(assistant)).toBe(false);
 		expect(hasAssistantToolActivity(assistant)).toBe(true);
+	});
+
+	it("treats trailing assistant text as a completed reply", () => {
+		const assistant = assistantMessage([
+			{ type: "dynamic-tool", toolName: "read_file", toolCallId: "tool-1", state: "output-available", input: {}, output: {} },
+			{ type: "text", text: "已整理完成。" },
+		] as UIMessage["parts"]);
+
+		expect(hasCompletedAssistantReply(assistant)).toBe(true);
+		expect(getIncompleteAssistantReplyReason(assistant)).toBeNull();
+	});
+
+	it("normalizes browser fetch errors into a readable message", () => {
+		expect(normalizeTransportErrorMessage("Failed to fetch")).toBe("與聊天服務的連線中斷，請重新整理後再試。");
+		expect(normalizeTransportErrorMessage("Load failed")).toBe("與聊天服務的連線中斷，請重新整理後再試。");
 	});
 });

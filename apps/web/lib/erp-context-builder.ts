@@ -1,9 +1,11 @@
-// ERP Context Builder — Phase 1
+// ERP Context Builder
 //
-// Mirrors the Y-CRM context builder pattern but kept intentionally small:
+// Mirrors the Y-CRM context builder pattern with a domain-focused routing
+// surface for ERP transaction, inventory, shipment, and finance questions.
+// It remains intentionally compact:
 // it only detects whether the user message belongs to the ERP domain and
 // returns a minimal preflight summary. Full intent classification, risk
-// scoring, and learning loop integration are deferred to phase 2.
+// scoring, and learning-loop enrichment can continue expanding over time.
 
 export type ErpIntent =
   | "sales_order"

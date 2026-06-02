@@ -114,6 +114,12 @@ describe("PlannerPreflightHeader", () => {
 					shouldRouteToErp: true,
 					matchedKeywords: ["訂單", "出貨"],
 					warnings: [],
+					presentation: {
+						optional_chart_requested: false,
+						chart_render_allowed: false,
+						chart_guardrail_reason: null,
+						max_chart_panels: 0,
+					},
 				}}
 				sessionId="erp-review-1"
 			/>,
@@ -128,6 +134,64 @@ describe("PlannerPreflightHeader", () => {
 		expect(screen.getByRole("link", { name: "Open review" })).toHaveAttribute(
 			"href",
 			"/review/erp?sessionId=erp-review-1",
+		);
+	});
+
+	it("surfaces EnMS review state when the session routes into EnMS", () => {
+		render(
+			<PlannerPreflightHeader
+				plannerPreflight={{
+					system: "ycrm",
+					updatedAt: Date.now(),
+					validationState: "heuristic",
+					intent: "cross_system_request",
+					confidence: "medium",
+					shouldRouteToYcrm: false,
+					workspaceId: null,
+					needsWorkspaceValidation: false,
+					warnings: [],
+					blockers: [],
+					crossSystem: true,
+					targetSystems: ["enms"],
+				}}
+				enmsPlannerPreflight={{
+					system: "enms",
+					updatedAt: Date.now(),
+					intent: "demand_forecast",
+					confidence: "high",
+					shouldRouteToEnms: true,
+					matchedKeywords: ["需量", "超約"],
+					warnings: [],
+					presentation: {
+						optional_chart_requested: false,
+						chart_render_allowed: false,
+						chart_guardrail_reason: null,
+						max_chart_panels: 0,
+					},
+				}}
+				enmsPlannerLearningDraft={{
+					writeback: {
+						status: "written",
+						reviewer_actor: "Energy QA",
+						updated_at: 1710000004000,
+						files: ["wiki/entities/energy/sample-demand-forecast.md"],
+						skipped_files: [],
+						promoted_files: [],
+						promotion_skipped_files: [],
+						promotion_conflict_files: [],
+					},
+				}}
+				sessionId="enms-review-1"
+			/>,
+		);
+
+		expect(screen.getByText("EnMS")).toBeInTheDocument();
+		expect(screen.getByText("intent:demand_forecast")).toBeInTheDocument();
+		expect(screen.getByText("Draft ready")).toBeInTheDocument();
+		expect(screen.getByText("by:Energy QA")).toBeInTheDocument();
+		expect(screen.getByRole("link", { name: "Open review" })).toHaveAttribute(
+			"href",
+			"/review/enms?sessionId=enms-review-1",
 		);
 	});
 });

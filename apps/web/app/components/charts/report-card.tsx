@@ -71,6 +71,12 @@ type PanelData = {
   error?: string;
 };
 
+function panelInlineRows(panel: PanelConfig): Record<string, unknown>[] | null {
+  if (Array.isArray(panel.rows)) {return panel.rows;}
+  if (Array.isArray(panel.data)) {return panel.data;}
+  return null;
+}
+
 // --- Grid size helpers ---
 
 function panelColSpan(size?: string): string {
@@ -107,6 +113,23 @@ export function ReportCard({ config }: ReportCardProps) {
 
     // Execute sequentially to avoid DuckDB file lock conflicts
     for (const panel of panels) {
+      const inlineRows = panelInlineRows(panel);
+      if (inlineRows) {
+        setPanelData((prev) => ({
+          ...prev,
+          [panel.id]: { rows: inlineRows, loading: false },
+        }));
+        continue;
+      }
+
+      if (!panel.sql) {
+        setPanelData((prev) => ({
+          ...prev,
+          [panel.id]: { rows: [], loading: false, error: "Panel missing sql or rows" },
+        }));
+        continue;
+      }
+
       try {
         const res = await fetch("/api/workspace/reports/execute", {
           method: "POST",

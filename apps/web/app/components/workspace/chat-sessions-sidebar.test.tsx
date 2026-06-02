@@ -119,6 +119,57 @@ describe("ChatSessionsSidebar", () => {
     );
   });
 
+  it("renders EnMS planner badges when the session routes into EnMS", () => {
+    renderSidebar([
+      {
+        id: "s-enms",
+        title: "EnMS Planner Chat",
+        createdAt: Date.now() - 1_000,
+        updatedAt: Date.now(),
+        messageCount: 2,
+        plannerPreflight: {
+          system: "ycrm",
+          updatedAt: Date.now(),
+          validationState: "heuristic",
+          intent: "cross_system_request",
+          confidence: "medium",
+          shouldRouteToYcrm: false,
+          workspaceId: null,
+          needsWorkspaceValidation: false,
+          warnings: [],
+          blockers: [],
+          crossSystem: true,
+          targetSystems: ["enms"],
+        },
+        enmsPlannerPreflight: {
+          system: "enms",
+          updatedAt: Date.now(),
+          intent: "site_benchmarking",
+          confidence: "high",
+          shouldRouteToEnms: true,
+          matchedKeywords: ["場域", "比較"],
+          warnings: [],
+        },
+        enmsPlannerLearningDraft: {
+          writeback: {
+            status: "written",
+            reviewer_actor: "Energy QA",
+          },
+        },
+      },
+    ]);
+
+    expect(screen.getByText("EnMS")).toBeInTheDocument();
+    expect(screen.getByText("Advisory")).toBeInTheDocument();
+    expect(screen.getByText("Cross-system")).toBeInTheDocument();
+    expect(screen.getByText("EnMS: Draft ready")).toBeInTheDocument();
+    expect(screen.getByText("by:Energy QA")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Go to EnMS review for EnMS Planner Chat" })).toHaveAttribute(
+      "href",
+      "/review/enms?sessionId=s-enms",
+    );
+  });
+
   it("renders reviewed badge for sessions that were manually resolved", () => {
     renderSidebar([
       {

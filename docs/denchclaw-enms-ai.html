@@ -1,0 +1,347 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>DenchClaw EnMS AI 專頁</title>
+    <style>
+      :root {
+        --bg: #f4f8f6;
+        --surface: rgba(255, 255, 255, 0.9);
+        --text: #102330;
+        --text-soft: #5a6b7a;
+        --line: rgba(16, 35, 48, 0.1);
+        --teal: #0f766e;
+        --blue: #145da0;
+        --green: #1f7a52;
+        --amber: #d97706;
+        --red: #b42318;
+        --shadow: 0 20px 56px rgba(10, 24, 34, 0.08);
+        --max: 1120px;
+      }
+
+      * { box-sizing: border-box; }
+
+      body {
+        margin: 0;
+        font-family: "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", sans-serif;
+        color: var(--text);
+        line-height: 1.7;
+        background:
+          radial-gradient(circle at top left, rgba(15, 118, 110, 0.12), transparent 24rem),
+          linear-gradient(180deg, #fbfcfc 0%, var(--bg) 100%);
+      }
+
+      .shell {
+        max-width: var(--max);
+        margin: 0 auto;
+        padding: 28px 20px 72px;
+      }
+
+      .hero, .section {
+        border: 1px solid var(--line);
+        border-radius: 28px;
+        padding: 28px;
+        background: var(--surface);
+        box-shadow: var(--shadow);
+      }
+
+      .hero {
+        color: #ebf7f4;
+        background:
+          radial-gradient(circle at 100% 0%, rgba(156, 255, 220, 0.16), transparent 22rem),
+          linear-gradient(135deg, #07222a 0%, #0f4d56 54%, #0f766e 100%);
+      }
+
+      .eyebrow, .chip {
+        display: inline-flex;
+        align-items: center;
+        border-radius: 999px;
+        padding: 8px 14px;
+        font-size: 12px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      .eyebrow {
+        border: 1px solid rgba(255,255,255,0.16);
+        background: rgba(255,255,255,0.08);
+      }
+
+      h1, h2 {
+        margin: 0 0 12px;
+        font-family: "Noto Serif TC", "PMingLiU", serif;
+        letter-spacing: -0.03em;
+      }
+
+      h1 { font-size: clamp(34px, 5vw, 58px); line-height: 1.05; margin-top: 16px; }
+      h2 { font-size: clamp(26px, 3vw, 38px); line-height: 1.08; }
+
+      p { margin: 0; color: var(--text-soft); }
+      .hero p { color: rgba(235,247,244,0.9); }
+
+      .toplinks {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        margin-top: 22px;
+      }
+
+      .toplinks a {
+        text-decoration: none;
+        font-weight: 700;
+        color: #08212a;
+        background: linear-gradient(135deg, #d8fbf2 0%, #d9f3ff 100%);
+        border-radius: 999px;
+        padding: 11px 16px;
+      }
+
+      .section { margin-top: 20px; }
+
+      .grid-3, .grid-2 {
+        display: grid;
+        gap: 16px;
+      }
+
+      .grid-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .grid-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+
+      .card {
+        border: 1px solid var(--line);
+        border-radius: 22px;
+        padding: 18px;
+        background: #fff;
+      }
+
+      .chip {
+        margin-bottom: 12px;
+        background: rgba(15, 118, 110, 0.12);
+        color: var(--teal);
+        font-weight: 700;
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 14px;
+      }
+
+      th, td {
+        border: 1px solid var(--line);
+        padding: 12px;
+        text-align: left;
+        vertical-align: top;
+      }
+
+      th { background: #eef6f4; }
+
+      code {
+        font-family: "SFMono-Regular", "JetBrains Mono", Consolas, monospace;
+        font-size: 12px;
+        color: var(--blue);
+      }
+
+      ul {
+        margin: 10px 0 0;
+        padding-left: 18px;
+        color: var(--text-soft);
+      }
+
+      .note {
+        margin-top: 16px;
+        border-left: 4px solid var(--amber);
+        border-radius: 0 16px 16px 0;
+        padding: 14px 16px;
+        background: rgba(217, 119, 6, 0.08);
+        color: var(--text-soft);
+      }
+
+      @media (max-width: 860px) {
+        .grid-3, .grid-2 { grid-template-columns: 1fr; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="shell">
+      <header class="hero">
+        <span class="eyebrow">DenchClaw / EnMS AI / 中文技術版</span>
+        <h1>EnMS 不是只把能耗資料說成人話，而是開始具備可驗證的預警、異常、告警能力。</h1>
+        <p>
+          目前 EnMS 已接入 DenchClaw 的同一套 planner / context / learning / review contract，
+          並補上第一版 <strong>Demand Forecast Engine、Anomaly Detection Engine、Alert Governance Engine</strong>。
+          這些模組屬於統計 + 規則式 analytics path，不是自研 foundation model。
+        </p>
+        <div class="toplinks">
+          <a href="./denchclaw-ai-architecture-investor.html">回總覽首頁</a>
+          <a href="./denchclaw-core-technology.html">看核心技術短版</a>
+          <a href="./denchclaw-validation-prompts.html">看驗證題庫</a>
+        </div>
+      </header>
+
+      <section class="section">
+        <h2>目前 EnMS 能做什麼</h2>
+        <div class="grid-3">
+          <article class="card">
+            <span class="chip">Demand Forecast</span>
+            <p>以歷史 summary-layer 需量資料、同時段基線、最近趨勢、契約容量與可用營運特徵做需量預警。</p>
+          </article>
+          <article class="card">
+            <span class="chip">Anomaly Detection</span>
+            <p>先在 summary layer 建立需量 / 功因基線，再用 raw layer 驗證 THD、quality、connected、三相異常。</p>
+          </article>
+          <article class="card">
+            <span class="chip">Alert Governance</span>
+            <p>把 forecast 與 anomaly 整理成 prewarning / alert，並附 recommended owner 與 escalation window。</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="section">
+        <h2>資料主線</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>資料層</th>
+              <th>主要來源</th>
+              <th>角色</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>摘要層</td>
+              <td><code>DeviceDataSummaryView</code></td>
+              <td>需量、KPI、趨勢、benchmarking、預警的第一優先資料層。</td>
+            </tr>
+            <tr>
+              <td>原始層</td>
+              <td><code>mqtt_raw_data</code></td>
+              <td>異常偵測、電力品質、連線掉點、根因 drill-down。</td>
+            </tr>
+            <tr>
+              <td>主資料層</td>
+              <td><code>ElectricityMeter</code>、<code>PowerAccounts</code>、<code>sites</code>、<code>site_gateways</code>、<code>ComCompany</code></td>
+              <td>補設備別名、契約容量、場域、gateway、公司層語意。</td>
+            </tr>
+          </tbody>
+        </table>
+        <div class="note">
+          EnMS 的第一原則是 <strong>summary-first、raw-validation、join semantics before answer</strong>。
+          也就是先用摘要層看趨勢，再用 raw 驗證異常，最後一定補上設備 / 場域 / 契約語意。
+        </div>
+      </section>
+
+      <section class="section">
+        <h2>缺資料治理已經補進主聊天</h2>
+        <div class="grid-2">
+          <article class="card">
+            <span class="chip">Bootstrap</span>
+            <p>主聊天命中 EnMS 時，會先補一段 live DB bootstrap，確認 <code>sites</code>、<code>PowerAccounts</code>、<code>DemandAlertHistory</code> 等資料可用性。</p>
+          </article>
+          <article class="card">
+            <span class="chip">Response Contract</span>
+            <p>若契約容量或告警歷史缺資料，回答必須直接點名哪張表 0 rows，並退回仍可驗證的 summary-layer 分析。</p>
+          </article>
+        </div>
+        <div class="note">
+          例如目前若 <code>PowerAccounts</code> 或 <code>DemandAlertHistory</code> 沒資料，系統不應再只回「因資料限制」，
+          而是要清楚說出缺口，並改做最大需量、summary 趨勢或 raw signal 檢查。
+        </div>
+      </section>
+
+      <section class="section">
+        <h2>三個分析模組怎麼做</h2>
+        <div class="grid-3">
+          <article class="card">
+            <span class="chip">1. Forecast Logic</span>
+            <ul>
+              <li>同時段歷史基線</li>
+              <li>最近 8 筆 summary 趨勢</li>
+              <li>可用的溫度 / business load / production load 特徵</li>
+              <li>契約容量比對後輸出 risk level 與 prewarnings</li>
+            </ul>
+          </article>
+          <article class="card">
+            <span class="chip">2. Anomaly Logic</span>
+            <ul>
+              <li>需量 spike 基線比對</li>
+              <li>低功因與契約容量壓力</li>
+              <li>connected / quality 掉點</li>
+              <li>THD、phase imbalance 等電力品質異常</li>
+            </ul>
+          </article>
+          <article class="card">
+            <span class="chip">3. Governance Logic</span>
+            <ul>
+              <li>forecast output + anomaly output 合併</li>
+              <li>切成 prewarning / alert</li>
+              <li>建議 owner：energy_manager / facility_ops / electrical_maintenance</li>
+              <li>避免把所有訊號都扁平成同一級警報</li>
+            </ul>
+          </article>
+        </div>
+      </section>
+
+      <section class="section">
+        <h2>目前最值得看的 code path</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>能力</th>
+              <th>檔案</th>
+              <th>它證明什麼</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Domain Routing</td>
+              <td><code>apps/web/lib/enms-context-builder.ts</code><br /><code>apps/web/lib/enms-context-pack.ts</code></td>
+              <td>EnMS 不是只靠 prompt，已經有自己的 intent / routing / context contract。</td>
+            </tr>
+            <tr>
+              <td>Demand Forecast</td>
+              <td><code>apps/web/lib/enms-demand-forecast-engine.ts</code></td>
+              <td>需量預警是程式化統計邏輯，不是 LLM 直接猜 projected peak。</td>
+            </tr>
+            <tr>
+              <td>Anomaly Detection</td>
+              <td><code>apps/web/lib/enms-anomaly-detection-engine.ts</code></td>
+              <td>異常不是只憑單一數值，而是 summary + raw 雙層判讀。</td>
+            </tr>
+            <tr>
+              <td>Alert Governance</td>
+              <td><code>apps/web/lib/enms-alert-governance-engine.ts</code></td>
+              <td>告警分級與 owner 分派有獨立邏輯，不是模型臨場決定。</td>
+            </tr>
+            <tr>
+              <td>Debug Workbench</td>
+              <td><code>apps/web/app/api/debug/enms-analytics/route.ts</code><br /><code>apps/web/app/debug/enms-analytics/page.tsx</code></td>
+              <td>可以直接看 sample input / output，不是只有文件描述。</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section class="section">
+        <h2>誠實範圍</h2>
+        <div class="grid-2">
+          <article class="card">
+            <span class="chip">已完成</span>
+            <ul>
+              <li>EnMS 已接入同一套 runtime contract</li>
+              <li>已有 forecast / anomaly / alert 三段式第一版模組</li>
+              <li>已有 debug route、debug page、review flow、skill 與測試</li>
+            </ul>
+          </article>
+          <article class="card">
+            <span class="chip">不要講過頭</span>
+            <ul>
+              <li>目前不是自訓 time-series foundation model</li>
+              <li>目前是統計 + 規則式第一版，精度仍取決於歷史資料量與欄位品質</li>
+              <li>正式通知策略、門檻與誤報率仍要依場域持續校準</li>
+            </ul>
+          </article>
+        </div>
+      </section>
+    </div>
+  </body>
+</html>

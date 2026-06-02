@@ -1,6 +1,6 @@
 import { existsSync, readFileSync, readdirSync, writeFileSync, mkdirSync } from "node:fs";
 import { access, readdir as readdirAsync } from "node:fs/promises";
-import { execSync, exec } from "node:child_process";
+import { execSync, exec, execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { join, resolve, normalize, relative, isAbsolute as isNodeAbsolute } from "node:path";
 import { homedir } from "node:os";
@@ -13,6 +13,44 @@ import {
 } from "./workspace-paths";
 
 const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
+
+export type DuckdbQueryExecution<T = Record<string, unknown>> = {
+  rows: T[];
+  error: string | null;
+};
+
+function parseDuckdbJsonRows<T>(stdout: string): T[] {
+  const trimmed = stdout.trim();
+  if (!trimmed || trimmed === "[]") {
+    return [];
+  }
+  return JSON.parse(trimmed) as T[];
+}
+
+function extractDuckdbExecError(error: unknown): string {
+  if (error && typeof error === "object") {
+    const record = error as {
+      stderr?: string;
+      stdout?: string;
+      message?: string;
+    };
+    const stderr = typeof record.stderr === "string" ? record.stderr.trim() : "";
+    if (stderr) {
+      return stderr;
+    }
+    const stdout = typeof record.stdout === "string" ? record.stdout.trim() : "";
+    if (stdout) {
+      return stdout;
+    }
+    const message = typeof record.message === "string" ? record.message.trim() : "";
+    if (message) {
+      return message;
+    }
+  }
+
+  return error instanceof Error ? error.message : "DuckDB query failed";
+}
 
 async function pathExistsAsync(path: string): Promise<boolean> {
   try {
@@ -828,11 +866,28 @@ export function duckdbQuery<T = Record<string, unknown>>(
 export async function duckdbQueryAsync<T = Record<string, unknown>>(
   sql: string,
 ): Promise<T[]> {
+  const result = await duckdbQueryAsyncDetailed<T>(sql);
+  return result.rows;
+}
+
+export async function duckdbQueryAsyncDetailed<T = Record<string, unknown>>(
+  sql: string,
+): Promise<DuckdbQueryExecution<T>> {
   const db = await duckdbPathAsync();
-  if (!db) {return [];}
+  if (!db) {
+    return {
+      rows: [],
+      error: "No workspace DuckDB database is available for this report query.",
+    };
+  }
 
   const bin = resolveDuckdbBin();
-  if (!bin) {return [];}
+  if (!bin) {
+    return {
+      rows: [],
+      error: "DuckDB binary is not available on this host.",
+    };
+  }
 
   try {
     const escapedSql = sql.replace(/'/g, "'\\''");
@@ -842,12 +897,15 @@ export async function duckdbQueryAsync<T = Record<string, unknown>>(
       maxBuffer: 10 * 1024 * 1024,
       shell: "/bin/sh",
     });
-
-    const trimmed = stdout.trim();
-    if (!trimmed || trimmed === "[]") {return [];}
-    return JSON.parse(trimmed) as T[];
-  } catch {
-    return [];
+    return {
+      rows: parseDuckdbJsonRows<T>(stdout),
+      error: null,
+    };
+  } catch (error) {
+    return {
+      rows: [],
+      error: extractDuckdbExecError(error),
+    };
   }
 }
 
@@ -1163,31 +1221,53 @@ export async function duckdbQueryExternalPgAsync<T = Record<string, unknown>>(
   sql: string,
   alias: string = "ext",
 ): Promise<T[]> {
+  const result = await duckdbQueryExternalPgAsyncDetailed<T>(
+    connectionString,
+    sql,
+    alias,
+  );
+  return result.rows;
+}
+
+export async function duckdbQueryExternalPgAsyncDetailed<T = Record<string, unknown>>(
+  connectionString: string,
+  sql: string,
+  alias: string = "ext",
+): Promise<DuckdbQueryExecution<T>> {
   const bin = resolveDuckdbBin();
-  if (!bin) { return []; }
+  if (!bin) {
+    return {
+      rows: [],
+      error: "DuckDB binary is not available on this host.",
+    };
+  }
 
   const upperSql = sql.trimStart().toUpperCase();
   const allowed = ["SELECT", "WITH", "SHOW", "DESCRIBE", "EXPLAIN", "PRAGMA"];
   if (!allowed.some((kw) => upperSql.startsWith(kw))) {
-    return [];
+    return {
+      rows: [],
+      error: "Only read-only queries are allowed for external PostgreSQL scans.",
+    };
   }
 
   try {
-    const escapedConn = connectionString.replace(/'/g, "'\\''");
-    const escapedSql = sql.replace(/'/g, "'\\''");
-    const fullSql = `INSTALL postgres_scanner; LOAD postgres_scanner; ATTACH '${escapedConn}' AS ${alias} (TYPE postgres_scanner, READ_ONLY); ${escapedSql}`;
-    const { stdout } = await execAsync(`'${bin}' -json ':memory:' '${fullSql}'`, {
+    const escapedConn = connectionString.replace(/'/g, "''");
+    const fullSql = `INSTALL postgres_scanner; LOAD postgres_scanner; ATTACH '${escapedConn}' AS ${alias} (TYPE postgres_scanner, READ_ONLY); ${sql}`;
+    const { stdout } = await execFileAsync(bin, ["-json", ":memory:", fullSql], {
       encoding: "utf-8",
       timeout: 15_000,
       maxBuffer: 10 * 1024 * 1024,
-      shell: "/bin/sh",
     });
-
-    const trimmed = stdout.trim();
-    if (!trimmed || trimmed === "[]") { return []; }
-    return JSON.parse(trimmed) as T[];
-  } catch {
-    return [];
+    return {
+      rows: parseDuckdbJsonRows<T>(stdout),
+      error: null,
+    };
+  } catch (error) {
+    return {
+      rows: [],
+      error: extractDuckdbExecError(error),
+    };
   }
 }
 

@@ -23,6 +23,9 @@ vi.mock("node:child_process", () => ({
   exec: vi.fn((_cmd: string, _opts: unknown, cb: (err: Error | null, result: { stdout: string }) => void) => {
     cb(null, { stdout: "" });
   }),
+  execFile: vi.fn((_file: string, _args: string[], _opts: unknown, cb: (err: Error | null, result: { stdout: string }) => void) => {
+    cb(null, { stdout: "" });
+  }),
 }));
 
 // Mock node:os
@@ -83,6 +86,9 @@ describe("workspace utilities", () => {
       exec: vi.fn((_cmd: string, _opts: unknown, cb: (err: Error | null, result: { stdout: string }) => void) => {
         cb(null, { stdout: "" });
       }),
+      execFile: vi.fn((_file: string, _args: string[], _opts: unknown, cb: (err: Error | null, result: { stdout: string }) => void) => {
+        cb(null, { stdout: "" });
+      }),
     }));
     vi.mock("node:os", () => ({
       homedir: vi.fn(() => "/home/testuser"),
@@ -97,7 +103,7 @@ describe("workspace utilities", () => {
   async function importWorkspace() {
     const { existsSync: es, readFileSync: rfs, readdirSync: rds } = await import("node:fs");
     const { access: acc, readdir: rda } = await import("node:fs/promises");
-    const { execSync: exs } = await import("node:child_process");
+    const { execSync: exs, execFile: exf } = await import("node:child_process");
     const mod = await import("./workspace.js");
     return {
       ...mod,
@@ -107,6 +113,7 @@ describe("workspace utilities", () => {
       mockAccess: vi.mocked(acc),
       mockReaddirAsync: vi.mocked(rda),
       mockExec: vi.mocked(exs),
+      mockExecFile: vi.mocked(exf),
     };
   }
 
@@ -551,6 +558,61 @@ describe("workspace utilities", () => {
         return {} as never;
       });
       const result = await duckdbQueryAsync("BAD SQL");
+      expect(result).toEqual([]);
+    });
+  });
+
+  // ─── duckdbQueryExternalPgAsync ─────────────────────────────────
+
+  describe("duckdbQueryExternalPgAsync", () => {
+    it("returns parsed JSON rows from external postgres via execFile", async () => {
+      const { duckdbQueryExternalPgAsync, mockExists, mockExecFile } = await importWorkspace();
+      mockExists.mockImplementation((p) => String(p) === "/opt/homebrew/bin/duckdb");
+      mockExecFile.mockImplementation((_file: unknown, _args: unknown, _opts: unknown, cb: unknown) => {
+        (cb as (err: null, r: { stdout: string }) => void)(null, {
+          stdout: '[{"opportunity":"全家安-報修及派工系統","amount_million":2000000}]',
+        });
+        return {} as never;
+      });
+
+      const result = await duckdbQueryExternalPgAsync(
+        "dbname=default user=postgres password=postgres host=localhost port=5432",
+        `SELECT "name" AS opportunity, "amountAmountMicros"/1000000 AS amount_million FROM ycrm.workspace_3joxkr9ofo5hlxjan164egffx.opportunity WHERE "fuZeYeWuId" = '0642be24-4ed8-4f0b-af59-8100bdd127d5' AND "deletedAt" IS NULL`,
+        "ycrm",
+      );
+
+      expect(result).toEqual([
+        { opportunity: "全家安-報修及派工系統", amount_million: 2000000 },
+      ]);
+      expect(mockExecFile).toHaveBeenCalledWith(
+        "/opt/homebrew/bin/duckdb",
+        [
+          "-json",
+          ":memory:",
+          expect.stringContaining(`ATTACH 'dbname=default user=postgres password=postgres host=localhost port=5432' AS ycrm`),
+        ],
+        expect.objectContaining({
+          encoding: "utf-8",
+          timeout: 15_000,
+        }),
+        expect.any(Function),
+      );
+    });
+
+    it("returns empty array when external postgres execFile fails", async () => {
+      const { duckdbQueryExternalPgAsync, mockExists, mockExecFile } = await importWorkspace();
+      mockExists.mockImplementation((p) => String(p) === "/opt/homebrew/bin/duckdb");
+      mockExecFile.mockImplementation((_file: unknown, _args: unknown, _opts: unknown, cb: unknown) => {
+        (cb as (err: Error) => void)(new Error("query failed"));
+        return {} as never;
+      });
+
+      const result = await duckdbQueryExternalPgAsync(
+        "dbname=default user=postgres password=postgres host=localhost port=5432",
+        "SELECT * FROM ycrm.workspace_3joxkr9ofo5hlxjan164egffx.opportunity",
+        "ycrm",
+      );
+
       expect(result).toEqual([]);
     });
   });

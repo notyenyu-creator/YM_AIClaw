@@ -127,7 +127,9 @@ export function validateReportConfig(config: unknown): string | null {
     if (!p.id || typeof p.id !== "string") {return `Panel ${i}: missing id`;}
     if (!p.title || typeof p.title !== "string") {return `Panel ${i}: missing title`;}
     if (!p.type || typeof p.type !== "string") {return `Panel ${i}: missing type`;}
-    if (!p.sql || typeof p.sql !== "string") {return `Panel ${i}: missing sql`;}
+    const hasSql = typeof p.sql === "string" && p.sql.trim().length > 0;
+    const hasRows = Array.isArray(p.rows) || Array.isArray(p.data);
+    if (!hasSql && !hasRows) {return `Panel ${i}: missing sql or rows`;}
     if (!p.mapping || typeof p.mapping !== "object") {return `Panel ${i}: missing mapping`;}
   }
   return null;

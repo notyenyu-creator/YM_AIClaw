@@ -1,12 +1,26 @@
 import type { SessionPlannerPreflight } from "@/app/api/web-sessions/shared";
 import type { ErpPlannerPreflight } from "@/lib/erp-context-builder";
 import type { ErpLearningDraft } from "@/lib/erp-learning-draft";
+import type { EnmsPlannerPreflight } from "@/lib/enms-context-builder";
+import type { EnmsLearningDraft } from "@/lib/enms-learning-draft";
 import type { YcrmLearningDraft } from "@/lib/ycrm-learning-draft";
 
 export type PlannerPreflightSummary = SessionPlannerPreflight;
 export type ErpPlannerPreflightSummary = ErpPlannerPreflight;
+export type EnmsPlannerPreflightSummary = EnmsPlannerPreflight;
 export type PlannerLearningDraftSummary = Pick<YcrmLearningDraft, "writeback"> | null;
 export type ErpPlannerLearningDraftSummary = Pick<ErpLearningDraft, "writeback"> | null;
+export type EnmsPlannerLearningDraftSummary = Pick<EnmsLearningDraft, "writeback"> | null;
+
+type PlannerSystem = "ycrm" | "erp" | "enms";
+type AnyPlannerPreflight =
+	| PlannerPreflightSummary
+	| ErpPlannerPreflightSummary
+	| EnmsPlannerPreflightSummary;
+type AnyLearningDraftSummary =
+	| PlannerLearningDraftSummary
+	| ErpPlannerLearningDraftSummary
+	| EnmsPlannerLearningDraftSummary;
 
 function formatPlannerWorkspaceLabel(workspaceId: string | null | undefined): string | null {
 	if (!workspaceId) {
@@ -59,7 +73,7 @@ function PlannerStatusPill({
 }
 
 function buildPlannerTitle(
-	plannerPreflight: PlannerPreflightSummary | ErpPlannerPreflightSummary,
+	plannerPreflight: AnyPlannerPreflight,
 ): string {
 	const lines = [
 		`system: ${plannerPreflight.system}`,
@@ -77,7 +91,7 @@ function buildPlannerTitle(
 }
 
 function getLearningDraftStatusPill(
-	plannerLearningDraft: PlannerLearningDraftSummary | ErpPlannerLearningDraftSummary,
+	plannerLearningDraft: AnyLearningDraftSummary,
 ): { label: string; tone: "neutral" | "accent" | "warning" | "success" } | null {
 	const status = plannerLearningDraft?.writeback?.status;
 	if (status === "written") {
@@ -96,7 +110,7 @@ function getLearningDraftStatusPill(
 }
 
 function getLearningDraftNextAction(
-	plannerLearningDraft: PlannerLearningDraftSummary | ErpPlannerLearningDraftSummary,
+	plannerLearningDraft: AnyLearningDraftSummary,
 ): string | null {
 	const status = plannerLearningDraft?.writeback?.status;
 	if (status === "written") {
@@ -119,64 +133,95 @@ function getLearningDraftNextAction(
 export function PlannerPreflightHeader({
 	plannerPreflight,
 	erpPlannerPreflight = null,
+	enmsPlannerPreflight = null,
 	plannerLearningDraft = null,
 	erpPlannerLearningDraft = null,
+	enmsPlannerLearningDraft = null,
 	sessionId = null,
 }: {
 	plannerPreflight: PlannerPreflightSummary | null;
 	erpPlannerPreflight?: ErpPlannerPreflightSummary | null;
+	enmsPlannerPreflight?: EnmsPlannerPreflightSummary | null;
 	plannerLearningDraft?: PlannerLearningDraftSummary;
 	erpPlannerLearningDraft?: ErpPlannerLearningDraftSummary;
+	enmsPlannerLearningDraft?: EnmsPlannerLearningDraftSummary;
 	sessionId?: string | null;
 }) {
 	if (
 		!plannerPreflight
 		&& !erpPlannerPreflight
+		&& !enmsPlannerPreflight
 		&& !plannerLearningDraft
 		&& !erpPlannerLearningDraft
+		&& !enmsPlannerLearningDraft
 	) {
 		return null;
 	}
 
-	const effectivePlanner = erpPlannerPreflight?.shouldRouteToErp
-		? erpPlannerPreflight
-		: plannerPreflight;
+	const effectivePlanner = enmsPlannerPreflight?.shouldRouteToEnms
+		? enmsPlannerPreflight
+		: erpPlannerPreflight?.shouldRouteToErp
+			? erpPlannerPreflight
+			: plannerPreflight;
+	const effectiveSystem: PlannerSystem | null = effectivePlanner?.system ?? null;
 	const workspaceLabel = formatPlannerWorkspaceLabel(plannerPreflight?.workspaceId);
 	const warningCount = effectivePlanner?.warnings.length ?? 0;
 	const blockerCount = plannerPreflight?.blockers.length ?? 0;
 
-	// Pick which learning draft to surface: prefer the one whose pill is
-	// non-null and "louder" (warning > accent > success > neutral).
-	const ycrmPill = getLearningDraftStatusPill(plannerLearningDraft);
-	const erpPill = getLearningDraftStatusPill(erpPlannerLearningDraft);
 	const tonePriority = { warning: 3, accent: 2, success: 1, neutral: 0 } as const;
+	const draftCandidates = [
+		{ system: "ycrm" as const, draft: plannerLearningDraft, pill: getLearningDraftStatusPill(plannerLearningDraft) },
+		{ system: "erp" as const, draft: erpPlannerLearningDraft, pill: getLearningDraftStatusPill(erpPlannerLearningDraft) },
+		{ system: "enms" as const, draft: enmsPlannerLearningDraft, pill: getLearningDraftStatusPill(enmsPlannerLearningDraft) },
+	].filter(
+		(candidate): candidate is {
+			system: PlannerSystem;
+			draft: AnyLearningDraftSummary;
+			pill: { label: string; tone: "neutral" | "accent" | "warning" | "success" };
+		} => Boolean(candidate.pill),
+	);
 	const activeDraft: {
-		system: "ycrm" | "erp";
-		draft: PlannerLearningDraftSummary | ErpPlannerLearningDraftSummary;
+		system: PlannerSystem;
+		draft: AnyLearningDraftSummary;
 		pill: { label: string; tone: "neutral" | "accent" | "warning" | "success" };
-	} | null = ycrmPill && (!erpPill || tonePriority[ycrmPill.tone] >= tonePriority[erpPill.tone])
-		? { system: "ycrm", draft: plannerLearningDraft, pill: ycrmPill }
-		: erpPill
-			? { system: "erp", draft: erpPlannerLearningDraft, pill: erpPill }
-			: null;
+	} | null = draftCandidates.reduce<typeof activeDraft>((best, candidate) => {
+		if (!best) {
+			return candidate;
+		}
+		const bestPriority = tonePriority[best.pill.tone];
+		const nextPriority = tonePriority[candidate.pill.tone];
+		if (nextPriority > bestPriority) {
+			return candidate;
+		}
+		if (nextPriority === bestPriority && candidate.system === effectiveSystem) {
+			return candidate;
+		}
+		return best;
+	}, null);
 
 	const learningDraftStatus = activeDraft?.pill ?? null;
 	const learningDraftNextAction = activeDraft
-		? getLearningDraftNextAction(activeDraft.draft as PlannerLearningDraftSummary)
+		? getLearningDraftNextAction(activeDraft.draft)
 		: null;
 	const reviewerActor = activeDraft?.draft?.writeback?.reviewer_actor?.trim() || null;
-	const reviewSystem: "ycrm" | "erp" = activeDraft?.system
-		?? (erpPlannerPreflight?.shouldRouteToErp ? "erp" : "ycrm");
-	const reviewHref = sessionId
-		? activeDraft
-			? `/review/${activeDraft.system}?sessionId=${encodeURIComponent(sessionId)}`
+	const reviewSystem: PlannerSystem | null = activeDraft?.system
+		?? (enmsPlannerPreflight?.shouldRouteToEnms
+			? "enms"
 			: erpPlannerPreflight?.shouldRouteToErp
-				? `/review/erp?sessionId=${encodeURIComponent(sessionId)}`
-				: null
+				? "erp"
+				: plannerPreflight?.shouldRouteToYcrm
+					? "ycrm"
+					: null);
+	const reviewHref = sessionId
+		? reviewSystem
+			? `/review/${reviewSystem}?sessionId=${encodeURIComponent(sessionId)}`
+			: null
 		: null;
 	const reviewTitle = reviewSystem === "erp"
 		? "Open the formal ERP review workspace for this session"
-		: "Open the formal Y-CRM review workspace for this session";
+		: reviewSystem === "enms"
+			? "Open the formal EnMS review workspace for this session"
+			: "Open the formal Y-CRM review workspace for this session";
 
 	return (
 		<div aria-label="Planner preflight status" title={effectivePlanner ? buildPlannerTitle(effectivePlanner) : undefined}>
@@ -186,6 +231,9 @@ export function PlannerPreflightHeader({
 				)}
 				{erpPlannerPreflight?.shouldRouteToErp && (
 					<PlannerStatusPill label="ERP" tone="accent" />
+				)}
+				{enmsPlannerPreflight?.shouldRouteToEnms && (
+					<PlannerStatusPill label="EnMS" tone="accent" />
 				)}
 				{effectivePlanner ? (
 					<PlannerStatusPill

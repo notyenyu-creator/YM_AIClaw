@@ -56,6 +56,18 @@ function buildWiki(preflight: ErpPlannerPreflight): string[] {
 	if (preflight.intent === "shipping_status") {
 		pushUnique(pages, "wiki/operations/erp/ERP_SHIPMENT_TRACKING_TEMPLATE.md");
 	}
+	if (preflight.intent === "purchase_order") {
+		pushUnique(pages, "wiki/operations/erp/ERP_PURCHASE_ORDER_SUMMARY_TEMPLATE.md");
+	}
+	if (preflight.intent === "production_status") {
+		pushUnique(pages, "wiki/operations/erp/ERP_WORK_ORDER_SUMMARY_TEMPLATE.md");
+	}
+	if (preflight.intent === "service_ticket") {
+		pushUnique(pages, "wiki/operations/erp/ERP_SERVICE_TICKET_SUMMARY_TEMPLATE.md");
+	}
+	if (preflight.intent === "finance_doc") {
+		pushUnique(pages, "wiki/operations/erp/ERP_FINANCE_DOC_SUMMARY_TEMPLATE.md");
+	}
 
 	return pages;
 }
@@ -71,6 +83,24 @@ function buildPlaybooks(preflight: ErpPlannerPreflight): string[] {
 		pushUnique(
 			playbooks,
 			"wiki/playbooks/erp/ERP_ORDER_FULFILLMENT_PLAYBOOK_TEMPLATE.md",
+		);
+	}
+	if (preflight.intent === "inventory_status") {
+		pushUnique(
+			playbooks,
+			"wiki/playbooks/erp/ERP_INVENTORY_HEALTH_PLAYBOOK_TEMPLATE.md",
+		);
+	}
+	if (preflight.intent === "production_status") {
+		pushUnique(
+			playbooks,
+			"wiki/playbooks/erp/ERP_PRODUCTION_DIAGNOSIS_PLAYBOOK_TEMPLATE.md",
+		);
+	}
+	if (preflight.intent === "purchase_order") {
+		pushUnique(
+			playbooks,
+			"wiki/playbooks/erp/ERP_PROCUREMENT_REVIEW_PLAYBOOK_TEMPLATE.md",
 		);
 	}
 
@@ -142,6 +172,12 @@ function buildExecutionHints(
 		hints.push("Charts are optional support visuals. Finish the factual ERP summary first.");
 		hints.push(
 			`Only render charts if non-empty aggregated ERP data exists, and do not exceed ${presentation.max_chart_panels} panels.`,
+		);
+		hints.push(
+			"After you have verified non-empty aggregate rows, emit report-json using VALUES constants from the real ERP query result so the chart and text summary stay in sync.",
+		);
+		hints.push(
+			"Do not emit an ERP chart card when aggregate rows are empty, and do not point report-json panels at guessed table names or unresolved ERP SQL.",
 		);
 	}
 

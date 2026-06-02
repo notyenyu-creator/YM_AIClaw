@@ -8,7 +8,7 @@ import { Label } from "@/app/components/ui/label";
 
 // ─── Shared types ────────────────────────────────────────────────────────────
 
-type LearningSystem = "ycrm" | "erp";
+type LearningSystem = "ycrm" | "erp" | "enms";
 
 type WritebackStatus =
   | "not_written"
@@ -88,6 +88,7 @@ type SessionResponse = {
   id?: string;
   session?: {
     plannerLearningDraft?: LearningDraftSnapshot | null;
+    enmsPlannerLearningDraft?: LearningDraftSnapshot | null;
     erpPlannerLearningDraft?: LearningDraftSnapshot | null;
   };
 };
@@ -99,7 +100,10 @@ const SYSTEM_CONFIG: Record<
   {
     title: string;
     accentLabel: string;
-    draftKey: "plannerLearningDraft" | "erpPlannerLearningDraft";
+    draftKey:
+      | "plannerLearningDraft"
+      | "erpPlannerLearningDraft"
+      | "enmsPlannerLearningDraft";
     apiBase: string;
   }
 > = {
@@ -114,6 +118,12 @@ const SYSTEM_CONFIG: Record<
     accentLabel: "ERP",
     draftKey: "erpPlannerLearningDraft",
     apiBase: "/api/debug/erp-learning-draft",
+  },
+  enms: {
+    title: "EnMS Learning Draft Review",
+    accentLabel: "EnMS",
+    draftKey: "enmsPlannerLearningDraft",
+    apiBase: "/api/debug/enms-learning-draft",
   },
 };
 

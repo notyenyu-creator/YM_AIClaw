@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState, useTransition } from "react";
 import { usePathname, useSearchParams } from "next/navigation";
+import { LearningReviewWorkspace } from "@/app/components/learning-review-workspace";
 import { Button } from "@/app/components/ui/button";
 
 type ErpDebugDefaultsResponse = {
@@ -200,6 +201,7 @@ export default function ErpContextBuilderPage() {
   const subtitle = isReviewRoute
     ? "用正式 review 入口檢查 ERP planner metadata、context pack 與 session transcript。"
     : "檢查 ERP routing、Hermes-style context pack 與 session metadata 的最小工作台。";
+  const activeReviewSessionId = sessionSnapshot?.id ?? (isReviewRoute ? form.session_id.trim() : null);
 
   const quickPrompts = useMemo(
     () => [
@@ -410,6 +412,20 @@ export default function ErpContextBuilderPage() {
         title="Latest Session Messages"
         value={sessionSnapshot?.messages?.slice(-8) ?? { status: "not_loaded" }}
       />
+
+      {activeReviewSessionId ? (
+        <section className="rounded-2xl border p-5" style={{ borderColor: "var(--color-border)", background: "var(--color-surface)" }}>
+          <div className="mb-4">
+            <h2 className="text-lg font-semibold" style={{ color: "var(--color-text)" }}>
+              ERP Learning Review
+            </h2>
+            <p className="mt-1 text-sm leading-7" style={{ color: "var(--color-text-muted)" }}>
+              同一個 session 可以直接在這裡完成 learning draft writeback、promotion、force promote 與 keep current resolution。
+            </p>
+          </div>
+          <LearningReviewWorkspace system="erp" sessionId={activeReviewSessionId} />
+        </section>
+      ) : null}
     </main>
   );
 }

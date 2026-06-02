@@ -1,6 +1,16 @@
 import { randomUUID } from "node:crypto";
-import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, statSync } from "node:fs";
+import {
+  readFileSync,
+  writeFileSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  statSync,
+} from "node:fs";
 import { join } from "node:path";
+import type { EnmsPlannerPreflight } from "@/lib/enms-context-builder";
+import type { EnmsContextPack } from "@/lib/enms-context-pack";
+import type { EnmsLearningDraft } from "@/lib/enms-learning-draft";
 import type { ErpPlannerPreflight } from "@/lib/erp-context-builder";
 import type { ErpContextPack } from "@/lib/erp-context-pack";
 import type { ErpLearningDraft } from "@/lib/erp-learning-draft";
@@ -57,6 +67,12 @@ export type WebSessionMeta = {
   plannerContextPack?: YcrmContextPack;
   /** Latest learning draft generated from the persisted planner context and session transcript. */
   plannerLearningDraft?: YcrmLearningDraft;
+  /** Latest EnMS planner preflight captured before a chat run starts. */
+  enmsPlannerPreflight?: EnmsPlannerPreflight;
+  /** Latest EnMS planner context pack captured before a chat run starts. */
+  enmsPlannerContextPack?: EnmsContextPack;
+  /** Latest EnMS learning draft generated from the persisted planner context and session transcript. */
+  enmsPlannerLearningDraft?: EnmsLearningDraft;
   /** Latest ERP planner preflight captured before a chat run starts. */
   erpPlannerPreflight?: ErpPlannerPreflight;
   /** Latest ERP planner context pack captured before a chat run starts. */
@@ -96,7 +112,9 @@ export function readIndex(): WebSessionMeta[] {
     let dirty = false;
     for (const file of files) {
       const id = file.replace(/\.jsonl$/, "");
-      if (indexed.has(id)) {continue;}
+      if (indexed.has(id)) {
+        continue;
+      }
 
       const fp = join(dir, file);
       const stat = statSync(fp);
@@ -114,7 +132,9 @@ export function readIndex(): WebSessionMeta[] {
             break;
           }
         }
-      } catch { /* best-effort */ }
+      } catch {
+        /* best-effort */
+      }
 
       index.push({
         id,
@@ -130,7 +150,9 @@ export function readIndex(): WebSessionMeta[] {
       index.sort((a, b) => b.updatedAt - a.updatedAt);
       writeFileSync(indexFile, JSON.stringify(index, null, 2));
     }
-  } catch { /* best-effort */ }
+  } catch {
+    /* best-effort */
+  }
 
   return index;
 }
@@ -147,7 +169,10 @@ export function getSessionMeta(sessionId: string): WebSessionMeta | undefined {
 
 /** Resolve the effective agent ID for a session.
  *  Uses pinned metadata when available, falls back to workspace-global resolution. */
-export function resolveSessionAgentId(sessionId: string, fallbackAgentId: string): string {
+export function resolveSessionAgentId(
+  sessionId: string,
+  fallbackAgentId: string,
+): string {
   const meta = getSessionMeta(sessionId);
   return meta?.workspaceAgentId ?? fallbackAgentId;
 }
@@ -159,12 +184,20 @@ export function resolveGatewayThreadId(sessionId: string): string {
 }
 
 /** True when the gateway thread was rotated away from the web session id (fresh gateway context). */
-export function hasRotatedGatewayThread(meta: WebSessionMeta | undefined, webSessionId: string): boolean {
-  return typeof meta?.gatewaySessionId === "string" && meta.gatewaySessionId !== webSessionId;
+export function hasRotatedGatewayThread(
+  meta: WebSessionMeta | undefined,
+  webSessionId: string,
+): boolean {
+  return (
+    typeof meta?.gatewaySessionId === "string" &&
+    meta.gatewaySessionId !== webSessionId
+  );
 }
 
 /** Allocate a new gateway thread id and persist it (same web chat id and transcript path). */
-export function rotateGatewaySessionThreadForModelReset(webSessionId: string): void {
+export function rotateGatewaySessionThreadForModelReset(
+  webSessionId: string,
+): void {
   const sessions = readIndex();
   const session = sessions.find((s) => s.id === webSessionId);
   if (!session) {
@@ -179,7 +212,10 @@ export function rotateGatewaySessionThreadForModelReset(webSessionId: string): v
 }
 
 /** Resolve the gateway session key for a session. */
-export function resolveSessionKey(sessionId: string, fallbackAgentId: string): string {
+export function resolveSessionKey(
+  sessionId: string,
+  fallbackAgentId: string,
+): string {
   const meta = getSessionMeta(sessionId);
   const agentId = meta?.workspaceAgentId ?? fallbackAgentId;
   const threadId = meta?.gatewaySessionId ?? sessionId;
@@ -214,9 +250,24 @@ export function updateSessionErpPlannerPreflight(
   writeIndex(sessions);
 }
 
+export function updateSessionEnmsPlannerPreflight(
+  sessionId: string,
+  plannerPreflight: EnmsPlannerPreflight,
+): void {
+  const sessions = readIndex();
+  const session = sessions.find((entry) => entry.id === sessionId);
+  if (!session) {
+    return;
+  }
+  session.enmsPlannerPreflight = plannerPreflight;
+  session.updatedAt = Date.now();
+  writeIndex(sessions);
+}
+
 function isTerminalLearningDraftStatus(
   status:
     | YcrmLearningDraft["writeback"]["status"]
+    | EnmsLearningDraft["writeback"]["status"]
     | ErpLearningDraft["writeback"]["status"]
     | undefined,
 ): boolean {
@@ -245,13 +296,15 @@ export function invalidateSessionYcrmPlannerArtifacts(
   }
 
   const preserveReviewedLearningDraft =
-    options?.preserveReviewedLearningDraft === true
-    && isTerminalLearningDraftStatus(session.plannerLearningDraft?.writeback?.status);
+    options?.preserveReviewedLearningDraft === true &&
+    isTerminalLearningDraftStatus(
+      session.plannerLearningDraft?.writeback?.status,
+    );
 
   const hadPlannerArtifacts = Boolean(
-    session.plannerPreflight
-    || session.plannerContextPack
-    || (!preserveReviewedLearningDraft && session.plannerLearningDraft),
+    session.plannerPreflight ||
+    session.plannerContextPack ||
+    (!preserveReviewedLearningDraft && session.plannerLearningDraft),
   );
 
   if (!hadPlannerArtifacts) {
@@ -295,6 +348,20 @@ export function updateSessionErpPlannerContextPack(
   writeIndex(sessions);
 }
 
+export function updateSessionEnmsPlannerContextPack(
+  sessionId: string,
+  plannerContextPack: EnmsContextPack,
+): void {
+  const sessions = readIndex();
+  const session = sessions.find((entry) => entry.id === sessionId);
+  if (!session) {
+    return;
+  }
+  session.enmsPlannerContextPack = plannerContextPack;
+  session.updatedAt = Date.now();
+  writeIndex(sessions);
+}
+
 export function updateSessionPlannerLearningDraft(
   sessionId: string,
   plannerLearningDraft: YcrmLearningDraft,
@@ -323,6 +390,20 @@ export function updateSessionErpPlannerLearningDraft(
   writeIndex(sessions);
 }
 
+export function updateSessionEnmsPlannerLearningDraft(
+  sessionId: string,
+  enmsPlannerLearningDraft: EnmsLearningDraft,
+): void {
+  const sessions = readIndex();
+  const session = sessions.find((entry) => entry.id === sessionId);
+  if (!session) {
+    return;
+  }
+  session.enmsPlannerLearningDraft = enmsPlannerLearningDraft;
+  session.updatedAt = Date.now();
+  writeIndex(sessions);
+}
+
 export function invalidateSessionErpPlannerArtifacts(
   sessionId: string,
   options?: {
@@ -336,15 +417,15 @@ export function invalidateSessionErpPlannerArtifacts(
   }
 
   const preserveReviewedLearningDraft =
-    options?.preserveReviewedLearningDraft === true
-    && isTerminalLearningDraftStatus(
+    options?.preserveReviewedLearningDraft === true &&
+    isTerminalLearningDraftStatus(
       session.erpPlannerLearningDraft?.writeback?.status,
     );
 
   const hadPlannerArtifacts = Boolean(
-    session.erpPlannerPreflight
-    || session.erpPlannerContextPack
-    || (!preserveReviewedLearningDraft && session.erpPlannerLearningDraft),
+    session.erpPlannerPreflight ||
+    session.erpPlannerContextPack ||
+    (!preserveReviewedLearningDraft && session.erpPlannerLearningDraft),
   );
 
   if (!hadPlannerArtifacts) {
@@ -355,6 +436,43 @@ export function invalidateSessionErpPlannerArtifacts(
   delete session.erpPlannerContextPack;
   if (!preserveReviewedLearningDraft) {
     delete session.erpPlannerLearningDraft;
+  }
+  session.updatedAt = Date.now();
+  writeIndex(sessions);
+}
+
+export function invalidateSessionEnmsPlannerArtifacts(
+  sessionId: string,
+  options?: {
+    preserveReviewedLearningDraft?: boolean;
+  },
+): void {
+  const sessions = readIndex();
+  const session = sessions.find((entry) => entry.id === sessionId);
+  if (!session) {
+    return;
+  }
+
+  const preserveReviewedLearningDraft =
+    options?.preserveReviewedLearningDraft === true &&
+    isTerminalLearningDraftStatus(
+      session.enmsPlannerLearningDraft?.writeback?.status,
+    );
+
+  const hadPlannerArtifacts = Boolean(
+    session.enmsPlannerPreflight ||
+    session.enmsPlannerContextPack ||
+    (!preserveReviewedLearningDraft && session.enmsPlannerLearningDraft),
+  );
+
+  if (!hadPlannerArtifacts) {
+    return;
+  }
+
+  delete session.enmsPlannerPreflight;
+  delete session.enmsPlannerContextPack;
+  if (!preserveReviewedLearningDraft) {
+    delete session.enmsPlannerLearningDraft;
   }
   session.updatedAt = Date.now();
   writeIndex(sessions);

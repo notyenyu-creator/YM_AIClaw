@@ -14,6 +14,7 @@ vi.mock("@/lib/active-runs", () => ({
 // Mock workspace module
 vi.mock("@/lib/workspace", () => ({
   ensureManagedWorkspaceRouting: vi.fn(),
+  duckdbQueryExternalPgAsync: vi.fn(async () => []),
   getActiveWorkspaceName: vi.fn(() => "default"),
   resolveActiveAgentId: vi.fn(() => "main"),
   resolveAgentWorkspacePrefix: vi.fn(() => null),
@@ -29,10 +30,13 @@ vi.mock("@/lib/workspace", () => ({
 // Mock web-sessions shared module
 vi.mock("@/app/api/web-sessions/shared", () => ({
   getSessionMeta: vi.fn(() => undefined),
+  invalidateSessionEnmsPlannerArtifacts: vi.fn(),
   hasRotatedGatewayThread: vi.fn(() => false),
   invalidateSessionErpPlannerArtifacts: vi.fn(),
   invalidateSessionYcrmPlannerArtifacts: vi.fn(),
   rotateGatewaySessionThreadForModelReset: vi.fn(),
+  updateSessionEnmsPlannerContextPack: vi.fn(),
+  updateSessionEnmsPlannerPreflight: vi.fn(),
   updateSessionErpPlannerContextPack: vi.fn(),
   updateSessionErpPlannerPreflight: vi.fn(),
   updateSessionPlannerPreflight: vi.fn(),
@@ -65,6 +69,7 @@ describe("Chat API routes", () => {
     }));
     vi.mock("@/lib/workspace", () => ({
       ensureManagedWorkspaceRouting: vi.fn(),
+      duckdbQueryExternalPgAsync: vi.fn(async () => []),
       getActiveWorkspaceName: vi.fn(() => "default"),
       resolveActiveAgentId: vi.fn(() => "main"),
       resolveAgentWorkspacePrefix: vi.fn(() => null),
@@ -78,10 +83,13 @@ describe("Chat API routes", () => {
     }));
     vi.mock("@/app/api/web-sessions/shared", () => ({
       getSessionMeta: vi.fn(() => undefined),
+      invalidateSessionEnmsPlannerArtifacts: vi.fn(),
       hasRotatedGatewayThread: vi.fn(() => false),
       invalidateSessionErpPlannerArtifacts: vi.fn(),
       invalidateSessionYcrmPlannerArtifacts: vi.fn(),
       rotateGatewaySessionThreadForModelReset: vi.fn(),
+      updateSessionEnmsPlannerContextPack: vi.fn(),
+      updateSessionEnmsPlannerPreflight: vi.fn(),
       updateSessionErpPlannerContextPack: vi.fn(),
       updateSessionErpPlannerPreflight: vi.fn(),
       updateSessionPlannerPreflight: vi.fn(),
@@ -340,7 +348,10 @@ describe("Chat API routes", () => {
     it("maps partial tool output into AI SDK preliminary output chunks", async () => {
       const { hasActiveRun, subscribeToRun } = await import("@/lib/active-runs");
       vi.mocked(hasActiveRun).mockReturnValue(false);
-      vi.mocked(subscribeToRun).mockImplementation(((_sessionId, callback) => {
+      vi.mocked(subscribeToRun).mockImplementation(((
+        _sessionId: string,
+        callback: (event: unknown) => void,
+      ) => {
         callback({
           type: "tool-output-partial",
           toolCallId: "tool-1",
@@ -634,6 +645,41 @@ describe("Chat API routes", () => {
       expect(startRun).toHaveBeenCalledWith(
         expect.objectContaining({
           message: expect.stringContaining("runtime.orchestration=hermes_style"),
+        }),
+      );
+    });
+
+    it("adds a generic chart guardrail for chart-only requests that do not route to a domain pack", async () => {
+      const { startRun, hasActiveRun, subscribeToRun } = await import("@/lib/active-runs");
+      vi.mocked(hasActiveRun).mockReturnValue(false);
+      vi.mocked(subscribeToRun).mockReturnValue(() => {});
+
+      const { POST } = await import("./route.js");
+      const req = new Request("http://localhost/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          messages: [
+            {
+              id: "m1",
+              role: "user",
+              parts: [{ type: "text", text: "我只是想測試圖表產出，先給我一個簡單 chart 範例。" }],
+            },
+          ],
+          sessionId: "s-chart-only",
+        }),
+      });
+
+      await POST(req);
+
+      expect(startRun).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: expect.stringContaining("[Generic Chart Guardrail]"),
+        }),
+      );
+      expect(startRun).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: expect.stringContaining("either a valid sql string or inline rows/data"),
         }),
       );
     });

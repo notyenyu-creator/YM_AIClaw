@@ -382,6 +382,8 @@ GROUP BY item_id ORDER BY available_qty DESC LIMIT 10;
 3. 再決定是否畫圖
 4. 圖表最多維持少量 panel
 5. 若資料不足，改回純文字摘要
+6. 若要輸出 `report-json`，請先把真實查詢結果轉成 `VALUES` 常量，讓圖表與文字摘要使用同一份已驗證資料
+7. 不可把 `report-json` panel 指向猜測中的 ERP 表名；若 SQL 尚未確認或結果為空，就不要產生圖表
 
 ---
 

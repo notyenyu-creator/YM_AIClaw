@@ -1,4 +1,7 @@
-import { duckdbQueryAsync, duckdbQueryExternalPgAsync } from "@/lib/workspace";
+import {
+  duckdbQueryAsyncDetailed,
+  duckdbQueryExternalPgAsyncDetailed,
+} from "@/lib/workspace";
 import { buildFilterClauses, injectFilters, checkSqlSafety } from "@/lib/report-filters";
 import type { FilterEntry } from "@/lib/report-filters";
 import { trackServer } from "@/lib/telemetry";
@@ -8,9 +11,25 @@ export const runtime = "nodejs";
 
 const YCRM_PG_CONNECTION =
   "dbname=default user=postgres password=postgres host=localhost port=5432";
+const ERP_PG_CONNECTION =
+  "host=118.168.188.27 port=5433 dbname=ErpUAT_local user=erp_local password=erp_local";
+const ENMS_PG_CONNECTION =
+  "host=118.168.188.27 port=55433 dbname=EnMS user=sa password=ym@mes42769778 sslmode=disable";
 
-function shouldRunAgainstYcrmExternalPg(sql: string): boolean {
-  return /\bycrm\./i.test(sql);
+function resolveExternalPgTarget(sql: string): {
+  alias: "ycrm" | "erp" | "enms";
+  connectionString: string;
+} | null {
+  if (/\bycrm\./i.test(sql)) {
+    return { alias: "ycrm", connectionString: YCRM_PG_CONNECTION };
+  }
+  if (/\berp\./i.test(sql)) {
+    return { alias: "erp", connectionString: ERP_PG_CONNECTION };
+  }
+  if (/\benms\./i.test(sql)) {
+    return { alias: "enms", connectionString: ENMS_PG_CONNECTION };
+  }
+  return null;
 }
 
 /**
@@ -51,11 +70,19 @@ export async function POST(req: Request) {
   const finalSql = injectFilters(sql, filterClauses);
 
   try {
-		const rows = shouldRunAgainstYcrmExternalPg(finalSql)
-      ? await duckdbQueryExternalPgAsync(YCRM_PG_CONNECTION, finalSql, "ycrm")
-      : await duckdbQueryAsync(finalSql);
+    const externalTarget = resolveExternalPgTarget(finalSql);
+    const result = externalTarget
+      ? await duckdbQueryExternalPgAsyncDetailed(
+          externalTarget.connectionString,
+          finalSql,
+          externalTarget.alias,
+        )
+      : await duckdbQueryAsyncDetailed(finalSql);
+    if (result.error) {
+      return Response.json({ error: result.error, sql: finalSql }, { status: 500 });
+    }
     trackServer("report_executed");
-    return Response.json({ rows, sql: finalSql });
+    return Response.json({ rows: result.rows, sql: finalSql });
   } catch (err) {
     return Response.json(
       { error: err instanceof Error ? err.message : "Query execution failed" },

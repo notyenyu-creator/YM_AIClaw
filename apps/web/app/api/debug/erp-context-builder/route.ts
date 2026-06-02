@@ -34,7 +34,7 @@ export async function GET() {
     ok: true,
     builder: {
       id: "erp_context_builder",
-      scope: "erp_phase_1",
+      scope: "erp_runtime",
     },
     description: "Debug route for the ERP context builder prototype.",
     usage: {

@@ -104,6 +104,7 @@ vi.mock("node:fs", () => ({
 }));
 
 vi.mock("@/lib/workspace", () => ({
+	duckdbQueryExternalPgAsync: vi.fn(async () => []),
 	resolveActiveAgentId: vi.fn(() => "main"),
 	resolveAgentWorkspacePrefix: vi.fn(() => null),
 	resolveOpenClawStateDir: vi.fn(() => OPENCLAW_DIR),
@@ -390,5 +391,47 @@ describe("Chat session planner persistence integration", () => {
 		expect(sessionJson.session?.erpPlannerContextPack?.planner?.intent).toBe("sales_order");
 		expect(sessionJson.session?.erpPlannerContextPack?.read_first).toContain("skills/erp/SKILL.md");
 		expect(sessionJson.session?.plannerLearningDraft ?? null).toBeNull();
+	});
+
+	it("persists EnMS planner metadata when the request belongs to the energy domain", async () => {
+		seedSession("s-enms");
+
+		const { POST } = await import("./route.js");
+		const { GET } = await import("../web-sessions/[id]/route.js");
+
+		await POST(new Request("http://localhost/api/chat", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				sessionId: "s-enms",
+				messages: [
+					{
+						id: "m1",
+						role: "user",
+						parts: [
+							{
+								type: "text",
+								text: "請分析這週各場域的最大需量、功因異常和可能的超約風險。",
+							},
+						],
+					},
+				],
+			}),
+		}));
+
+		const sessionResponse = await GET(
+			new Request("http://localhost/api/web-sessions/s-enms"),
+			{ params: Promise.resolve({ id: "s-enms" }) },
+		);
+		const sessionJson = await sessionResponse.json();
+
+		expect(sessionJson.session?.plannerPreflight?.shouldRouteToYcrm ?? false).toBe(false);
+		expect(sessionJson.session?.erpPlannerPreflight ?? null).toBeNull();
+		expect(sessionJson.session?.enmsPlannerPreflight?.system).toBe("enms");
+		expect(sessionJson.session?.enmsPlannerPreflight?.intent).toBe("demand_forecast");
+		expect(sessionJson.session?.enmsPlannerPreflight?.shouldRouteToEnms).toBe(true);
+		expect(sessionJson.session?.enmsPlannerContextPack?.planner?.intent).toBe("demand_forecast");
+		expect(sessionJson.session?.enmsPlannerContextPack?.read_first).toContain("skills/enms/SKILL.md");
+		expect(sessionJson.session?.enmsPlannerContextPack?.live_query_steps).toContain("join_power_account_scope");
 	});
 });

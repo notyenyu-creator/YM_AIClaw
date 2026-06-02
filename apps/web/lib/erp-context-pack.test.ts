@@ -34,6 +34,19 @@ describe("buildErpContextPack", () => {
 			"chart_optional_if_non_empty_aggregates_available",
 		);
 		expect(pack.presentation.max_chart_panels).toBe(2);
+		expect(pack.execution_hints.join(" ")).toContain("emit report-json using VALUES constants");
+	});
+
+	it("maps purchase-order sessions to procurement templates", () => {
+		const preflight = buildErpContext({
+			request: { user_message: "請幫我看這張採購單與供應商交期風險。" },
+		});
+
+		const pack = buildErpContextPack(preflight);
+
+		expect(pack.planner.intent).toBe("purchase_order");
+		expect(pack.wiki).toContain("wiki/operations/erp/ERP_PURCHASE_ORDER_SUMMARY_TEMPLATE.md");
+		expect(pack.playbooks).toContain("wiki/playbooks/erp/ERP_PROCUREMENT_REVIEW_PLAYBOOK_TEMPLATE.md");
 	});
 });
 
