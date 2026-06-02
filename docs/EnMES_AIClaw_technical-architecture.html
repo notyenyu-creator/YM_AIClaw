@@ -1,0 +1,1284 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>EnClaw 技術架構深度介紹</title>
+    <style>
+      :root {
+        --bg: #f3f7f7;
+        --surface: rgba(255, 255, 255, 0.92);
+        --surface-strong: #ffffff;
+        --text: #102330;
+        --text-soft: #566777;
+        --line: rgba(16, 35, 48, 0.1);
+        --teal: #0f766e;
+        --blue: #145da0;
+        --green: #1f7a52;
+        --amber: #d97706;
+        --shadow: 0 22px 60px rgba(10, 24, 34, 0.08);
+        --max: 1248px;
+      }
+
+      * { box-sizing: border-box; }
+
+      body {
+        margin: 0;
+        font-family: "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", sans-serif;
+        color: var(--text);
+        line-height: 1.72;
+        background:
+          radial-gradient(circle at top left, rgba(15, 118, 110, 0.12), transparent 26rem),
+          radial-gradient(circle at top right, rgba(20, 93, 160, 0.08), transparent 30rem),
+          linear-gradient(180deg, #fbfcfc 0%, var(--bg) 100%);
+      }
+
+      .shell {
+        max-width: var(--max);
+        margin: 0 auto;
+        padding: 28px 20px 72px;
+      }
+
+      .hero, .section {
+        border: 1px solid var(--line);
+        border-radius: 30px;
+        padding: 30px;
+        background: var(--surface);
+        box-shadow: var(--shadow);
+        overflow: hidden;
+      }
+
+      .hero {
+        color: #ebf5f7;
+        background:
+          radial-gradient(circle at 90% 0%, rgba(133, 244, 209, 0.18), transparent 20rem),
+          linear-gradient(135deg, #072130 0%, #0d4255 54%, #145da0 100%);
+      }
+
+      .eyebrow, .chip, .kicker {
+        display: inline-flex;
+        align-items: center;
+        border-radius: 999px;
+        padding: 8px 14px;
+        font-size: 12px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        font-weight: 700;
+      }
+
+      .eyebrow {
+        border: 1px solid rgba(255,255,255,0.16);
+        background: rgba(255,255,255,0.08);
+      }
+
+      .chip {
+        background: rgba(20, 93, 160, 0.1);
+        color: var(--blue);
+      }
+
+      .kicker {
+        margin-bottom: 12px;
+        background: rgba(15, 118, 110, 0.1);
+        color: var(--teal);
+      }
+
+      .status-tag {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 999px;
+        padding: 7px 12px;
+        font-size: 11px;
+        letter-spacing: 0.04em;
+        line-height: 1;
+        white-space: nowrap;
+        text-transform: uppercase;
+        font-weight: 800;
+        min-width: 72px;
+      }
+
+      .status-live {
+        background: rgba(31, 122, 82, 0.12);
+        color: var(--green);
+      }
+
+      .status-extend {
+        background: rgba(217, 119, 6, 0.12);
+        color: var(--amber);
+      }
+
+      .status-iterate {
+        background: rgba(20, 93, 160, 0.1);
+        color: var(--blue);
+      }
+
+      h1, h2, h3 {
+        margin: 0 0 12px;
+        font-family: "Noto Serif TC", "PMingLiU", serif;
+        letter-spacing: -0.03em;
+      }
+
+      h1 { font-size: clamp(34px, 5vw, 60px); line-height: 1.04; margin-top: 16px; }
+      h2 { font-size: clamp(28px, 3vw, 40px); line-height: 1.08; }
+      h3 { font-size: 22px; line-height: 1.14; }
+
+      p { margin: 0; color: var(--text-soft); font-size: 15px; }
+      .hero p { color: rgba(235,245,247,0.9); }
+
+      p,
+      li,
+      td,
+      th,
+      .note,
+      .diagram-caption {
+        overflow-wrap: anywhere;
+        word-break: normal;
+      }
+
+      .hero-grid {
+        display: grid;
+        grid-template-columns: minmax(0, 1.18fr) minmax(300px, 0.82fr);
+        gap: 24px;
+        align-items: end;
+      }
+
+      .hero-copy p {
+        max-width: 760px;
+        font-size: 17px;
+      }
+
+      .hero-rail {
+        display: grid;
+        gap: 14px;
+      }
+
+      .hero-metric {
+        border: 1px solid rgba(255,255,255,0.14);
+        border-radius: 22px;
+        padding: 16px 18px;
+        background: rgba(255,255,255,0.08);
+        backdrop-filter: blur(10px);
+      }
+
+      .hero-metric strong {
+        display: block;
+        margin-bottom: 6px;
+        font-size: 14px;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+      }
+
+      .hero-metric p {
+        color: rgba(235,245,247,0.9);
+        font-size: 14px;
+      }
+
+      .hero-actions {
+        display: flex;
+        margin-top: 22px;
+      }
+
+      .github-link {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 46px;
+        height: 46px;
+        border-radius: 999px;
+        border: 1px solid rgba(255,255,255,0.18);
+        background: rgba(255,255,255,0.08);
+        color: #f8fbfc;
+        box-shadow: inset 0 1px 0 rgba(255,255,255,0.08);
+        transition: transform 160ms ease, background 160ms ease, border-color 160ms ease;
+      }
+
+      .github-link:hover {
+        transform: translateY(-1px);
+        background: rgba(255,255,255,0.14);
+        border-color: rgba(255,255,255,0.28);
+      }
+
+      .github-link svg {
+        width: 22px;
+        height: 22px;
+        fill: currentColor;
+      }
+
+      .section { margin-top: 20px; }
+
+      .section-intro {
+        max-width: 860px;
+        margin: 0 0 18px;
+        font-size: 15px;
+      }
+
+      .diagram-board {
+        margin-top: 18px;
+        border: 1px solid var(--line);
+        border-radius: 26px;
+        padding: 20px;
+        background:
+          radial-gradient(circle at top right, rgba(20, 93, 160, 0.08), transparent 18rem),
+          linear-gradient(180deg, #fbfefe 0%, #f4f8f8 100%);
+      }
+
+      .diagram-row {
+        display: grid;
+        gap: 14px;
+      }
+
+      .diagram-row + .diagram-row {
+        margin-top: 14px;
+      }
+
+      .diagram-row.cols-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+      .diagram-row.cols-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .diagram-row.cols-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+
+      .diagram-arrow {
+        display: grid;
+        place-items: center;
+        font-size: 24px;
+        color: var(--blue);
+        line-height: 1;
+        margin: 4px 0;
+      }
+
+      .diagram-box {
+        min-height: 116px;
+        border: 1px solid var(--line);
+        border-radius: 22px;
+        padding: 16px;
+        background: rgba(255, 255, 255, 0.9);
+      }
+
+      .diagram-box strong {
+        display: block;
+        margin-bottom: 8px;
+        font-size: 15px;
+      }
+
+      .diagram-box p {
+        font-size: 14px;
+      }
+
+      .diagram-box.accent {
+        background: linear-gradient(135deg, rgba(15, 118, 110, 0.12) 0%, rgba(20, 93, 160, 0.1) 100%);
+      }
+
+      .diagram-box.runtime {
+        background: linear-gradient(135deg, rgba(20, 93, 160, 0.1) 0%, rgba(255, 255, 255, 0.96) 100%);
+      }
+
+      .diagram-box.data {
+        background: linear-gradient(135deg, rgba(31, 122, 82, 0.1) 0%, rgba(255, 255, 255, 0.96) 100%);
+      }
+
+      .diagram-caption {
+        margin-top: 14px;
+        font-size: 14px;
+      }
+
+      .grid-4, .grid-3, .grid-2 {
+        display: grid;
+        gap: 16px;
+      }
+
+      .value-strip {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 14px;
+        margin: 18px 0 0;
+      }
+
+      .value-card {
+        border: 1px solid var(--line);
+        border-radius: 20px;
+        padding: 16px 18px;
+        background: linear-gradient(180deg, rgba(255,255,255,0.98) 0%, rgba(244,248,248,0.96) 100%);
+      }
+
+      .value-card strong {
+        display: block;
+        margin-bottom: 8px;
+        font-size: 15px;
+      }
+
+      .grid-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+      .grid-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .grid-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+
+      .card {
+        border: 1px solid var(--line);
+        border-radius: 22px;
+        padding: 18px;
+        background: var(--surface-strong);
+      }
+
+      .card--core {
+        border-color: rgba(15, 118, 110, 0.22);
+        box-shadow: inset 0 0 0 1px rgba(15, 118, 110, 0.08);
+      }
+
+      .layer-meta {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        align-items: center;
+        margin-bottom: 12px;
+      }
+
+      .layer-tag {
+        display: inline-flex;
+        align-items: center;
+        border-radius: 999px;
+        padding: 7px 12px;
+        font-size: 11px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        font-weight: 800;
+      }
+
+      .layer-tag.base {
+        background: rgba(20, 93, 160, 0.1);
+        color: var(--blue);
+      }
+
+      .layer-tag.core {
+        background: rgba(15, 118, 110, 0.12);
+        color: var(--teal);
+      }
+
+      .sequence {
+        counter-reset: runtime-step;
+        display: grid;
+        gap: 12px;
+      }
+
+      .step {
+        position: relative;
+        border: 1px solid var(--line);
+        border-radius: 20px;
+        padding: 18px 18px 18px 64px;
+        background: #fff;
+      }
+
+      .step::before {
+        counter-increment: runtime-step;
+        content: counter(runtime-step);
+        position: absolute;
+        left: 18px;
+        top: 18px;
+        width: 32px;
+        height: 32px;
+        border-radius: 50%;
+        display: grid;
+        place-items: center;
+        font-weight: 800;
+        color: #fff;
+        background: linear-gradient(135deg, #0f766e 0%, #145da0 100%);
+      }
+
+      table {
+        width: 100%;
+        min-width: 920px;
+        border-collapse: collapse;
+        font-size: 14px;
+      }
+
+      .feature-status-table,
+      .architecture-table {
+        min-width: 980px;
+      }
+
+      .feature-status-table th:last-child,
+      .feature-status-table td:last-child {
+        width: 124px;
+        min-width: 124px;
+        white-space: nowrap;
+      }
+
+      .architecture-table th:nth-child(1),
+      .architecture-table td:nth-child(1) {
+        width: 90px;
+        min-width: 90px;
+        white-space: nowrap;
+      }
+
+      .architecture-table th:nth-child(4),
+      .architecture-table td:nth-child(4) {
+        width: 120px;
+        min-width: 120px;
+        white-space: nowrap;
+      }
+
+      th, td {
+        border: 1px solid var(--line);
+        padding: 14px 13px;
+        text-align: left;
+        vertical-align: top;
+      }
+
+      th {
+        background: #eef5f7;
+        font-size: 12px;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+      }
+
+      tbody tr:nth-child(even) {
+        background: rgba(244, 248, 248, 0.72);
+      }
+
+      code {
+        font-family: "SFMono-Regular", "JetBrains Mono", Consolas, monospace;
+        font-size: 12px;
+        color: var(--blue);
+        overflow-wrap: anywhere;
+        word-break: break-word;
+      }
+
+      ul {
+        margin: 10px 0 0;
+        padding-left: 18px;
+        color: var(--text-soft);
+      }
+
+      .note {
+        margin-top: 16px;
+        border-left: 4px solid var(--amber);
+        border-radius: 0 16px 16px 0;
+        padding: 14px 16px;
+        background: rgba(217, 119, 6, 0.08);
+        color: var(--text-soft);
+      }
+
+      @media (max-width: 980px) {
+        .hero-grid,
+        .value-strip,
+        .diagram-row.cols-4,
+        .diagram-row.cols-3,
+        .diagram-row.cols-2,
+        .grid-4, .grid-3, .grid-2 { grid-template-columns: 1fr; }
+
+        .shell {
+          padding: 20px 14px 56px;
+        }
+
+        .hero, .section {
+          padding: 22px;
+          border-radius: 24px;
+        }
+
+        h2 {
+          line-height: 1.12;
+        }
+
+        table {
+          display: block;
+          overflow-x: auto;
+          -webkit-overflow-scrolling: touch;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="shell">
+      <header class="hero">
+        <div class="hero-grid">
+          <div class="hero-copy">
+            <span class="eyebrow">EnClaw / 技術架構深度介紹 / 中文技術版</span>
+            <h1>核心價值在於可持續運作的企業 AI 執行框架。</h1>
+            <p>
+              EnClaw 的技術主體由 Gateway 執行層、問題判斷與 Context 組裝、分析引擎、
+              <strong>Karpathy-style AI Wiki 知識層</strong> 與 Review 流程構成。核心價值不在單一模型品牌，
+              而在讓 AI 能以 <strong>可審核、可追溯、可擴充</strong> 的方式進入真實業務流程。
+            </p>
+            <div class="hero-actions">
+              <a
+                class="github-link"
+                href="https://github.com/notyenyu-creator/YM_AIClaw"
+                target="_blank"
+                rel="noreferrer"
+                aria-label="GitHub"
+                title="GitHub"
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M12 .5C5.65.5.5 5.65.5 12A11.5 11.5 0 0 0 8.36 22.1c.58.11.79-.25.79-.56v-2.02c-3.18.69-3.85-1.35-3.85-1.35-.52-1.31-1.26-1.66-1.26-1.66-1.03-.7.08-.69.08-.69 1.13.08 1.72 1.16 1.72 1.16 1.01 1.72 2.64 1.23 3.28.94.1-.73.39-1.23.71-1.52-2.54-.29-5.21-1.27-5.21-5.65 0-1.25.45-2.28 1.17-3.08-.12-.29-.51-1.47.11-3.07 0 0 .96-.31 3.14 1.18a10.9 10.9 0 0 1 5.72 0c2.18-1.49 3.14-1.18 3.14-1.18.62 1.6.23 2.78.11 3.07.73.8 1.17 1.83 1.17 3.08 0 4.39-2.67 5.36-5.22 5.65.4.35.76 1.04.76 2.11v3.13c0 .31.21.68.8.56A11.5 11.5 0 0 0 23.5 12C23.5 5.65 18.35.5 12 .5Z" />
+                </svg>
+              </a>
+            </div>
+          </div>
+          <div class="hero-rail">
+            <article class="hero-metric">
+              <strong>主線架構</strong>
+              <p>Cloud API 模型、OpenClaw Gateway、Hermes-style Planner、AI Wiki 知識層與 Review 流程。</p>
+            </article>
+            <article class="hero-metric">
+              <strong>核心價值</strong>
+              <p>差異化能力集中在資料判斷、分析引擎與知識治理，而不是單一模型供應商。</p>
+            </article>
+            <article class="hero-metric">
+              <strong>對外定位</strong>
+              <p>目前定位為 AI decision layer，並保留往半自動閉環控制與更高自動化延伸的技術路徑。</p>
+            </article>
+            <article class="hero-metric">
+              <strong>內容原則</strong>
+              <p>本頁僅陳述已落地能力、已驗證的交付邊界，以及具明確技術主線的後續演進方向；未驗證方向不視為現況能力。</p>
+            </article>
+          </div>
+        </div>
+      </header>
+
+      <section class="section">
+        <h2>執行架構總覽</h2>
+        <p>
+          目前版本的主線是 <strong>Cloud API 模型 + OpenClaw Gateway Runtime + Hermes-style Planner +
+          Karpathy-style AI Wiki 知識層 + Reviewable Knowledge Loop</strong>。模型層可替換，但資料判斷、
+          分析流程與知識治理維持一致的執行 contract。
+        </p>
+        <div class="diagram-board">
+          <div class="diagram-row cols-4">
+            <article class="diagram-box accent">
+              <strong>互動與驗證入口</strong>
+              <p>EnMS / Web UI、Chat Panel、Workspace、Review Queue 與 Debug Pages，承接日常使用與驗證流程。</p>
+            </article>
+            <article class="diagram-box accent">
+              <strong>Gateway 執行層</strong>
+              <p><code>/api/chat</code>、web sessions、active runs、stream transport 與 session metadata persist。</p>
+            </article>
+            <article class="diagram-box accent">
+              <strong>模型層</strong>
+              <p>目前主線為 Dench Cloud Gateway API，承接 Claude / GPT 類模型，不把產品價值綁死在單一模型品牌。</p>
+            </article>
+            <article class="diagram-box accent">
+              <strong>資料來源</strong>
+              <p>EnMS PostgreSQL / TimescaleDB、ERP DB、Y-CRM workspace schema，仍然是最終資料依據。</p>
+            </article>
+          </div>
+          <div class="diagram-arrow">↓</div>
+          <div class="diagram-row cols-4">
+            <article class="diagram-box runtime">
+              <strong>問題判斷</strong>
+              <p>判定問題類型、資料域別、風險訊號、圖表可用性，以及是否需要 review。</p>
+            </article>
+            <article class="diagram-box runtime">
+              <strong>資料檢查</strong>
+              <p>檢查 schema、availability、joins 與 gaps，並將缺資料資訊納入回覆邊界，形成可追溯的回答約束。</p>
+            </article>
+            <article class="diagram-box runtime">
+              <strong>Context 組裝</strong>
+              <p>組裝 skill、wiki、schema、playbook、execution hints 與圖表規則，收斂成最小可用 context。</p>
+            </article>
+            <article class="diagram-box runtime">
+              <strong>分析引擎</strong>
+              <p>EnMS 目前已有 demand forecast、anomaly detection 與 alert governance，不只依賴模型即時生成。</p>
+            </article>
+          </div>
+          <div class="diagram-arrow">↓</div>
+          <div class="diagram-row cols-3">
+            <article class="diagram-box data">
+              <strong>查詢與整合層</strong>
+              <p>Y-CRM、ERP、EnMS 各自有 context builder、query routing、可執行 SQL 路徑與資料關聯規則。</p>
+            </article>
+            <article class="diagram-box data">
+              <strong>圖表與報表輸出</strong>
+              <p>報表同時支援可執行 SQL、VALUES-based SQL 與 inline rows/data；正式分析與前端渲染驗證共用同一套輸出契約。</p>
+            </article>
+            <article class="diagram-box data">
+              <strong>AI Wiki / Review</strong>
+              <p>以 Karpathy-style AI Wiki 知識層承接 draft → review → writeback → promotion，把高價值案例沉澱進 wiki / schema / playbook。</p>
+            </article>
+          </div>
+        </div>
+        <p class="diagram-caption">
+          這張圖對應的主程式證據可從 <code>apps/web/app/api/chat/route.ts</code>、
+          <code>apps/web/lib/domain-bootstrap.ts</code>、
+          <code>apps/web/lib/enms-*.ts</code>、
+          <code>apps/web/app/api/workspace/reports/execute/route.ts</code>、
+          <code>wiki/</code>、<code>schema/</code> 與
+          <code>apps/web/lib/*-learning-*.ts</code> 直接對照。
+        </p>
+      </section>
+
+      <section class="section">
+        <h2>四項核心技術價值</h2>
+        <div class="grid-4">
+          <article class="card">
+            <span class="chip">資料主權 / Source-of-Truth Routing</span>
+            <p>系統先判定資料來源、可信表與合理關聯，再開始回答，避免在資料不完整時產生錯誤推論。</p>
+          </article>
+          <article class="card">
+            <span class="chip">治理型執行框架 / Governed Runtime</span>
+            <p>AI 回答會經過 session、planner、context、review 與 promotion，整個流程可被追蹤、審核與回放。</p>
+          </article>
+          <article class="card">
+            <span class="chip">可解釋分析引擎 / Explainable Analytics</span>
+            <p>Forecast、anomaly 與 alert 先由程式化分析模組建立基線與訊號，再交由 AI 組織說明與建議。</p>
+          </article>
+          <article class="card">
+            <span class="chip">可嵌入式 AI 層 / Deployable AI Layer</span>
+            <p>EnClaw 可疊加在既有 EnMS 之上，不必先重做主平台；長期資產在執行框架，而不是單一模型。</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="section">
+        <h2>架構設計原則與非功能要求</h2>
+        <p class="section-intro">
+          高階技術架構文件不只描述功能流程，也必須明確交代安全性、可觀測性、可靠性、效能與可擴充性。以下原則對應 EnClaw 目前的實作方向。
+        </p>
+        <table>
+          <thead>
+            <tr>
+              <th>維度</th>
+              <th>設計原則</th>
+              <th>在 EnClaw 的落點</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>Security / Governance</strong></td>
+              <td>模型呼叫、資料查詢、知識寫回與控制延伸，都需要有清楚的權限與治理邊界。</td>
+              <td>以 session、review、promotion、缺資料治理與 human-approved control path 作為治理邊界，不把高風險動作直接自動化。</td>
+            </tr>
+            <tr>
+              <td><strong>Observability</strong></td>
+              <td>每一段流程都應可追蹤、可檢查、可回放，避免 AI 成為不可觀測的黑盒。</td>
+              <td>透過 planner artifacts、bootstrap snapshot、report runtime、review queue 與 wiki promotion 保留完整中間產物。</td>
+            </tr>
+            <tr>
+              <td><strong>Reliability</strong></td>
+              <td>資料不足、模型供應異常、圖表查詢失敗時，系統應能降級而非直接失效。</td>
+              <td>缺資料時明確回覆資料缺口；圖表可在可執行 SQL、VALUES-based SQL 與 inline rows/data 間降級切換；控制延伸目前維持 human-approved 邊界。</td>
+            </tr>
+            <tr>
+              <td><strong>Performance / Cost</strong></td>
+              <td>昂貴的模型推理不應取代可程式化的資料判斷與分析邏輯。</td>
+              <td>由 summary layer、forecast engine、anomaly engine 與 alert governance 先行產生訊號，再交由模型組織說明與建議。</td>
+            </tr>
+            <tr>
+              <td><strong>Extensibility</strong></td>
+              <td>模型、資料源、控制介面與知識規則都應能逐步替換或擴充，而不必重做整體架構。</td>
+              <td>模型層可替換；若既有 EnMS / 現場 gateway 已打通對應 protocol 與 adapter，EnClaw 可沿用該接入條件持續擴充。</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section class="section">
+        <h2>資料管線：從接入到可分析資料</h2>
+        <p class="section-intro">
+          本段聚焦於 EnMS 資料如何自現場接入、完成分層與語意補齊，最終形成可供 AI 分析與治理使用的資料基礎。
+        </p>
+        <div class="sequence">
+          <article class="step">
+            <h3>1. 現場資料接入</h3>
+            <p>既有 EnMS 透過 MQTT、PLC 或其他已打通的 protocol adapter 接收監測裝置資料，形成原始訊息與時序資料來源。</p>
+          </article>
+          <article class="step">
+            <h3>2. 原始資料落地與標準化</h3>
+            <p>原始訊息會進入 <code>mqtt_raw_messages</code> 與 <code>mqtt_raw_data</code> 等資料層，完成欄位展平、時間序列標準化與設備訊號整理。</p>
+          </article>
+          <article class="step">
+            <h3>3. 摘要層建立分析基線</h3>
+            <p>系統透過 <code>DeviceDataSummaryView</code> 建立 15 分鐘摘要層，作為需量預警、趨勢分析、KPI 比較與圖表輸出的主要基礎。</p>
+          </article>
+          <article class="step">
+            <h3>4. 主資料補齊語意</h3>
+            <p>再將摘要層與原始層對回 <code>ElectricityMeter</code>、<code>PowerAccounts</code>、<code>sites</code>、<code>site_gateways</code>、<code>ComCompany</code> 等主資料，補齊設備、場域、契約與公司語意。</p>
+          </article>
+          <article class="step">
+            <h3>5. 形成可分析資料基礎</h3>
+            <p>到這一步，EnMS 已具備原始時序層、摘要分析層與主資料層，可供後續預警、告警、趨勢分析與圖表輸出使用。</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="section">
+        <h2>當使用者詢問預警 / 告警時的完整流程</h2>
+        <p class="section-intro">
+          以下流程描述的是一個典型情境：當資料已進入 EnMS，而使用者詢問「這個場域有沒有需量預警」或「目前有哪些告警需要處理」時，系統如何從資料表 / View 一路走到可執行的輸出。
+        </p>
+        <div class="diagram-board">
+          <div class="diagram-row cols-4">
+            <article class="diagram-box data">
+              <strong>分析資料分層</strong>
+              <p>原始時序層：<code>mqtt_raw_data</code>、<code>mqtt_raw_messages</code>；摘要分析層：<code>DeviceDataSummaryView</code>；主資料與治理層：<code>ElectricityMeter</code>、<code>PowerAccounts</code>、<code>sites</code>、<code>site_gateways</code>、<code>ComCompany</code>、<code>DemandAlertHistory</code>。</p>
+            </article>
+            <article class="diagram-box runtime">
+              <strong>問題判斷</strong>
+              <p>Planner 判定這是 <code>demand_forecast</code> 或 <code>alert_governance</code> 類型問題。</p>
+            </article>
+            <article class="diagram-box runtime">
+              <strong>資料檢查</strong>
+              <p>Bootstrap 檢查表、欄位、join、契約容量與告警歷史是否可用。</p>
+            </article>
+            <article class="diagram-box runtime">
+              <strong>Context 組裝</strong>
+              <p>將主資料語意、分析規則、圖表限制與回覆邊界組裝進 context。</p>
+            </article>
+          </div>
+          <div class="diagram-arrow">↓</div>
+          <div class="diagram-row cols-3">
+            <article class="diagram-box runtime">
+              <strong>Forecast Engine</strong>
+              <p>以摘要層建立 baseline、recent trend 與 contract-capacity risk，生成 projected peak 與風險等級。</p>
+            </article>
+            <article class="diagram-box runtime">
+              <strong>Anomaly / Alert Engine</strong>
+              <p>整合 anomaly 訊號、設備狀態與既有規則，產生 <code>prewarning / alert</code>、owner 與 escalation window。</p>
+            </article>
+            <article class="diagram-box data">
+              <strong>輸出層</strong>
+              <p>回答可帶摘要、圖表、風險分級與建議動作；必要時再進入 review 與知識沉澱。</p>
+            </article>
+          </div>
+        </div>
+        <div class="sequence" style="margin-top: 18px;">
+          <article class="step">
+            <h3>1. 使用者提出預警或告警問題</h3>
+            <p>例如詢問「大溪廠未來 24 小時是否有超約風險」或「目前有哪些告警需要優先處理」。</p>
+          </article>
+          <article class="step">
+            <h3>2. Chat Route 建立 session 與執行上下文</h3>
+            <p>訊息先進入 <code>/api/chat</code>，並與當前 session、planner artifacts 與 review 狀態綁定。</p>
+          </article>
+          <article class="step">
+            <h3>3. Planner 判定問題屬於預警或告警治理</h3>
+            <p><code>apps/web/lib/enms-context-builder.ts</code> 會辨識 intent、confidence、是否允許圖表，以及是否需要進一步 review。</p>
+          </article>
+          <article class="step">
+            <h3>4. Bootstrap 檢查資料可用性</h3>
+            <p><code>apps/web/lib/domain-bootstrap.ts</code> 先確認 <code>PowerAccounts</code>、<code>DemandAlertHistory</code>、<code>DeviceDataSummaryView</code> 等是否可用，避免在資料缺口下直接下結論。</p>
+          </article>
+          <article class="step">
+            <h3>5. Context Pack 組裝分析規則</h3>
+            <p><code>apps/web/lib/enms-context-pack.ts</code> 會決定這次優先使用摘要層、原始層或主資料層，並附上 summary-first / raw-validation / join semantics 等執行提示。</p>
+          </article>
+          <article class="step">
+            <h3>6. 分析引擎產生中間判斷</h3>
+            <p><code>enms-demand-forecast-engine.ts</code> 生成預警訊號；<code>enms-alert-governance-engine.ts</code> 匯整 anomaly、owner、priority 與 escalation window，形成可執行的 alert view。</p>
+          </article>
+          <article class="step">
+            <h3>7. 生成回覆、圖表與建議動作</h3>
+            <p>若資料完整，系統輸出風險分級、趨勢圖、處置優先順序與建議動作；若資料不足，則明確說明缺口與可回答範圍。</p>
+          </article>
+          <article class="step">
+            <h3>8. 必要時進入 Review 與知識沉澱</h3>
+            <p>若本次結論具代表性，後續可進入 learning draft、review、promotion 與 AI Wiki，形成可重複使用的知識資產。</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="section">
+        <h2>失效邊界與降級策略</h2>
+        <p class="section-intro">
+          高階技術架構文件通常會說明系統在資料缺口、依賴異常或輸出失敗時如何維持可用。EnClaw 採用可預期、可追溯的降級策略，而非隱藏失效狀態。
+        </p>
+        <table>
+          <thead>
+            <tr>
+              <th>情境</th>
+              <th>風險</th>
+              <th>系統處理方式</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>契約容量或告警歷史缺失</strong></td>
+              <td>無法直接判斷超約風險或告警歷史。</td>
+              <td>由 bootstrap 明確標示缺口，回覆目前仍可回答的需量、趨勢或異常資訊，不直接猜測契約容量。</td>
+            </tr>
+            <tr>
+              <td><strong>摘要層不足</strong></td>
+              <td>預警與 KPI 分析缺乏穩定基線。</td>
+              <td>降低 forecast 信心，必要時退回 raw layer 檢查與保守說明，不輸出高置信度預測結論。</td>
+            </tr>
+            <tr>
+              <td><strong>圖表查詢失敗</strong></td>
+              <td>圖表無法渲染或 SQL 查詢失敗。</td>
+              <td>保留文字分析結果，並以 query error 或 fallback data 明確呈現，不以空白圖表掩蓋錯誤狀態。</td>
+            </tr>
+            <tr>
+              <td><strong>模型供應異常</strong></td>
+              <td>自然語言整理與生成受阻。</td>
+              <td>Gateway 與 session runtime 維持執行邊界；核心資料判斷與中間產物仍可保留，避免整個工作流失去可追蹤性。</td>
+            </tr>
+            <tr>
+              <td><strong>控制條件尚未完備</strong></td>
+              <td>控制權限、回滾機制、protocol adapter 或現場治理條件不足時，不適合直接進入自動控制。</td>
+              <td>系統先維持在分析、建議與 review 模式；當控制介面、權限邊界與安全條件完備後，可隨版本迭代逐步提升到半自動，甚至更高程度的閉環控制。</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section class="section">
+        <h2>常見 EnMS AI 功能，這套怎麼實現</h2>
+        <p class="section-intro">以下能力分為三種狀態：<span class="status-tag status-live">已落地</span>、<span class="status-tag status-extend">可延伸</span>、<span class="status-tag status-iterate">持續迭代</span>。其目的在於清楚區分現況能力與後續建設主線，避免將後續版本主線表述為現況能力。</p>
+        <table class="feature-status-table">
+          <thead>
+            <tr>
+              <th>常見功能</th>
+              <th>EnClaw 的實現方式</th>
+              <th>對應技術 / 檔案</th>
+              <th>目前狀態</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>需量預警</strong></td>
+              <td>完成 EnMS intent routing 後，系統以 <code>DeviceDataSummaryView</code> 建立 same-slot baseline、recent trend 與 contract-capacity risk，再由程式化 forecast engine 產生 projected peak 訊號，最後交由 AI 組織說明。</td>
+              <td><code>apps/web/lib/enms-context-builder.ts</code><br /><code>apps/web/lib/enms-demand-forecast-engine.ts</code></td>
+              <td><span class="status-tag status-live">已落地</span></td>
+            </tr>
+            <tr>
+              <td><strong>異常偵測</strong></td>
+              <td>以摘要層識別需量 / 功因 / KPI 偏移，再由 raw layer 驗證 <code>quality</code>、<code>connected</code>、<code>THD</code>、三相不平衡與瞬時異常；其方法論為 summary-first、raw-validation，而非單一欄位閾值判斷。</td>
+              <td><code>apps/web/lib/enms-anomaly-detection-engine.ts</code><br /><code>apps/web/lib/enms-context-pack.ts</code></td>
+              <td><span class="status-tag status-live">已落地</span></td>
+            </tr>
+            <tr>
+              <td><strong>告警治理</strong></td>
+              <td>將 forecast 與 anomaly 統整成 <code>prewarning / alert</code>，附上 owner、escalation window 與優先順序，避免現場被大量低價值告警淹沒。</td>
+              <td><code>apps/web/lib/enms-alert-governance-engine.ts</code></td>
+              <td><span class="status-tag status-live">已落地</span></td>
+            </tr>
+            <tr>
+              <td><strong>根因分析</strong></td>
+              <td>bootstrap 先確認表、欄位、join 與 site / meter 語意，之後再由 summary 指標向 raw data drill-down，將異常點位對回設備、場域與契約語意，而非停留在模糊結論。</td>
+              <td><code>apps/web/lib/domain-bootstrap.ts</code><br /><code>apps/web/lib/enms-context-pack.ts</code></td>
+              <td><span class="status-tag status-live">已落地</span></td>
+            </tr>
+            <tr>
+              <td><strong>節能建議</strong></td>
+              <td>目前採用第一版可審核 recommendation path，基於需量趨勢、功因、無效功、告警訊號與既有 playbook 產出建議。現階段重點在於可審核的分析與建議輸出；若既有控制介面明確可控，可再往半自動閉環控制延伸。</td>
+              <td><code>apps/web/lib/enms-context-pack.ts</code><br /><code>wiki/playbooks/enms/*</code><br /><code>wiki/operations/enms/*</code></td>
+              <td><span class="status-tag status-live">第一版已落地</span><br /><span class="status-tag status-iterate" style="margin-top:6px;">持續迭代</span></td>
+            </tr>
+            <tr>
+              <td><strong>自然語言查詢與圖表</strong></td>
+              <td>主聊天流程經過 planner、bootstrap 與 context 之後，才決定是否產生 chart。正式分析可走可執行 SQL；在 EnMS 問答情境下，也可先完成資料查證，再以 VALUES 常量或 inline rows/data 輸出圖表，以避免不完整的圖表 payload 直接進入前端。</td>
+              <td><code>apps/web/app/api/chat/route.ts</code><br /><code>apps/web/app/api/workspace/reports/execute/route.ts</code><br /><code>apps/web/app/components/charts/report-viewer.tsx</code></td>
+              <td><span class="status-tag status-live">已落地</span></td>
+            </tr>
+            <tr>
+              <td><strong>缺資料治理</strong></td>
+              <td>當契約容量、告警歷史或主資料不足時，系統會明確回覆缺哪張表、仍可回答的範圍，以及建議的下一步。這是治理型企業 AI 與展示型對話介面的重要差異。</td>
+              <td><code>apps/web/lib/domain-bootstrap.ts</code><br /><code>apps/web/lib/domain-bootstrap.test.ts</code></td>
+              <td><span class="status-tag status-live">已落地</span></td>
+            </tr>
+          </tbody>
+        </table>
+        <div class="note">
+          每一項功能背後都對應明確的 routing、data contract、analytics module 與 review 邊界，且狀態清楚區分為現況、可延伸或迭代中。這正是 EnClaw 在 EnMS 場景中的核心技術價值。
+        </div>
+      </section>
+
+      <section class="section">
+        <h2>功能與演算法對照</h2>
+        <p class="section-intro">
+          若要將 EnClaw 補強成更完整的 EnMS AI，優先投入重點不在單一大模型，而在可程式化、可校準、可驗證的演算法主線。對外說明時，每個功能僅保留一個主算法或主方法，其餘內容作為後續升級方向。
+        </p>
+        <table>
+          <thead>
+            <tr>
+              <th>功能</th>
+              <th>主算法 / 主方法</th>
+              <th>主要資料需求</th>
+              <th>目前 EnClaw 狀態與升級方向</th>
+              <th>導入複雜度</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>需量預警</strong></td>
+              <td>time-of-week baseline forecast</td>
+              <td><code>DeviceDataSummaryView</code>、契約容量、時段、可選的氣溫 / 班表 / 生產負載</td>
+              <td>已具備第一版 baseline + recent trend + contract-capacity risk forecast engine；後續可升級為 decomposition 與機率區間預測，但目前主線方法已明確。</td>
+              <td>中</td>
+            </tr>
+            <tr>
+              <td><strong>異常偵測</strong></td>
+              <td>residual anomaly + MAD baseline</td>
+              <td>summary 與 raw 雙層資料，尤其是 <code>quality</code>、<code>connected</code>、<code>THD</code>、三相電壓電流</td>
+              <td>已具備 summary-first、raw-validation 的第一版 anomaly engine；後續可往 multivariate anomaly 擴充，但目前主線已不是純聊天判斷。</td>
+              <td>中到高</td>
+            </tr>
+            <tr>
+              <td><strong>告警治理</strong></td>
+              <td>ISA-18.2 style alert governance</td>
+              <td>告警歷史、契約門檻、owner、誤報回饋與通知策略</td>
+              <td>已具備 <code>prewarning / alert</code> 分級、owner、dedupe 與 escalation window；後續再補 suppression、shelving 與 feedback tuning。</td>
+              <td>中</td>
+            </tr>
+            <tr>
+              <td><strong>節能建議 / EnPI</strong></td>
+              <td>EnPI baseline regression</td>
+              <td>summary、電價 / tariff、場域主資料、可選的面積 / 產量 / CAPEX / OPEX</td>
+              <td>目前已有第一版 recommendation path 與 playbook；後續將補入 deviation ranking、ROI 與 what-if simulation。</td>
+              <td>中</td>
+            </tr>
+            <tr>
+              <td><strong>多場域 Benchmarking</strong></td>
+              <td>normalized peer grouping</td>
+              <td><code>sites</code>、<code>site_gateways</code>、公司 / 面積 / 人數 / 產量等 normalization 指標</td>
+              <td>routing 與 context 已具備；後續將補入 ranking 與 peer-group engine。當資料規模與場域異質性進一步提高時，可再引入 clustering。</td>
+              <td>中到高</td>
+            </tr>
+            <tr>
+              <td><strong>自然語言查詢與圖表</strong></td>
+              <td>planner + bootstrap + query orchestration</td>
+              <td>schema、join semantics、report runtime、圖表輸出契約</td>
+              <td>已落地。這一層的重點不在單一數值模型，而是以 planner、bootstrap、context、query 與 chart runtime 把自然語言查詢轉成可治理的正式能力。</td>
+              <td>低到中</td>
+            </tr>
+          </tbody>
+        </table>
+        <div class="note">
+          本節的核心判斷是：<strong>技術壁壘不在模型名稱本身，而在這些演算法能否與資料契約、告警政策、場域校準與 review 邊界一起被產品化。</strong>
+        </div>
+      </section>
+
+      <section class="section">
+        <h2>未來版本演進步驟</h2>
+        <p class="section-intro">
+          若要將 EnClaw 從目前已落地的 EnMS AI runtime，進一步演進成更完整的分析與決策層，其技術路徑應依資料依賴、分析成熟度與治理閉環完整度分階段推進，而非平行堆疊所有能力。
+        </p>
+        <table>
+          <thead>
+            <tr>
+              <th>版本</th>
+              <th>主建設主題</th>
+              <th>技術重點</th>
+              <th>主要工程挑戰</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>V1</strong></td>
+              <td>EnPI / baseline regression + ISA-18.2 style alert governance</td>
+              <td>先把基線、KPI、告警分級與治理政策固定下來，建立可追溯的分析與通知邊界。</td>
+              <td>主資料、契約門檻、告警歷史與 owner / escalation policy 需要先被整理成穩定資料契約。</td>
+            </tr>
+            <tr>
+              <td><strong>V2</strong></td>
+              <td>decomposition + probabilistic demand forecast</td>
+              <td>把需量預警從 rule-plus-baseline 推進到更穩定的趨勢分解與風險區間預測，支撐超約預警與降載建議。</td>
+              <td>需要穩定的摘要歷史資料、契約容量語意與時段基線；歷史資料不足時，預測信心與輸出邊界必須保守控制。</td>
+            </tr>
+            <tr>
+              <td><strong>V3</strong></td>
+              <td>multilayer anomaly detection</td>
+              <td>將摘要層、raw layer 與 power-quality 訊號結合，提升異常偵測、告警治理與根因分析的精度。</td>
+              <td>需要較乾淨的 raw data、較完整的三相 / 品質訊號，以及場域級校準；否則容易出現誤報與過度敏感。</td>
+            </tr>
+            <tr>
+              <td><strong>V4</strong></td>
+              <td>opportunity scoring / ROI simulation / semi-closed-loop control</td>
+              <td>把分析結果進一步轉成節能決策、投資回收模擬與 human-approved control recommendation。</td>
+              <td>複雜度最高，因為同時碰到成本模型、控制權限、安全邊界、回滾機制與現場治理流程。</td>
+            </tr>
+          </tbody>
+        </table>
+        <div class="note">
+          本節用於定義 EnClaw 在 EnMS 場景下的<strong>版本演進主線</strong>。即使資料尚未完整，仍可先確立資料契約、feature schema、engine 介面、評估指標與 alert policy，使後續版本沿同一條技術路徑演進。
+        </div>
+      </section>
+
+      <section class="section">
+        <h2>現場接入能力與控制延伸</h2>
+        <div class="grid-2">
+          <article class="card">
+            <span class="chip">現有接入能力</span>
+            <p>既有 EnMS 目前已透過 <strong>MQTT 與 PLC</strong> 接收監測裝置資料，這也是摘要層、原始層與告警分析的基礎來源。現場若有對應 gateway、driver 或 protocol adapter，通常也可接 <strong>Modbus、BACnet、OPC UA、MQTT、REST API</strong> 等介面。</p>
+            <div class="note">本節描述的是既有 EnMS 的現場接入前提，而非 EnClaw 單獨提供的 protocol stack。能否接入，視現場裝置、通訊協定、gateway 與既有 EnMS 接入方式的整合完成度而定。</div>
+          </article>
+          <article class="card">
+            <span class="chip">技術定位</span>
+            <p>EnClaw 的技術定位不是直接取代 PLC / BMS / SCADA 的控制邏輯，而是建在 EnMS 之上的 <strong>AI decision layer</strong>。其角色是負責分析、判讀、預警、告警治理與建議，再由人員或既有控制系統執行控制決策。</p>
+          </article>
+        </div>
+        <div class="grid-4" style="margin-top: 16px;">
+          <article class="card">
+            <span class="chip">環節 1</span>
+            <p><strong>AI 先分析</strong><br />讀取 EnMS summary / raw / master data，判斷需量風險、設備異常或節能機會。</p>
+          </article>
+          <article class="card">
+            <span class="chip">環節 2</span>
+            <p><strong>AI 產生控制建議</strong><br />例如建議降載、切換排程、限制某段時間啟動高耗能設備。</p>
+          </article>
+          <article class="card">
+            <span class="chip">環節 3</span>
+            <p><strong>人工確認</strong><br />由 energy manager、facility ops 或 electrical maintenance 確認是否執行，避免直接自動下錯指令。</p>
+          </article>
+          <article class="card">
+            <span class="chip">環節 4</span>
+            <p><strong>再送控制命令</strong><br />透過既有 PLC / BMS / SCADA / protocol adapter 執行控制，並由 EnMS 持續讀回結果。</p>
+          </article>
+        </div>
+        <div class="note">
+          目前建議採用 <strong>human-approved / policy-governed semi-closed-loop</strong>。此處應視為 <span class="status-tag status-extend">可延伸</span> 能力，而非已全面自動上線的現況；當控制權限、安全邊界、回滾機制與 protocol adapter 完備後，可再往更高自動化的 closed-loop control 延伸。
+        </div>
+      </section>
+
+      <section class="section">
+        <h2>六個技術模組與核心價值</h2>
+        <p class="section-intro">
+          這六個模組描述的是一個 EnMS 問題自進入系統到形成可治理知識的完整執行鏈。
+          其中模組 1 至模組 2 構成產品化基座，模組 3 至模組 6 則構成主要技術價值。
+        </p>
+        <table class="architecture-table">
+          <thead>
+            <tr>
+              <th>模組</th>
+              <th>技術模組</th>
+              <th>主要職責</th>
+              <th>技術定位</th>
+              <th>對應程式</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>模組 1</strong></td>
+              <td><strong>使用者介面與 Session</strong></td>
+              <td>提供 chat 入口、session lifecycle、message persistence、review 入口與 debug workbench。</td>
+              <td><span class="status-tag status-iterate">產品基座</span></td>
+              <td><code>apps/web/app/api/chat/route.ts</code><br /><code>apps/web/app/api/web-sessions/shared.ts</code></td>
+            </tr>
+            <tr>
+              <td><strong>模組 2</strong></td>
+              <td><strong>模型呼叫與執行 Runtime</strong></td>
+              <td>處理模型呼叫、串流回傳、active runs、transport guardrails 與收尾錯誤治理。</td>
+              <td><span class="status-tag status-iterate">產品基座</span></td>
+              <td><code>apps/web/lib/active-runs.ts</code><br /><code>apps/web/app/components/chat-panel.tsx</code></td>
+            </tr>
+            <tr>
+              <td><strong>模組 3</strong></td>
+              <td><strong>問題判斷與 Context 組裝</strong></td>
+              <td>負責 intent classification、domain routing、chart guardrails、risk guardrails 與最小 context pack 組裝。</td>
+              <td><span class="status-tag status-live">核心價值</span></td>
+              <td><code>apps/web/lib/*-context-builder.ts</code><br /><code>apps/web/lib/*-context-pack.ts</code></td>
+            </tr>
+            <tr>
+              <td><strong>模組 4</strong></td>
+              <td><strong>資料檢查與缺口治理</strong></td>
+              <td>在進模型前整理 schema、availability、join、gaps 與 remaining answerable scope，建立可追溯的資料邊界。</td>
+              <td><span class="status-tag status-live">核心價值</span></td>
+              <td><code>apps/web/lib/domain-bootstrap.ts</code></td>
+            </tr>
+            <tr>
+              <td><strong>模組 5</strong></td>
+              <td><strong>EnMS 分析與預警引擎</strong></td>
+              <td>承接 demand forecast、anomaly detection、alert governance 等程式化分析模組，將資料轉成預警與處置訊號。</td>
+              <td><span class="status-tag status-live">核心價值</span></td>
+              <td><code>apps/web/lib/enms-*.ts</code></td>
+            </tr>
+            <tr>
+              <td><strong>模組 6</strong></td>
+              <td><strong>Review 與知識沉澱</strong></td>
+              <td>將高價值回答進一步寫入 draft、review、writeback 與 promotion 流程，形成可持續維護的知識資產。</td>
+              <td><span class="status-tag status-live">核心價值</span></td>
+              <td><code>apps/web/lib/*-learning-*.ts</code><br /><code>apps/web/app/components/learning-review-workspace.tsx</code></td>
+            </tr>
+          </tbody>
+        </table>
+        <div class="note">
+          從技術價值角度來看，模組 3 至模組 6 構成主要差異化能力；模組 1 與模組 2 則負責把這些能力穩定交付成可使用、可驗證、可治理的產品形態。
+        </div>
+      </section>
+
+      <section class="section">
+        <h2>通用執行路徑</h2>
+        <div class="sequence">
+          <article class="step">
+            <h3>使用者從 EnMS chat 入口提出問題</h3>
+            <p>例如詢問最大需量、契約容量風險、功因異常、THD、告警分級或節能建議。</p>
+          </article>
+          <article class="step">
+            <h3>Chat route 建立 session runtime</h3>
+            <p>訊息先進到 <code>/api/chat</code>，並與當前 web session、planner artifacts、review 狀態綁在一起。</p>
+          </article>
+          <article class="step">
+            <h3>Planner 判斷 intent 與 domain</h3>
+            <p>系統不直接將問題交給模型，而是先判斷其所屬 EnMS intent，並決定是否允許圖表、最多幾張圖，以及是否存在風險訊號。</p>
+          </article>
+          <article class="step">
+            <h3>Bootstrap 補齊 schema 與缺資料摘要</h3>
+            <p>runtime 會先查可用表、主資料關聯、關鍵欄位與資料缺口，並明確標示目前能回答到哪一層。</p>
+          </article>
+          <article class="step">
+            <h3>Context pack 注入 domain 規則</h3>
+            <p>例如 EnMS 會優先採用 summary-first、raw-validation 與 join semantics before answer，確保回答不脫離主資料語意。</p>
+          </article>
+          <article class="step">
+            <h3>分析模組先生成中間判斷</h3>
+            <p>需量預警、異常偵測、告警治理等中間結果不由模型即興推測，而是由獨立 engine 先建立基線與訊號。</p>
+          </article>
+          <article class="step">
+            <h3>圖表 runtime 決定採用可執行 SQL、VALUES 常量或 inline rows/data</h3>
+            <p>正式分析可走可執行 SQL；若只是 renderer 測試或要把已查證結果快速視覺化，也可用 VALUES 常量或 inline rows/data，兩者共用同一個前端渲染器。</p>
+          </article>
+          <article class="step">
+            <h3>結論可進入 review / promotion</h3>
+            <p>若本次結論具有可重用價值，後續可進入 learning draft 與 review 流程，沉澱為 durable knowledge。</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="section">
+        <h2>關鍵技術選型與作用</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>技術 / 模組</th>
+              <th>作用</th>
+              <th>核心價值</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>Next.js / React / TypeScript</strong></td>
+              <td>Web runtime、chat UI、review UI、debug page、session surface。</td>
+              <td>讓 AI 行為不再停留於抽象 API，而是成為可展示、可驗證、可審核與可操作的產品層。</td>
+            </tr>
+            <tr>
+              <td><strong>OpenClaw-style Gateway Runtime</strong></td>
+              <td>承接模型呼叫、transport、session、active runs、planner artifacts persist。</td>
+              <td>把 LLM 從單次呼叫變成可治理、可持續追蹤的執行 runtime。</td>
+            </tr>
+            <tr>
+              <td><strong>Domain Context Builder / Pack</strong></td>
+              <td>負責 intent、matched keywords、chart guardrails、references、execution hints。</td>
+              <td>把 prompt engineering 提升成程式化的 routing and context orchestration。</td>
+            </tr>
+            <tr>
+              <td><strong>Domain Bootstrap</strong></td>
+              <td>整理 schema、availability、joins、gaps 與 remaining answerable scope。</td>
+              <td>避免 AI 在 enterprise data 不完整時硬裝懂，提升可信度。</td>
+            </tr>
+            <tr>
+              <td><strong>Report Runtime</strong></td>
+              <td>將 report-json 轉成圖表，並支援可執行 SQL、VALUES-based SQL 與 inline rows/data 多種輸出模式。</td>
+              <td>讓正式分析圖表與前端渲染驗證共用一套前端能力，同時保留失敗時的可降級路徑。</td>
+            </tr>
+            <tr>
+              <td><strong>Karpathy-style AI Wiki / Review Flow</strong></td>
+              <td>draft、writeback、promotion、review workspace 與 wiki 知識沉澱；實作上是以 wiki / schema / review-promotion 流程承接，而不是單獨一個獨立 skill package。</td>
+              <td>讓 AI 不只會答，而是能持續把知識變成可維護、可引用、可 promotion 的長期資產。</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section class="section">
+        <h2>運行指標與持續驗證</h2>
+        <p class="section-intro">
+          參考高階架構文件的慣例，技術設計不應停在元件與流程，還需要定義系統上線後應持續追蹤的指標。以下指標構成建議的運行觀測框架，並可隨版本演進納入儀表板與運維監控。
+        </p>
+        <table>
+          <thead>
+            <tr>
+              <th>指標類別</th>
+              <th>建議觀察指標</th>
+              <th>代表意義</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>資料層</strong></td>
+              <td>資料新鮮度、summary refresh 狀態、主資料完整度、缺口比例</td>
+              <td>判斷預警、告警與分析是否建立在穩定資料基礎之上。</td>
+            </tr>
+            <tr>
+              <td><strong>AI 路由層</strong></td>
+              <td>intent 命中率、domain routing 正確率、chart guardrail 命中情況</td>
+              <td>判斷 planner / context 是否能把問題送進正確分析路徑。</td>
+            </tr>
+            <tr>
+              <td><strong>分析層</strong></td>
+              <td>預警命中率、告警誤報率、異常根因覆蓋率、趨勢分析穩定度</td>
+              <td>反映 forecast、anomaly、alert governance 的實用性與可靠度。</td>
+            </tr>
+            <tr>
+              <td><strong>輸出層</strong></td>
+              <td>圖表成功率、文字回覆完整度、缺資料回覆準確性</td>
+              <td>確保使用者實際看到的是穩定、可用且可執行的輸出。</td>
+            </tr>
+            <tr>
+              <td><strong>治理層</strong></td>
+              <td>review 通過率、promotion 比例、知識重用率</td>
+              <td>衡量 AI 是否真正把案例沉澱成可持續使用的知識資產。</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section class="section">
+        <h2>關鍵程式證據</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>能力</th>
+              <th>檔案</th>
+              <th>代表什麼</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Session / Gateway</td>
+              <td><code>apps/web/app/api/chat/route.ts</code><br /><code>apps/web/app/api/web-sessions/shared.ts</code></td>
+              <td>對應完整的 session runtime，而非單純前端對話介面。</td>
+            </tr>
+            <tr>
+              <td>Bootstrap Governance</td>
+              <td><code>apps/web/lib/domain-bootstrap.ts</code><br /><code>apps/web/lib/domain-bootstrap.test.ts</code></td>
+              <td>證明三個 domain 在進模型前都會先完成 schema / gap 整理。</td>
+            </tr>
+            <tr>
+              <td>EnMS Routing</td>
+              <td><code>apps/web/lib/enms-context-builder.ts</code><br /><code>apps/web/lib/enms-context-pack.ts</code></td>
+              <td>對應 EnMS 專屬的 routing contract，而非直接依賴模型即時推理。</td>
+            </tr>
+            <tr>
+              <td>Chart Runtime</td>
+              <td><code>apps/web/app/api/workspace/reports/execute/route.ts</code><br /><code>apps/web/app/components/charts/report-card.tsx</code><br /><code>apps/web/app/components/charts/report-viewer.tsx</code></td>
+              <td>對應圖表能力來自可執行 runtime，而非單純 JSON 片段。</td>
+            </tr>
+            <tr>
+              <td>EnMS Review / Promotion</td>
+              <td><code>apps/web/lib/enms-learning-auto-trigger.ts</code><br /><code>apps/web/lib/enms-learning-writeback.ts</code><br /><code>apps/web/lib/enms-learning-promotion.ts</code><br /><code>apps/web/app/review/enms/page.tsx</code></td>
+              <td>對應 draft、review、writeback 與 promotion 的可執行知識沉澱流程。</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section class="section">
+        <h2>目前定位與迭代方向</h2>
+        <p class="section-intro">
+          本節明確界定目前已具備的能力、現階段的交付邊界，以及後續可持續擴展的方向。
+        </p>
+        <div class="grid-2">
+          <article class="card">
+            <span class="chip">目前已具備</span>
+            <ul>
+              <li>核心技術已落在 runtime、bootstrap、analytics 與 reviewable knowledge loop。</li>
+              <li>主力模型路徑可替換；EnClaw 的長期資產在執行框架、資料治理與知識沉澱。</li>
+              <li>EnMS 已具備程式化的預警、異常偵測、告警治理、圖表分析與缺資料治理能力。</li>
+            </ul>
+          </article>
+          <article class="card">
+            <span class="chip">持續迭代方向</span>
+            <ul>
+              <li>控制層目前以 human-approved 或 policy-governed 半自動閉環控制為主，後續可隨現場控制條件逐步提升自動化程度。</li>
+              <li>forecast、anomaly、alert 已有第一版 explainable analytics，效果會隨資料累積與場域校準持續提升。</li>
+              <li>分析精度與告警門檻會依歷史資料長度、主資料完整度與場域特性持續優化。</li>
+            </ul>
+          </article>
+        </div>
+      </section>
+    </div>
+  </body>
+</html>

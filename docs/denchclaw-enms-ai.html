@@ -197,6 +197,86 @@
       </section>
 
       <section class="section">
+        <h2>常見 EnMS AI 功能，DenchClaw 怎麼落地</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>功能</th>
+              <th>怎麼做</th>
+              <th>目前狀態</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>需量預警</td>
+              <td>使用摘要層需量資料、同時段基線、最近趨勢、契約容量風險與可用營運特徵做 projected peak 判斷，先由 forecast engine 建立訊號，再交給主聊天說明。</td>
+              <td>已接入第一版 engine，可做預警與風險說明。</td>
+            </tr>
+            <tr>
+              <td>異常偵測</td>
+              <td>先在 summary layer 看需量 / 功因偏移，再用 raw layer 驗證 <code>THD</code>、<code>quality</code>、<code>connected</code>、三相電壓電流與掉線訊號。</td>
+              <td>已接入第一版 engine，可做異常訊號與初步根因分析。</td>
+            </tr>
+            <tr>
+              <td>告警治理</td>
+              <td>將 forecast 與 anomaly 轉成 <code>prewarning / alert</code>，並附上 owner、處理窗口與優先級，不把所有異常都當成同一級別的 alarm。</td>
+              <td>已接入治理模組，可產出較像現場運維流程的告警輸出。</td>
+            </tr>
+            <tr>
+              <td>節能建議</td>
+              <td>結合需量趨勢、功因、無效功、KPI 與既有 playbooks 產出建議；目前重點在 explainable recommendations，若控制介面明確可控，可再往半自動閉環控制延伸。</td>
+              <td>可做第一版建議，仍需依場域資料持續校準。</td>
+            </tr>
+            <tr>
+              <td>圖表與報表</td>
+              <td>正式分析走 validated SQL；純驗證或 demo 可走 inline rows/data。這讓同一套 chart runtime 能同時支援真實分析與前端 renderer 測試。</td>
+              <td>已可運作，且已補齊 query error 與 no-data 差異。</td>
+            </tr>
+            <tr>
+              <td>缺資料治理</td>
+              <td>主聊天先做 bootstrap；若 <code>PowerAccounts</code>、<code>DemandAlertHistory</code> 或主資料缺漏，回答必須明講缺口與可退回的分析範圍。</td>
+              <td>已接入主聊天 contract。</td>
+            </tr>
+          </tbody>
+        </table>
+        <div class="note">
+          這代表 DenchClaw 在 EnMS 裡不是只有問答介面，而是把 <strong>預警、異常、告警、圖表、缺資料治理</strong> 收斂成同一套可驗證的 runtime。
+        </div>
+      </section>
+
+      <section class="section">
+        <h2>現場接入與半自動閉環控制</h2>
+        <div class="grid-2">
+          <article class="card">
+            <span class="chip">現場接入</span>
+            <p>目前 EnMS 本身已透過 <strong>MQTT</strong> 與 <strong>PLC</strong> 接收監測裝置資料。若現場設備、gateway 與 protocol adapter 已對齊，通常也能接 <strong>Modbus、BACnet、OPC UA、MQTT、REST API</strong> 等介面。</p>
+          </article>
+          <article class="card">
+            <span class="chip">技術定位</span>
+            <p>DenchClaw 目前最適合的定位，是建在 EnMS 之上的 <strong>AI decision layer</strong>。也就是先分析、判斷、建議，再由人工或既有控制系統決定是否執行控制命令。</p>
+          </article>
+        </div>
+        <div class="grid-2" style="margin-top: 16px;">
+          <article class="card">
+            <span class="chip">半自動閉環流程</span>
+            <ul>
+              <li>AI 先分析</li>
+              <li>AI 產生控制建議</li>
+              <li>人工確認</li>
+              <li>再送控制命令</li>
+            </ul>
+          </article>
+          <article class="card">
+            <span class="chip">為什麼先這樣做</span>
+            <p>因為現場控制通常牽涉設備安全、互鎖條件、權限、回滾與責任邊界。對目前階段來說，先走 human-approved 或 policy-governed 的半自動閉環控制，比直接宣稱全自動控制更穩、更專業。</p>
+          </article>
+        </div>
+        <div class="note">
+          所以比較準的說法是：<strong>DenchClaw 現在已可作為 EnMS 的 AI decision layer；若既有硬體與控制介面明確可控，也可以往 human-approved 或 policy-governed 的 closed-loop control layer 延伸。</strong> 這不代表做不到全自動控制，而是現階段更穩的產品說法，不把「全面自動控制」當作第一個對外承諾。
+        </div>
+      </section>
+
+      <section class="section">
         <h2>資料主線</h2>
         <table>
           <thead>
@@ -245,6 +325,23 @@
         <div class="note">
           例如目前若 <code>PowerAccounts</code> 或 <code>DemandAlertHistory</code> 沒資料，系統不應再只回「因資料限制」，
           而是要清楚說出缺口，並改做最大需量、summary 趨勢或 raw signal 檢查。
+        </div>
+      </section>
+
+      <section class="section">
+        <h2>圖表與驗證路徑也已補齊</h2>
+        <div class="grid-2">
+          <article class="card">
+            <span class="chip">Live Chart</span>
+            <p>若是正式 EnMS 分析，chart 應先來自已驗證的聚合資料，再由 report runtime 執行。這條路徑適合 summary KPI、場域比較、需量趨勢。</p>
+          </article>
+          <article class="card">
+            <span class="chip">Demo Chart</span>
+            <p>若只是驗證圖表 renderer 或做 demo，也可直接使用 inline rows/data，不必硬接 live SQL。這讓 demo 與真實分析可共用同一個前端元件。</p>
+          </article>
+        </div>
+        <div class="note">
+          這代表 EnMS 現在不只會回答「有沒有資料」，也能把圖表輸出分成 <strong>真實查詢圖表</strong> 與 <strong>純驗證圖表</strong> 兩種模式，避免過去那種半套 report-json 導致前端報錯。
         </div>
       </section>
 
@@ -317,6 +414,11 @@
               <td><code>apps/web/app/api/debug/enms-analytics/route.ts</code><br /><code>apps/web/app/debug/enms-analytics/page.tsx</code></td>
               <td>可以直接看 sample input / output，不是只有文件描述。</td>
             </tr>
+            <tr>
+              <td>Chart Runtime</td>
+              <td><code>apps/web/app/api/workspace/reports/execute/route.ts</code><br /><code>apps/web/app/components/charts/report-viewer.tsx</code></td>
+              <td>EnMS 圖表現在能走 live SQL 或 inline rows/data 兩條路，適合正式分析與純 renderer 測試。</td>
+            </tr>
           </tbody>
         </table>
       </section>
@@ -329,7 +431,7 @@
             <ul>
               <li>EnMS 已接入同一套 runtime contract</li>
               <li>已有 forecast / anomaly / alert 三段式第一版模組</li>
-              <li>已有 debug route、debug page、review flow、skill 與測試</li>
+              <li>已有 debug route、debug page、review flow、skill、圖表 runtime 與測試</li>
             </ul>
           </article>
           <article class="card">
@@ -337,6 +439,7 @@
             <ul>
               <li>目前不是自訓 time-series foundation model</li>
               <li>目前是統計 + 規則式第一版，精度仍取決於歷史資料量與欄位品質</li>
+              <li>控制層更準的說法是現階段先以半自動閉環控制描述，而不是一開始就承諾已全面自動控制所有現場設備</li>
               <li>正式通知策略、門檻與誤報率仍要依場域持續校準</li>
             </ul>
           </article>

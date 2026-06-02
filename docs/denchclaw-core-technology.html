@@ -99,6 +99,48 @@
 
       .section { margin-top: 20px; }
 
+      .diagram-board {
+        margin-top: 18px;
+        border: 1px solid var(--line);
+        border-radius: 24px;
+        padding: 18px;
+        background:
+          radial-gradient(circle at top right, rgba(20, 93, 160, 0.08), transparent 16rem),
+          linear-gradient(180deg, #fbfefe 0%, #f4f8f8 100%);
+      }
+
+      .diagram-grid {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 14px;
+      }
+
+      .diagram-box {
+        border: 1px solid var(--line);
+        border-radius: 20px;
+        padding: 16px;
+        background: rgba(255, 255, 255, 0.92);
+      }
+
+      .diagram-box strong {
+        display: block;
+        margin-bottom: 8px;
+        font-size: 15px;
+      }
+
+      .diagram-box p {
+        font-size: 14px;
+      }
+
+      .diagram-arrow {
+        display: grid;
+        place-items: center;
+        margin: 10px 0;
+        font-size: 24px;
+        line-height: 1;
+        color: var(--blue);
+      }
+
       .grid {
         display: grid;
         grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -148,7 +190,8 @@
       }
 
       @media (max-width: 860px) {
-        .grid { grid-template-columns: 1fr; }
+        .grid,
+        .diagram-grid { grid-template-columns: 1fr; }
       }
     </style>
   </head>
@@ -165,8 +208,53 @@
           <a href="./denchclaw-ai-architecture-investor.html">回總覽首頁</a>
           <a href="./denchclaw-enms-ai.html">看 EnMS 專頁</a>
           <a href="./denchclaw-validation-prompts.html">看驗證題庫</a>
+          <a href="https://github.com/notyenyu-creator/YM_AIClaw" target="_blank" rel="noreferrer">GitHub 入口</a>
         </div>
       </header>
+
+      <section class="section">
+        <h2>目前系統架構圖</h2>
+        <p>目前的產品主線不是單一聊天頁，而是一條從 session runtime、planner、bootstrap、analytics 到 reviewable knowledge loop 的可治理執行鏈。</p>
+        <div class="diagram-board">
+          <div class="diagram-grid">
+            <article class="diagram-box">
+              <strong>1. Web / Session</strong>
+              <p>Chat、workspace、review、debug 都由 Next.js / React runtime 承接。</p>
+            </article>
+            <article class="diagram-box">
+              <strong>2. OpenClaw Gateway</strong>
+              <p>負責模型呼叫、stream transport、active runs 與 session metadata。</p>
+            </article>
+            <article class="diagram-box">
+              <strong>3. Hermes-style Core</strong>
+              <p>planner、context pack、bootstrap、chart guardrails 與 domain routing 先行。</p>
+            </article>
+            <article class="diagram-box">
+              <strong>4. Analytics / Review</strong>
+              <p>EnMS analytics、report runtime、draft → review → promotion 形成長期資產。</p>
+            </article>
+          </div>
+          <div class="diagram-arrow">↓</div>
+          <div class="diagram-grid">
+            <article class="diagram-box">
+              <strong>資料層</strong>
+              <p>Y-CRM、ERP、EnMS 各自保留自己的 source of truth 與 schema strategy。</p>
+            </article>
+            <article class="diagram-box">
+              <strong>知識層</strong>
+              <p><code>wiki/</code>、<code>schema/</code>、<code>skills/</code>、playbooks 與 review outputs。</p>
+            </article>
+            <article class="diagram-box">
+              <strong>模型層</strong>
+              <p>目前主力是 Dench Cloud Gateway API，承接 Claude / GPT 類模型，不是本地 LLM 主線。</p>
+            </article>
+            <article class="diagram-box">
+              <strong>核心價值</strong>
+              <p>模型可換，但 routing、governance、data contract 與 analytics runtime 會持續留在產品裡。</p>
+            </article>
+          </div>
+        </div>
+      </section>
 
       <section class="section">
         <h2>最值得講的五個核心</h2>
@@ -199,6 +287,14 @@
             <span class="chip">6. Bootstrap / Gaps</span>
             <p>主聊天在進模型前，會先做 schema bootstrap，並把缺資料來源明確標示進 prompt，避免模型硬猜欄位或契約語意。</p>
           </article>
+          <article class="card">
+            <span class="chip">7. Chart Runtime</span>
+            <p>圖表層同時支援 validated SQL 與 inline rows/data。這讓真實資料圖表與 demo 驗證圖表都能走同一套 renderer。</p>
+          </article>
+          <article class="card">
+            <span class="chip">8. Parity Audit</span>
+            <p>PM / RD / QA / TPM 不是口號，而是直接落成 domain parity audit，檢查三個系統的 runtime surface 是否一致。</p>
+          </article>
         </div>
       </section>
 
@@ -212,6 +308,50 @@
           <article class="card">
             <span class="chip">Missing-Data Contract</span>
             <p>若資料不足，回答必須分成 <strong>已確認</strong>、<strong>缺少資料</strong>、<strong>目前可回答</strong>、<strong>建議下一步</strong>，而不是只說資料限制。</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="section">
+        <h2>圖表 Runtime 不是前端小功能</h2>
+        <div class="grid">
+          <article class="card">
+            <span class="chip">Route</span>
+            <p><code>/api/workspace/reports/execute</code> 現在會分流 Y-CRM、ERP、EnMS 的外部 PG 查詢，而不是只支援單一系統。</p>
+          </article>
+          <article class="card">
+            <span class="chip">Dual Mode</span>
+            <p>每個 panel 現在可用兩種資料來源：<strong>sql</strong> 或 <strong>rows/data</strong>。前者用於 live chart，後者用於 demo 與靜態驗證。</p>
+          </article>
+          <article class="card">
+            <span class="chip">Guardrail</span>
+            <p>若 chart 只是測試用途，runtime 會鼓勵模型直接給 inline rows/data；若是正式分析，則要求先有非空聚合資料再畫圖。</p>
+          </article>
+          <article class="card">
+            <span class="chip">Error Clarity</span>
+            <p>若 SQL 或欄位名錯誤，前端現在應看到 query error，而不是空白圖或誤導性的 No data。</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="section">
+        <h2>多 Agent 驗證層</h2>
+        <div class="grid">
+          <article class="card">
+            <span class="chip">PM</span>
+            <p>檢查功能面是否形成完整 user flow，而不是只完成單點 API。</p>
+          </article>
+          <article class="card">
+            <span class="chip">RD</span>
+            <p>檢查 builder、context、writeback、promotion、review path 是否真正接線。</p>
+          </article>
+          <article class="card">
+            <span class="chip">QA</span>
+            <p>檢查缺資料回覆、錯誤處理、圖表 renderer 與 debug page 是否可重現驗證。</p>
+          </article>
+          <article class="card">
+            <span class="chip">TPM</span>
+            <p>檢查三個 domain 是否維持同一套 runtime contract，而不是各自長成三個互不相干的產品分支。</p>
           </article>
         </div>
       </section>
@@ -281,6 +421,16 @@
               <td>Bootstrap / Gaps</td>
               <td><code>apps/web/lib/domain-bootstrap.ts</code><br /><code>apps/web/lib/domain-bootstrap.test.ts</code></td>
               <td>三系統在進模型前先補 schema / join / data-gap 摘要，避免模糊回答。</td>
+            </tr>
+            <tr>
+              <td>Chart Runtime</td>
+              <td><code>apps/web/app/api/workspace/reports/execute/route.ts</code><br /><code>apps/web/app/components/charts/report-viewer.tsx</code><br /><code>apps/web/app/components/charts/report-card.tsx</code></td>
+              <td>圖表不是只吐一段 JSON，而是有 live SQL 分流、inline rows/data fallback 與錯誤可視化。</td>
+            </tr>
+            <tr>
+              <td>Parity Audit</td>
+              <td><code>apps/web/lib/domain-parity-audit.ts</code><br /><code>apps/web/app/debug/domain-parity-audit/page.tsx</code></td>
+              <td>可以直接核對三個 domain 是否真的同構，而不是只靠文件聲稱對齊。</td>
             </tr>
           </tbody>
         </table>

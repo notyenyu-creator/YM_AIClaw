@@ -1,0 +1,671 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>EnClaw AIAssistant Internal 實作對照與版本演進指南</title>
+    <style>
+      :root {
+        --bg: #f3f7f7;
+        --surface: rgba(255, 255, 255, 0.94);
+        --surface-strong: #ffffff;
+        --text: #102330;
+        --text-soft: #596a79;
+        --line: rgba(16, 35, 48, 0.1);
+        --blue: #145da0;
+        --teal: #0f766e;
+        --green: #1f7a52;
+        --amber: #d97706;
+        --red: #b42318;
+        --shadow: 0 22px 60px rgba(10, 24, 34, 0.08);
+        --max: 1180px;
+      }
+
+      * { box-sizing: border-box; }
+
+      body {
+        margin: 0;
+        font-family: "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", sans-serif;
+        color: var(--text);
+        line-height: 1.72;
+        background:
+          radial-gradient(circle at top left, rgba(15, 118, 110, 0.12), transparent 26rem),
+          radial-gradient(circle at top right, rgba(20, 93, 160, 0.08), transparent 30rem),
+          linear-gradient(180deg, #fbfcfc 0%, var(--bg) 100%);
+      }
+
+      .shell {
+        max-width: var(--max);
+        margin: 0 auto;
+        padding: 28px 20px 72px;
+      }
+
+      .hero, .section {
+        border: 1px solid var(--line);
+        border-radius: 30px;
+        padding: 30px;
+        background: var(--surface);
+        box-shadow: var(--shadow);
+      }
+
+      .hero {
+        color: #ebf5f7;
+        background:
+          radial-gradient(circle at 90% 0%, rgba(133, 244, 209, 0.18), transparent 20rem),
+          linear-gradient(135deg, #072130 0%, #0d4255 54%, #145da0 100%);
+      }
+
+      .section { margin-top: 20px; }
+
+      .eyebrow, .chip, .status-tag {
+        display: inline-flex;
+        align-items: center;
+        border-radius: 999px;
+        font-size: 12px;
+        font-weight: 700;
+      }
+
+      .eyebrow {
+        padding: 8px 14px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        border: 1px solid rgba(255,255,255,0.16);
+        background: rgba(255,255,255,0.08);
+      }
+
+      .chip {
+        padding: 8px 14px;
+        margin-bottom: 12px;
+        letter-spacing: 0.03em;
+        background: rgba(20, 93, 160, 0.1);
+        color: var(--blue);
+      }
+
+      .status-tag {
+        justify-content: center;
+        padding: 7px 12px;
+        line-height: 1;
+        letter-spacing: 0.04em;
+        white-space: nowrap;
+        text-transform: uppercase;
+        min-width: 82px;
+      }
+
+      .status-live {
+        background: rgba(31, 122, 82, 0.12);
+        color: var(--green);
+      }
+
+      .status-partial {
+        background: rgba(20, 93, 160, 0.1);
+        color: var(--blue);
+      }
+
+      .status-extend {
+        background: rgba(217, 119, 6, 0.12);
+        color: var(--amber);
+      }
+
+      .status-risk {
+        background: rgba(180, 35, 24, 0.1);
+        color: var(--red);
+      }
+
+      h1, h2, h3 {
+        margin: 0 0 12px;
+        font-family: "Noto Serif TC", "PMingLiU", serif;
+        letter-spacing: -0.03em;
+      }
+
+      h1 { font-size: clamp(34px, 5vw, 60px); line-height: 1.04; margin-top: 16px; }
+      h2 { font-size: clamp(28px, 3vw, 40px); line-height: 1.08; }
+      h3 { font-size: 22px; line-height: 1.14; }
+
+      p, li {
+        color: var(--text-soft);
+        font-size: 15px;
+      }
+
+      p { margin: 0; }
+      .hero p { color: rgba(235,245,247,0.9); }
+
+      .hero-grid {
+        display: grid;
+        grid-template-columns: minmax(0, 1.18fr) minmax(300px, 0.82fr);
+        gap: 24px;
+        align-items: end;
+      }
+
+      .hero-copy p {
+        max-width: 780px;
+        font-size: 17px;
+      }
+
+      .hero-rail {
+        display: grid;
+        gap: 14px;
+      }
+
+      .hero-metric {
+        border: 1px solid rgba(255,255,255,0.14);
+        border-radius: 22px;
+        padding: 16px 18px;
+        background: rgba(255,255,255,0.08);
+        backdrop-filter: blur(10px);
+      }
+
+      .hero-metric strong {
+        display: block;
+        margin-bottom: 6px;
+        font-size: 14px;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+      }
+
+      .hero-metric p {
+        color: rgba(235,245,247,0.9);
+        font-size: 14px;
+      }
+
+      .hero-actions {
+        display: flex;
+        margin-top: 22px;
+      }
+
+      .github-link {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 46px;
+        height: 46px;
+        border-radius: 999px;
+        border: 1px solid rgba(255,255,255,0.18);
+        background: rgba(255,255,255,0.08);
+        color: #f8fbfc;
+        box-shadow: inset 0 1px 0 rgba(255,255,255,0.08);
+        transition: transform 160ms ease, background 160ms ease, border-color 160ms ease;
+      }
+
+      .github-link:hover {
+        transform: translateY(-1px);
+        background: rgba(255,255,255,0.14);
+        border-color: rgba(255,255,255,0.28);
+      }
+
+      .github-link svg {
+        width: 22px;
+        height: 22px;
+        fill: currentColor;
+      }
+
+      .section-intro {
+        max-width: 900px;
+        margin: 0 0 18px;
+      }
+
+      .summary-grid, .grid-4, .grid-3, .grid-2 {
+        display: grid;
+        gap: 16px;
+      }
+
+      .summary-grid {
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+      }
+
+      .grid-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+      .grid-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .grid-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+
+      .card, .summary-card {
+        border: 1px solid var(--line);
+        border-radius: 22px;
+        padding: 18px;
+        background: linear-gradient(180deg, rgba(255,255,255,0.98) 0%, rgba(244,248,247,0.95) 100%);
+      }
+
+      .summary-card strong {
+        display: block;
+        margin-bottom: 8px;
+        font-size: 15px;
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        margin-top: 18px;
+        overflow: hidden;
+        border-radius: 20px;
+        background: var(--surface-strong);
+      }
+
+      thead th {
+        text-align: left;
+        padding: 16px 18px;
+        font-size: 13px;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        color: var(--text);
+        background: rgba(20, 93, 160, 0.08);
+        border-bottom: 1px solid var(--line);
+        vertical-align: top;
+      }
+
+      tbody td {
+        padding: 18px;
+        border-bottom: 1px solid var(--line);
+        vertical-align: top;
+        color: var(--text-soft);
+        font-size: 14px;
+      }
+
+      tbody tr:nth-child(even) td {
+        background: rgba(15, 118, 110, 0.02);
+      }
+
+      tbody tr:last-child td {
+        border-bottom: none;
+      }
+
+      code {
+        font-family: "SFMono-Regular", "Menlo", monospace;
+        font-size: 13px;
+        color: #0d4255;
+      }
+
+      ul {
+        margin: 10px 0 0;
+        padding-left: 20px;
+      }
+
+      .note {
+        margin-top: 16px;
+        padding: 14px 16px;
+        border-radius: 18px;
+        background: rgba(15, 118, 110, 0.06);
+        color: var(--text-soft);
+        font-size: 14px;
+      }
+
+      .note strong {
+        color: var(--text);
+      }
+
+      .stack-list {
+        display: grid;
+        gap: 12px;
+        margin-top: 18px;
+      }
+
+      .stack-item {
+        border: 1px solid var(--line);
+        border-radius: 18px;
+        padding: 16px 18px;
+        background: rgba(255, 255, 255, 0.78);
+      }
+
+      .stack-item strong {
+        display: block;
+        margin-bottom: 6px;
+        color: var(--text);
+        font-size: 15px;
+      }
+
+      @media (max-width: 1080px) {
+        .hero-grid,
+        .summary-grid,
+        .grid-4,
+        .grid-3,
+        .grid-2 {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="shell">
+      <header class="hero">
+        <div class="hero-grid">
+          <div class="hero-copy">
+            <span class="eyebrow">EnClaw / AIAssistant / Internal</span>
+            <h1>AIAssistant 6 個分頁與 EnClaw 現況能力對照</h1>
+            <p>
+              這份文件不是概念簡介，而是面向後續產品化與技術投資判斷的實作基準。
+              基於 <strong>2026 年 6 月 3 日</strong> 實際檢視的 EnMS 頁面
+              <code>http://118.168.188.27:5174/#/AIAssistant</code>，本文件把目前 mockup 的 6 個分頁，
+              對照到 EnClaw 現有 runtime、已落地能力、資料缺口、演算法缺口，以及未來版本演進步驟。
+            </p>
+            <div class="hero-actions">
+              <a
+                class="github-link"
+                href="https://github.com/notyenyu-creator/YM_AIClaw"
+                target="_blank"
+                rel="noreferrer"
+                aria-label="GitHub Repository"
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M12 .5C5.65.5.5 5.66.5 12.02c0 5.09 3.29 9.4 7.86 10.93.58.1.79-.25.79-.56 0-.28-.01-1.2-.02-2.18-3.2.7-3.88-1.36-3.88-1.36-.52-1.34-1.28-1.7-1.28-1.7-1.05-.72.08-.71.08-.71 1.16.08 1.78 1.2 1.78 1.2 1.03 1.78 2.71 1.27 3.37.97.1-.75.4-1.27.73-1.56-2.55-.29-5.23-1.28-5.23-5.71 0-1.26.45-2.29 1.19-3.1-.12-.29-.52-1.48.11-3.09 0 0 .97-.31 3.19 1.18a11.1 11.1 0 0 1 5.8 0c2.21-1.49 3.18-1.18 3.18-1.18.63 1.61.24 2.8.12 3.09.74.81 1.19 1.84 1.19 3.1 0 4.44-2.68 5.42-5.24 5.7.41.36.77 1.06.77 2.14 0 1.55-.01 2.8-.01 3.18 0 .31.21.67.8.56A11.52 11.52 0 0 0 23.5 12C23.5 5.66 18.35.5 12 .5Z" />
+                </svg>
+              </a>
+            </div>
+          </div>
+          <div class="hero-rail">
+            <article class="hero-metric">
+              <strong>目前頁面狀態</strong>
+              <p>AIAssistant 頁目前是 iframe 載入靜態 mockup，不是已接上真實 AI runtime 的正式功能頁。</p>
+            </article>
+            <article class="hero-metric">
+              <strong>目前主線</strong>
+              <p>自然語言查詢、需量預警、異常偵測、Alert 治理，已可直接對應到現有 EnClaw runtime 與分析模組。</p>
+            </article>
+            <article class="hero-metric">
+              <strong>下一階段建設</strong>
+              <p>多場域 Benchmarking 與節能 ROI / what-if 模擬需要額外的資料正規化、成本模型與專用演算法，不應包裝成現況。</p>
+            </article>
+            <article class="hero-metric">
+              <strong>文件口徑</strong>
+              <p>本文件以「現有主線、資料缺口、演算法缺口、版本演進」四個角度整理，可直接作為後續拆分工作包與對外說明邊界的依據。</p>
+            </article>
+          </div>
+        </div>
+      </header>
+
+      <section class="section">
+        <h2>先看結論</h2>
+        <div class="summary-grid">
+          <article class="summary-card">
+            <strong>現有主線能力</strong>
+            <p>AI-01 需量預測、AI-03 異常根因、AI-04 自然語言查詢、AI-09 Alert 治理已可進入正式化實作。</p>
+          </article>
+          <article class="summary-card">
+            <strong>分階段建設</strong>
+            <p>AI-10 能效分析可先落地 recommendation path，再補 ROI 與 what-if simulation。</p>
+          </article>
+          <article class="summary-card">
+            <strong>資料依賴最高</strong>
+            <p>AI-05 多場域 Benchmarking 需要面積、人數、產量或其他 normalization 指標，不能只靠電表資料直接成立。</p>
+          </article>
+          <article class="summary-card">
+            <strong>對外表述邊界</strong>
+            <p>mockup 上標示的 LSTM、Isolation Forest、k-means 目前都不應直接視為已落地現況，除非對應模型與評估流程已正式進入產品主線。</p>
+          </article>
+        </div>
+        <div class="note">
+          <strong>文件結論：</strong>EnClaw 已足以支撐這個 AI 助理頁面的第一版正式化，但 mockup 走向正式功能時，應優先落地可驗證的 runtime、資料契約與分析模組，而不是先追求模型名稱。
+        </div>
+      </section>
+
+      <section class="section">
+        <h2>目前 AIAssistant 頁面的真實狀態</h2>
+        <p class="section-intro">
+          這一段是後續實作時的重要前提。2026 年 6 月 3 日實際檢視後，目前 EnMS 的
+          <code>/AIAssistant</code> 頁面不是正式功能，而是由前端 chunk 載入一個靜態 mockup HTML。
+        </p>
+        <div class="grid-2">
+          <article class="card">
+            <span class="chip">頁面事實</span>
+            <p>
+              <code>pingroun.AIAssistantIndex.Dpyi7sjD.js</code> 目前的主要行為是建立
+              <code>iframe</code>，並載入 <code>/mockups/EnMS-AI-Demo-Mockups-final-0521.html</code>。
+            </p>
+          </article>
+          <article class="card">
+            <span class="chip">技術含義</span>
+            <p>
+              這代表目前頁面主要承載的是產品方向與 UI 交互展示；真正需要評估的，是
+              EnClaw 是否已具備把這些互動背後的資料路徑、分析模組與治理流程接成正式能力。
+            </p>
+          </article>
+        </div>
+      </section>
+
+      <section class="section">
+        <h2>6 個分頁與 EnClaw 現況能力對照</h2>
+        <p class="section-intro">
+          這一段是整份文件的核心。每一個分頁都先定義 mockup 所假設的產品能力，再對照 EnClaw
+          目前是否已有 runtime、分析模組與資料治理路徑可承接。
+        </p>
+        <table>
+          <thead>
+            <tr>
+              <th>分頁</th>
+              <th>mockup 目標</th>
+              <th>EnClaw 現況</th>
+              <th>狀態</th>
+              <th>正式化前提與缺口</th>
+              <th>主要 code proof</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>AI-01<br />需量預測 + 智能降載</strong></td>
+              <td>預測未來 15 分鐘需量、比較契約容量、產生降載建議與圖表。</td>
+              <td>已具備 EnMS intent routing、summary-first context、第一版 forecast engine 與 alert governance 路徑。</td>
+              <td><span class="status-tag status-live">現有主線</span></td>
+              <td>
+                <ul>
+                  <li>補更多歷史 summary 資料與契約容量語意。</li>
+                  <li>若要講 LSTM，需要另外實作與驗證，不應直接沿用 mockup 文案。</li>
+                  <li>降載建議可先走 playbook-based 建議，之後再進半自動控制。</li>
+                </ul>
+              </td>
+              <td><code>apps/web/lib/enms-context-builder.ts</code><br /><code>apps/web/lib/enms-demand-forecast-engine.ts</code><br /><code>apps/web/lib/enms-alert-governance-engine.ts</code></td>
+            </tr>
+            <tr>
+              <td><strong>AI-03<br />異常偵測 + 根因分析</strong></td>
+              <td>從用電偏離、功因、三相、THD、掉線等訊號中抓異常，並給出可能原因與檢查建議。</td>
+              <td>已具備 summary-first、raw-validation 的 anomaly engine，可處理 demand spike、low PF、connectivity、THD、phase imbalance、quality degradation。</td>
+              <td><span class="status-tag status-live">現有主線</span></td>
+              <td>
+                <ul>
+                  <li>若要對外講 Isolation Forest，需額外補模型與評估。</li>
+                  <li>根因品質仍會受 raw data 完整度與場域校準影響。</li>
+                </ul>
+              </td>
+              <td><code>apps/web/lib/enms-anomaly-detection-engine.ts</code><br /><code>apps/web/lib/enms-context-pack.ts</code><br /><code>apps/web/lib/domain-bootstrap.ts</code></td>
+            </tr>
+            <tr>
+              <td><strong>AI-04<br />自然語言查詢</strong></td>
+              <td>讓使用者直接問問題，由系統取資料、解釋、畫圖並可跳原報表。</td>
+              <td>這一塊是目前 EnClaw 最成熟的 EnMS 路徑之一，已具備 planner、bootstrap、context、chart runtime、缺資料治理與 review flow。</td>
+              <td><span class="status-tag status-live">現有主線</span></td>
+              <td>
+                <ul>
+                  <li>把 EnMS 端的 mockup drawer 換成真實 chat runtime 與 query bridge。</li>
+                  <li>把回覆中的報表跳轉和 EnMS 現有報表路由綁定。</li>
+                </ul>
+              </td>
+              <td><code>apps/web/app/api/chat/route.ts</code><br /><code>apps/web/lib/domain-bootstrap.ts</code><br /><code>apps/web/app/api/workspace/reports/execute/route.ts</code></td>
+            </tr>
+            <tr>
+              <td><strong>AI-05<br />多場域 Benchmarking</strong></td>
+              <td>多場域分群、排名、找出最該優先改善的場域，並用白話文字解讀。</td>
+              <td>EnMS routing 與 context 已有 <code>site_benchmarking</code> 概念，但尚未看到完整 normalization / peer-group / ranking engine。</td>
+              <td><span class="status-tag status-extend">需補資料</span></td>
+              <td>
+                <ul>
+                  <li>補面積、人數、產量、場域類型等 normalization 指標。</li>
+                  <li>若要做同類群比較，再補 peer grouping 或 clustering。</li>
+                  <li>k-means 目前不應直接當成已落地能力。</li>
+                </ul>
+              </td>
+              <td><code>apps/web/lib/enms-context-builder.ts</code><br /><code>apps/web/lib/enms-context-pack.ts</code><br /><code>wiki/entities/sites/*</code></td>
+            </tr>
+            <tr>
+              <td><strong>AI-09<br />Alert 智能治理</strong></td>
+              <td>把大量告警合併分群、分級、摘要，並降低噪音與誤報。</td>
+              <td>這是目前 EnClaw 很適合承接的一塊。已經有 <code>prewarning / alert</code> 分級、owner、dedupe、escalation window 的第一版治理邏輯。</td>
+              <td><span class="status-tag status-live">現有主線</span></td>
+              <td>
+                <ul>
+                  <li>補 suppression、shelving、feedback tuning。</li>
+                  <li>補每日摘要、推播策略與 alert history 整理。</li>
+                </ul>
+              </td>
+              <td><code>apps/web/lib/enms-alert-governance-engine.ts</code><br /><code>apps/web/lib/domain-bootstrap.ts</code></td>
+            </tr>
+            <tr>
+              <td><strong>AI-10<br />能效分析 + 節能挖掘</strong></td>
+              <td>排序節能機會、估年省金額、投資、回收期，並做 what-if 模擬。</td>
+              <td>目前已有第一版 recommendation path 與 playbook 路徑，但尚未看到完整 EnPI regression、ROI model、what-if simulation engine。</td>
+              <td><span class="status-tag status-partial">分階段建設</span></td>
+              <td>
+                <ul>
+                  <li>先做可審核 recommendation path。</li>
+                  <li>再補 EnPI / baseline regression。</li>
+                  <li>再補 tariff / CAPEX / OPEX 與 ROI 模擬。</li>
+                </ul>
+              </td>
+              <td><code>apps/web/lib/enms-context-pack.ts</code><br /><code>wiki/playbooks/enms/*</code><br /><code>wiki/operations/enms/*</code></td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section class="section">
+        <h2>固定設計前提</h2>
+        <div class="grid-3">
+          <article class="card">
+            <span class="chip">資料分層</span>
+            <p>
+              先固定使用三層資料：原始時序層 <code>mqtt_raw_data</code>、摘要分析層
+              <code>DeviceDataSummaryView</code>、主資料層 <code>ElectricityMeter</code>、
+              <code>PowerAccounts</code>、<code>sites</code>、<code>site_gateways</code>、
+              <code>ComCompany</code>。
+            </p>
+          </article>
+          <article class="card">
+            <span class="chip">缺資料治理</span>
+            <p>
+              若 <code>PowerAccounts</code>、<code>DemandAlertHistory</code> 或主資料不足，
+              必須明講缺哪張表、還能回答什麼，不允許用模型硬猜契約容量、警報歷史或 ROI。
+            </p>
+          </article>
+          <article class="card">
+            <span class="chip">圖表輸出契約</span>
+            <p>
+              正式圖表可走可執行 SQL；若只是 renderer 驗證或已經先拿到聚合結果，可用
+              <code>VALUES</code> 或 <code>inline rows/data</code>，避免讓壞 payload 直接進前端。
+            </p>
+          </article>
+          <article class="card">
+            <span class="chip">回答流程</span>
+            <p>
+              一律走 <strong>planner → bootstrap → context pack → analytics module → answer / chart → review</strong>，
+              不直接把資料問題丟給模型即興回答。
+            </p>
+          </article>
+          <article class="card">
+            <span class="chip">控制延伸</span>
+            <p>
+              若既有 EnMS 已打通 MQTT、PLC、Modbus、BACnet、OPC UA 或其他 protocol adapter，
+              後續可進 human-approved semi-closed-loop；但目前不把全面自動控制當現況宣稱。
+            </p>
+          </article>
+          <article class="card">
+            <span class="chip">文案邊界</span>
+            <p>
+              沒有實作的特定模型名不要先寫進正式功能說明。先寫能力與方法，再隨實作版本補上具體演算法名稱。
+            </p>
+          </article>
+        </div>
+      </section>
+
+      <section class="section">
+        <h2>未來版本演進步驟</h2>
+        <p class="section-intro">
+          如果要把整個 AIAssistant 頁面推進到正式產品，版本演進不應按 UI 分頁平行開發，而應依 runtime 完整度、資料依賴與分析閉環成熟度分階段推進。
+        </p>
+        <div class="stack-list">
+          <article class="stack-item">
+            <strong>Version 1. 建立 AI-04 自然語言查詢主線</strong>
+            <p>優先將 EnMS 端 mockup drawer 換成真實 chat runtime。這一條線最接近現有 EnClaw 主線，也最能快速驗證 query、chart、缺資料治理與報表跳轉整合。</p>
+          </article>
+          <article class="stack-item">
+            <strong>Version 2. 接 AI-01 需量預警與 AI-09 Alert 治理</strong>
+            <p>這兩塊直接連到 summary layer、contract capacity 與 alert policy，是最容易形成營運價值與管理端感知差異的能力建設。</p>
+          </article>
+          <article class="stack-item">
+            <strong>Version 3. 補 AI-03 異常偵測與根因分析</strong>
+            <p>待 raw data 品質與主資料語意穩定後，再把 power quality、THD、connected、phase imbalance 與 root cause path 補齊。</p>
+          </article>
+          <article class="stack-item">
+            <strong>Version 4. 建立 AI-10 能效分析第一版 recommendation path</strong>
+            <p>先讓系統穩定輸出可審核的節能建議與改善方向，再進入 ROI 與 what-if simulation。</p>
+          </article>
+          <article class="stack-item">
+            <strong>Version 5. 強化 AI-05 多場域 Benchmarking 與 AI-10 ROI / what-if</strong>
+            <p>這兩塊對資料正規化、主資料完整度與專用演算法要求最高，應放在前述主線穩定後推進。</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="section">
+        <h2>後續演算法建設主線</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>演算法族群</th>
+              <th>最先對應的分頁</th>
+              <th>為什麼值得先做</th>
+              <th>目前複雜度判斷</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>EnPI / baseline regression</strong></td>
+              <td>AI-10 能效分析、AI-05 多場域 Benchmarking</td>
+              <td>最接近正統 EnMS / ISO 50001 的分析方法，不需要先有大量標註資料，也很適合後續節能診斷與 KPI 追蹤。</td>
+              <td>中</td>
+            </tr>
+            <tr>
+              <td><strong>decomposition + probabilistic demand forecast</strong></td>
+              <td>AI-01 需量預測、AI-09 Alert 治理</td>
+              <td>可以直接支撐超約預警、風險區間與降載建議，是最容易被管理端感受到價值的能力。</td>
+              <td>中</td>
+            </tr>
+            <tr>
+              <td><strong>multilayer anomaly detection</strong></td>
+              <td>AI-03 異常根因、AI-09 Alert 治理</td>
+              <td>能明顯提升異常抓取品質與告警治理效果，但需要較穩的 raw data 與場域校準。</td>
+              <td>中到高</td>
+            </tr>
+            <tr>
+              <td><strong>ISA-18.2 style alert governance</strong></td>
+              <td>AI-09 Alert 治理</td>
+              <td>這一塊不靠炫技模型也能快速建立價值，而且很貼近真實現場使用需求。</td>
+              <td>中</td>
+            </tr>
+          </tbody>
+        </table>
+        <div class="note">
+          <strong>這四類演算法可以直接寫進技術與實作文件。</strong>
+          因為它們代表的是明確的建設主線，而不是尚未收斂的候選清單。真正的工程難點通常不在模型函式本身，而在歷史資料長度、主資料完整度、門檻治理與場域校準。
+        </div>
+      </section>
+
+      <section class="section">
+        <h2>對外表述邊界</h2>
+        <div class="grid-2">
+          <article class="card">
+            <span class="chip">不應直接視為現況</span>
+            <ul>
+              <li>LSTM 已正式上線。</li>
+              <li>Isolation Forest 已正式上線。</li>
+              <li>k-means 已用於多場域分群。</li>
+              <li>已全面自動化 closed-loop control。</li>
+              <li>已是 field-proven 的工業級 forecasting platform。</li>
+            </ul>
+          </article>
+          <article class="card">
+            <span class="chip">目前較準的說法</span>
+            <ul>
+              <li>已具備第一版可驗證的需量預警、異常偵測、Alert 治理與自然語言查詢 runtime。</li>
+              <li>多場域 Benchmarking 與 ROI / what-if 模擬已有明確技術路徑，但仍需補資料模型與專用演算法。</li>
+              <li>控制可延伸到 human-approved 或 policy-governed 的半自動閉環控制，但不把它包裝成現況。</li>
+            </ul>
+          </article>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>

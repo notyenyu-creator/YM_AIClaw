@@ -190,6 +190,37 @@
       </section>
 
       <section class="section">
+        <h2>通用圖表測試</h2>
+        <div class="grid">
+          <article class="card">
+            <h3>純圖表 Renderer 測試</h3>
+            <div class="prompt">我只是想測試圖表產出，先給我一個簡單的長條圖範例，直接用靜態資料即可。</div>
+            <ol>
+              <li>預期：可直接輸出可渲染的 <code>report-json</code>。</li>
+              <li>回答特徵：panel 應有 <code>rows/data</code> 或有效的 <code>VALUES</code> SQL，不應再出現缺 <code>sql</code> 的壞圖卡。</li>
+              <li>如果 chart 只是 demo，不必硬接 live DB。</li>
+            </ol>
+          </article>
+          <article class="card">
+            <h3>正式圖表分析測試</h3>
+            <div class="prompt">請用 ERP 資料整理最近 30 天主要客戶的銷售訂單與出貨進度；如果要用圖表呈現，請先確認有非空聚合資料，再用圖表顯示。</div>
+            <ol>
+              <li>預期：先查到非空資料，再輸出圖表。</li>
+              <li>回答特徵：若 SQL 錯誤，應看到 query error；若資料空，應明講空資料而不是假裝有圖。</li>
+            </ol>
+          </article>
+          <article class="card">
+            <h3>EnMS 圖表降級測試</h3>
+            <div class="prompt">請用 EnMS 資料分析大溪廠過去 7 天最大需量；若契約容量資料不足，仍請先把可驗證的趨勢圖畫出來。</div>
+            <ol>
+              <li>預期：先明講契約容量是否缺資料，再退回 summary-layer 圖表。</li>
+              <li>回答特徵：不應因缺 <code>PowerAccounts</code> 就整段不畫圖，也不應捏造契約容量。</li>
+            </ol>
+          </article>
+        </div>
+      </section>
+
+      <section class="section">
         <h2>Y-CRM 題庫</h2>
         <div class="grid">
           <article class="card">

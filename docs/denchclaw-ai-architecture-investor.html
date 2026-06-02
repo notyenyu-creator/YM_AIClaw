@@ -357,7 +357,9 @@
             </p>
             <div class="hero-actions">
               <a class="action action-primary" href="./denchclaw-core-technology.html">看核心技術短版</a>
+              <a class="action action-secondary" href="./EnMES_AIClaw_technical-architecture.html">看技術架構深版</a>
               <a class="action action-secondary" href="./denchclaw-enms-ai.html">看 EnMS 專頁</a>
+              <a class="action action-secondary" href="./EnMES_AIClaw_enms-ai-market-comparison.html">看 EnMS 市場差異</a>
               <a class="action action-secondary" href="./denchclaw-validation-prompts.html">看驗證題庫</a>
             </div>
           </div>
@@ -393,7 +395,7 @@
         </article>
         <article class="signal">
           <h2>技術壁壘</h2>
-          <p>重點不在模型品牌，而在 join rule、review 邊界、知識沉澱與跨系統執行治理。</p>
+          <p>重點不在模型品牌，而在 join rule、chart runtime、review 邊界、知識沉澱與跨系統執行治理。</p>
         </article>
       </section>
 
@@ -462,6 +464,37 @@
       <section class="section">
         <div class="section-header">
           <div>
+            <h2>最近補足的工程證據</h2>
+          </div>
+          <p>這些是最近真正落成的 runtime 能力，讓三條線不只概念一致，也更容易被驗證。</p>
+        </div>
+        <div class="stack">
+          <article class="block">
+            <span class="kicker">Parity Audit</span>
+            <h2>多 Agent 功能排查</h2>
+            <p>新增 PM / RD / QA / TPM 角色檢查，直接 audit Y-CRM、ERP、EnMS 的 planner、context、learning、review 與 UI surface 是否對齊。</p>
+          </article>
+          <article class="block">
+            <span class="kicker">Chart Runtime</span>
+            <h2>圖表不再只靠單一路徑</h2>
+            <p>report-json 現在可走兩種路徑：一是經驗證的 SQL，二是 inline rows/data。這讓 live 查詢與純 demo chart 都能穩定渲染。</p>
+          </article>
+          <article class="block">
+            <span class="kicker">Query Governance</span>
+            <h2>Y-CRM / ERP / EnMS 圖表分流</h2>
+            <p><code>/api/workspace/reports/execute</code> 已能分流三個系統的外部 PG，並在 SQL 失敗時回明確錯誤，而不是把失敗吞成 No data。</p>
+          </article>
+          <article class="block">
+            <span class="kicker">Transport Guardrail</span>
+            <h2>完成回答後不再殘留假錯誤</h2>
+            <p>聊天前端會分辨 assistant 是否已給出完整回覆；若只是 transport 收尾抖動，不再把 generic fetch error 掛成誤導性的紅色錯誤列。</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="section">
+        <div class="section-header">
+          <div>
             <h2>跟市面常見做法的差異</h2>
           </div>
           <p>不是把 AI 寫得很神，而是把定位講準。</p>
@@ -495,6 +528,11 @@
               <td>把能耗數字口語化</td>
               <td>EnMS 已補上 summary-first forecast、raw anomaly validation、alert governance。</td>
             </tr>
+            <tr>
+              <td><strong>圖表型 Copilot</strong></td>
+              <td>只會吐一段 chart config，失敗時常變成空圖或假資料</td>
+              <td>DenchClaw 先確認資料來源，再以 validated SQL 或 inline rows/data 產圖，並把錯誤與缺資料分開處理。</td>
+            </tr>
           </tbody>
         </table>
       </section>
@@ -502,9 +540,9 @@
       <section class="section">
         <div class="section-header">
           <div>
-            <h2>直接看三個頁面就好</h2>
+            <h2>直接看六個頁面也可以</h2>
           </div>
-          <p>主頁收斂成入口頁，詳細技術拆成短版、EnMS 專版與驗證題庫。</p>
+          <p>主頁收斂成入口頁，技術深版、EnMS 專版、市場差異與驗證題庫分開閱讀，對外展示時更容易依對象切換。</p>
         </div>
         <div class="portal-grid">
           <a class="portal-card" href="./denchclaw-ai-architecture-investor.html">
@@ -519,14 +557,26 @@
             <p>聚焦 OpenClaw Gateway、Hermes-style、AI Wiki、模型策略、code proof。</p>
             <span class="linkline">前往短版技術頁 →</span>
           </a>
-          <a class="portal-card" href="./denchclaw-enms-ai.html">
+          <a class="portal-card" href="./EnMES_AIClaw_technical-architecture.html">
             <span class="kicker">Page 3</span>
+            <h2>技術架構深版</h2>
+            <p>用更技術、專業、細節化的方式說明核心架構、執行路徑、選型理由與核心價值。</p>
+            <span class="linkline">前往技術深版 →</span>
+          </a>
+          <a class="portal-card" href="./denchclaw-enms-ai.html">
+            <span class="kicker">Page 4</span>
             <h2>EnMS 專頁</h2>
             <p>專門講能管數據分析、預警、告警、資料路徑與目前已實作的 analytics modules。</p>
             <span class="linkline">前往 EnMS 專頁 →</span>
           </a>
+          <a class="portal-card" href="./EnMES_AIClaw_enms-ai-market-comparison.html">
+            <span class="kicker">Page 5</span>
+            <h2>EnMS AI 市場差異</h2>
+            <p>整理市面 AI EnMS 常見能力、官方產品路線，以及 DenchClaw 在 EnMS AI 裡真正不同的地方。</p>
+            <span class="linkline">前往市場差異頁 →</span>
+          </a>
           <a class="portal-card" href="./denchclaw-validation-prompts.html">
-            <span class="kicker">Page 4</span>
+            <span class="kicker">Page 6</span>
             <h2>驗證題庫</h2>
             <p>直接拿來測 Y-CRM / ERP / EnMS routing、bootstrap 與缺資料回覆格式。</p>
             <span class="linkline">前往驗證題庫 →</span>
@@ -563,6 +613,17 @@
             <p><code>apps/web/lib/enms-demand-forecast-engine.ts</code></p>
             <p><code>apps/web/lib/enms-anomaly-detection-engine.ts</code></p>
             <p><code>apps/web/lib/enms-alert-governance-engine.ts</code></p>
+          </article>
+          <article class="proof">
+            <strong>Chart Runtime</strong>
+            <p><code>apps/web/app/api/workspace/reports/execute/route.ts</code></p>
+            <p><code>apps/web/app/components/charts/report-card.tsx</code></p>
+            <p><code>apps/web/app/components/charts/report-viewer.tsx</code></p>
+          </article>
+          <article class="proof">
+            <strong>Multi-Agent Parity Audit</strong>
+            <p><code>apps/web/lib/domain-parity-audit.ts</code></p>
+            <p><code>apps/web/app/debug/domain-parity-audit/page.tsx</code></p>
           </article>
         </div>
         <div class="footer-note">

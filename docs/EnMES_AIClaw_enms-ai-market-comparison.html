@@ -1,0 +1,578 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>EnClaw EnMS AI 與市面差異</title>
+    <style>
+      :root {
+        --bg: #f4f8f7;
+        --surface: rgba(255, 255, 255, 0.92);
+        --text: #102330;
+        --text-soft: #586977;
+        --line: rgba(16, 35, 48, 0.1);
+        --teal: #0f766e;
+        --blue: #145da0;
+        --amber: #d97706;
+        --shadow: 0 20px 56px rgba(10, 24, 34, 0.08);
+        --max: 1160px;
+      }
+
+      * { box-sizing: border-box; }
+
+      body {
+        margin: 0;
+        font-family: "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", sans-serif;
+        color: var(--text);
+        line-height: 1.72;
+        background:
+          radial-gradient(circle at top left, rgba(15, 118, 110, 0.12), transparent 26rem),
+          linear-gradient(180deg, #fbfcfc 0%, var(--bg) 100%);
+      }
+
+      .shell {
+        max-width: var(--max);
+        margin: 0 auto;
+        padding: 28px 20px 72px;
+      }
+
+      .hero, .section {
+        border: 1px solid var(--line);
+        border-radius: 28px;
+        padding: 28px;
+        background: var(--surface);
+        box-shadow: var(--shadow);
+      }
+
+      .hero {
+        color: #ebf7f4;
+        background:
+          radial-gradient(circle at 100% 0%, rgba(160, 244, 220, 0.16), transparent 22rem),
+          linear-gradient(135deg, #07222a 0%, #0f4d56 54%, #145da0 100%);
+      }
+
+      .eyebrow, .chip {
+        display: inline-flex;
+        align-items: center;
+        border-radius: 999px;
+        padding: 8px 14px;
+        font-size: 12px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        font-weight: 700;
+      }
+
+      .eyebrow {
+        border: 1px solid rgba(255,255,255,0.16);
+        background: rgba(255,255,255,0.08);
+      }
+
+      .chip {
+        margin-bottom: 12px;
+        background: rgba(20, 93, 160, 0.1);
+        color: var(--blue);
+      }
+
+      .status-tag {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 999px;
+        padding: 7px 12px;
+        font-size: 11px;
+        letter-spacing: 0.04em;
+        line-height: 1;
+        white-space: nowrap;
+        text-transform: uppercase;
+        font-weight: 800;
+        min-width: 72px;
+      }
+
+      .status-live {
+        background: rgba(31, 122, 82, 0.12);
+        color: var(--teal);
+      }
+
+      .status-extend {
+        background: rgba(217, 119, 6, 0.12);
+        color: var(--amber);
+      }
+
+      .status-iterate {
+        background: rgba(20, 93, 160, 0.1);
+        color: var(--blue);
+      }
+
+      h1, h2, h3 {
+        margin: 0 0 12px;
+        font-family: "Noto Serif TC", "PMingLiU", serif;
+        letter-spacing: -0.03em;
+      }
+
+      h1 { font-size: clamp(34px, 5vw, 58px); line-height: 1.05; margin-top: 16px; }
+      h2 { font-size: clamp(28px, 3vw, 40px); line-height: 1.08; }
+      h3 { font-size: 22px; line-height: 1.14; }
+
+      p { margin: 0; color: var(--text-soft); font-size: 15px; }
+      .hero p { color: rgba(235,247,244,0.9); }
+
+      .hero-grid {
+        display: grid;
+        grid-template-columns: minmax(0, 1.16fr) minmax(300px, 0.84fr);
+        gap: 24px;
+        align-items: end;
+      }
+
+      .hero-copy p {
+        max-width: 760px;
+        font-size: 17px;
+      }
+
+      .hero-rail {
+        display: grid;
+        gap: 14px;
+      }
+
+      .hero-metric {
+        border: 1px solid rgba(255,255,255,0.14);
+        border-radius: 22px;
+        padding: 16px 18px;
+        background: rgba(255,255,255,0.08);
+        backdrop-filter: blur(10px);
+      }
+
+      .hero-metric strong {
+        display: block;
+        margin-bottom: 6px;
+        font-size: 14px;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+      }
+
+      .hero-metric p {
+        color: rgba(235,247,244,0.9);
+        font-size: 14px;
+      }
+
+      .hero-actions {
+        display: flex;
+        margin-top: 22px;
+      }
+
+      .github-link {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 46px;
+        height: 46px;
+        border-radius: 999px;
+        border: 1px solid rgba(255,255,255,0.18);
+        background: rgba(255,255,255,0.08);
+        color: #f8fbfc;
+        box-shadow: inset 0 1px 0 rgba(255,255,255,0.08);
+        transition: transform 160ms ease, background 160ms ease, border-color 160ms ease;
+      }
+
+      .github-link:hover {
+        transform: translateY(-1px);
+        background: rgba(255,255,255,0.14);
+        border-color: rgba(255,255,255,0.28);
+      }
+
+      .github-link svg {
+        width: 22px;
+        height: 22px;
+        fill: currentColor;
+      }
+
+      .section { margin-top: 20px; }
+
+      .section-intro {
+        max-width: 860px;
+        margin: 0 0 18px;
+      }
+
+      .grid-4, .grid-3, .grid-2 {
+        display: grid;
+        gap: 16px;
+      }
+
+      .summary-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 14px;
+        margin-top: 18px;
+      }
+
+      .summary-card {
+        border: 1px solid var(--line);
+        border-radius: 22px;
+        padding: 18px;
+        background: linear-gradient(180deg, rgba(255,255,255,0.98) 0%, rgba(244,248,247,0.95) 100%);
+      }
+
+      .summary-card strong {
+        display: block;
+        margin-bottom: 8px;
+        font-size: 15px;
+      }
+
+      .grid-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+      .grid-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .grid-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+
+      .card {
+        border: 1px solid var(--line);
+        border-radius: 22px;
+        padding: 18px;
+        background: #fff;
+      }
+
+      .card h3 {
+        margin-bottom: 8px;
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 14px;
+      }
+
+      th, td {
+        border: 1px solid var(--line);
+        padding: 14px 13px;
+        text-align: left;
+        vertical-align: top;
+      }
+
+      th {
+        background: #eef6f4;
+        font-size: 12px;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+      }
+
+      tbody tr:nth-child(even) {
+        background: rgba(244, 248, 247, 0.72);
+      }
+
+      code {
+        font-family: "SFMono-Regular", "JetBrains Mono", Consolas, monospace;
+        font-size: 12px;
+        color: var(--blue);
+      }
+
+      ul {
+        margin: 10px 0 0;
+        padding-left: 18px;
+        color: var(--text-soft);
+      }
+
+      .note {
+        margin-top: 16px;
+        border-left: 4px solid var(--amber);
+        border-radius: 0 16px 16px 0;
+        padding: 14px 16px;
+        background: rgba(217, 119, 6, 0.08);
+        color: var(--text-soft);
+      }
+
+      .sources a {
+        color: var(--blue);
+        text-decoration: none;
+      }
+
+      .sources li + li { margin-top: 8px; }
+
+      @media (max-width: 980px) {
+        .hero-grid,
+        .summary-grid,
+        .grid-4, .grid-3, .grid-2 { grid-template-columns: 1fr; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="shell">
+      <header class="hero">
+        <div class="hero-grid">
+          <div class="hero-copy">
+            <span class="eyebrow">EnClaw / EnMS AI / 市場差異分析</span>
+            <h1>EnClaw 的定位是內嵌於 EnMS 之上的 AI decision and governance layer。</h1>
+            <p>
+              市面主流 AI EnMS 多半以監控平台、設備連接、告警、報表與 anomaly / forecast 功能為主；
+              EnClaw 的差異化則在於 <strong>schema bootstrap、缺資料治理、explainable analytics、reviewable knowledge loop、
+              與可內嵌到既有 EnMS 的 AI runtime</strong>。
+            </p>
+            <div class="hero-actions">
+              <a
+                class="github-link"
+                href="https://github.com/notyenyu-creator/YM_AIClaw"
+                target="_blank"
+                rel="noreferrer"
+                aria-label="GitHub"
+                title="GitHub"
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M12 .5C5.65.5.5 5.65.5 12A11.5 11.5 0 0 0 8.36 22.1c.58.11.79-.25.79-.56v-2.02c-3.18.69-3.85-1.35-3.85-1.35-.52-1.31-1.26-1.66-1.26-1.66-1.03-.7.08-.69.08-.69 1.13.08 1.72 1.16 1.72 1.16 1.01 1.72 2.64 1.23 3.28.94.1-.73.39-1.23.71-1.52-2.54-.29-5.21-1.27-5.21-5.65 0-1.25.45-2.28 1.17-3.08-.12-.29-.51-1.47.11-3.07 0 0 .96-.31 3.14 1.18a10.9 10.9 0 0 1 5.72 0c2.18-1.49 3.14-1.18 3.14-1.18.62 1.6.23 2.78.11 3.07.73.8 1.17 1.83 1.17 3.08 0 4.39-2.67 5.36-5.22 5.65.4.35.76 1.04.76 2.11v3.13c0 .31.21.68.8.56A11.5 11.5 0 0 0 23.5 12C23.5 5.65 18.35.5 12 .5Z" />
+                </svg>
+              </a>
+            </div>
+          </div>
+          <div class="hero-rail">
+            <article class="hero-metric">
+              <strong>一句話</strong>
+              <p>不是另一套監控平台，而是疊加在既有 EnMS 之上的 AI 決策與治理層。</p>
+            </article>
+            <article class="hero-metric">
+              <strong>真正差異</strong>
+              <p>差異不只在能不能聊天，而在 bootstrap、analytics、review 與 knowledge governance。</p>
+            </article>
+            <article class="hero-metric">
+              <strong>對外邊界</strong>
+              <p>先以 AI decision layer 定位對外，不誇大成全面自動化的 EnMS 主平台。</p>
+            </article>
+            <article class="hero-metric">
+              <strong>內容原則</strong>
+              <p>本頁只比較已落地能力與已有明確技術路徑的可延伸能力，不把未驗證方向包裝成現況。</p>
+            </article>
+          </div>
+        </div>
+      </header>
+
+      <section class="section">
+        <h2>先看結論</h2>
+        <div class="summary-grid">
+          <article class="summary-card">
+            <strong>定位</strong>
+            <p>EnClaw 的價值不在取代 EnMS，而在把現有 EnMS 資料升級成可推理、可治理、可沉澱的 AI 執行層。</p>
+          </article>
+          <article class="summary-card">
+            <strong>比較邏輯</strong>
+            <p>不是比誰的監控畫面多，而是比誰能把資料、分析、缺資料治理與 review 流程收斂成長期資產。</p>
+          </article>
+          <article class="summary-card">
+            <strong>最穩說法</strong>
+            <p>市面主流 EnMS 強在平台深度；EnClaw 強在 AI runtime、explainable analytics 與 decision/governance layer。</p>
+          </article>
+        </div>
+        <div class="note">
+          本頁採用三種口徑：<span class="status-tag status-live">已落地</span> 表示 repo 與 runtime 已能驗證；<span class="status-tag status-extend">可延伸</span> 表示已有明確技術路徑，但不當成現況宣稱；<span class="status-tag status-iterate">持續迭代</span> 表示已經有第一版能力，但效果仍會隨資料與版本持續提升。
+        </div>
+      </section>
+
+      <section class="section">
+        <h2>AI EnMS 一般常見的功能</h2>
+        <p class="section-intro">先把共同語言講清楚。這些是大多數 AI EnMS 都會提到的標準能力，後面才比較有意義去看 EnClaw 差異在哪。</p>
+        <div class="grid-4">
+          <article class="card">
+            <span class="chip">1. Data Integration</span>
+            <p>接電表、gateway、BMS、SCADA、IoT、天氣、報表資料，形成能源監控與分析底盤。</p>
+          </article>
+          <article class="card">
+            <span class="chip">2. KPI / Benchmark</span>
+            <p>用電量、最大需量、功因、碳排、EnPI、場域排名、能效基線與持續改善追蹤。</p>
+          </article>
+          <article class="card">
+            <span class="chip">3. Forecast</span>
+            <p>預測能耗、尖峰需量、預算或契約容量風險，並提供預警與排程建議。</p>
+          </article>
+          <article class="card">
+            <span class="chip">4. Anomaly Detection</span>
+            <p>找出異常耗能、功因偏移、電力品質異常、通訊掉線、設備異常波動。</p>
+          </article>
+          <article class="card">
+            <span class="chip">5. Alerting</span>
+            <p>依規則或模型輸出告警，做分級、彙整、通知與處置建議。</p>
+          </article>
+          <article class="card">
+            <span class="chip">6. Root Cause</span>
+            <p>把異常從 summary 追到 raw point，定位設備、時段、品質訊號與可能原因。</p>
+          </article>
+          <article class="card">
+            <span class="chip">7. Reporting</span>
+            <p>自動產出 dashboard、趨勢圖、ISO 50001 / ESG 報表與管理摘要。</p>
+          </article>
+          <article class="card">
+            <span class="chip">8. Copilot</span>
+            <p>以自然語言查詢、摘要與說明能源狀態，但多半仍停留在 dashboard AI 層。</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="section">
+        <h2>主流 AI EnMS 背後常見的演算法族群</h2>
+        <p class="section-intro">
+          市面上比較成熟的 AI EnMS，通常不是靠單一聊天模型，而是把規則、統計基線、預測模型與告警治理流程疊在一起。這也是 EnClaw 後續最值得補強的方向。
+        </p>
+        <div class="grid-4">
+          <article class="card">
+            <span class="chip">1. Baseline / EnPI</span>
+            <p>常見做法是 regression baseline、weather normalization 或 time-of-week baseline，用來建立能效基準與持續改善追蹤。</p>
+          </article>
+          <article class="card">
+            <span class="chip">2. Forecast</span>
+            <p>常見做法是 decomposition、probabilistic forecast，進一步才會往更重的時序模型發展，用於需量預警與契約容量風險判讀。</p>
+          </article>
+          <article class="card">
+            <span class="chip">3. Anomaly</span>
+            <p>常見做法是 residual anomaly、change-point、robust statistics，再疊加 power-quality 與 connectivity 規則，形成多層異常偵測。</p>
+          </article>
+          <article class="card">
+            <span class="chip">4. Alarm Governance</span>
+            <p>成熟系統通常會加入 deadband、hysteresis、suppression、shelving 與 escalation policy，而不是讓模型直接決定告警強度。</p>
+          </article>
+        </div>
+        <div class="note">
+          這也是為什麼高階 AI EnMS 的技術深度，通常不在單一模型名稱，而在於<strong>baseline、forecast、anomaly 與 alert governance</strong> 能否被組成一套可長期運作的分析與治理堆疊。
+        </div>
+      </section>
+
+      <section class="section">
+        <h2>主流官方產品通常怎麼做</h2>
+        <div class="grid-3">
+          <article class="card">
+            <span class="chip">Schneider Electric</span>
+            <p>EcoStruxure Power Monitoring Expert 的重點偏向 power monitoring、power quality、事件與告警管理、自動報表、預測性分析與用電可靠度。</p>
+          </article>
+          <article class="card">
+            <span class="chip">Siemens</span>
+            <p>Energy Manager / Building X Energy Manager 的重點偏向場域透明度、forecasting、anomaly detection、portfolio benchmarking、規則模板與工業/建築整合。</p>
+          </article>
+          <article class="card">
+            <span class="chip">Honeywell</span>
+            <p>Honeywell Forge 更像 AI-enabled operations platform，強調企業入口、AI engine、跨 building / industrial operations 的統整。</p>
+          </article>
+        </div>
+        <div class="note">
+          這些產品的共通點是：先有完整監控與平台能力，再把 AI analytics 疊上去。
+          EnClaw 的切入點不同，它更像<strong>內嵌於既有 EnMS 的 AI runtime 與 decision layer</strong>。
+        </div>
+      </section>
+
+      <section class="section">
+        <h2>EnClaw 在 EnMS AI 裡真正不同的地方</h2>
+        <p class="section-intro">這一段看的不是功能表面，而是產品層級的差異。也就是同樣都能做 forecast、anomaly、copilot，為什麼 EnClaw 的技術路徑和一般 AI EnMS 不一樣。</p>
+        <div class="grid-3">
+          <article class="card">
+            <span class="chip">Difference 1</span>
+            <h3>不是另一套監控平台</h3>
+            <p>EnClaw 不主打取代既有 EnMS 的設備、gateway、監控底盤，而是疊加在其上，讓資料變成可推理、可追問、可治理的 AI 流程。</p>
+          </article>
+          <article class="card">
+            <span class="chip">Difference 2</span>
+            <h3>有 Bootstrap 與缺資料意識</h3>
+            <p>在回答前先檢查 schema、表、欄位、join 與 availability。若資料缺失，必須明講缺口，而不是直接硬猜。</p>
+          </article>
+          <article class="card">
+            <span class="chip">Difference 3</span>
+            <h3>分析模組可審核</h3>
+            <p>Demand forecast、anomaly detection、alert governance 是程式化模組，可看規則、看中間輸出、看測試，而不只是黑盒模型。這些屬於 <span class="status-tag status-live">已落地</span> 能力。</p>
+          </article>
+          <article class="card">
+            <span class="chip">Difference 4</span>
+            <h3>回答後可進 review</h3>
+            <p>不是一次性回答結束，而是能進 learning draft、review、promotion，把能源知識與操作規則沉澱下來。</p>
+          </article>
+          <article class="card">
+            <span class="chip">Difference 5</span>
+            <h3>圖表 runtime 有雙模式</h3>
+            <p>正式分析可走可執行 SQL；純 demo 或 renderer 驗證可用 inline rows/data，同一套前端元件就能支援兩種情境。</p>
+          </article>
+          <article class="card">
+            <span class="chip">Difference 6</span>
+            <h3>更容易內嵌與客製</h3>
+            <p>只要 EnMS DB / API 可接，就能快速做 domain routing、分析與治理，而不必先替換原本的能管主平台。</p>
+          </article>
+          <article class="card">
+            <span class="chip">Difference 7</span>
+            <h3>可延伸到半自動閉環控制</h3>
+            <p>若既有 EnMS 已和 MQTT、PLC 及現場 protocol 打通，EnClaw 可從 AI 分析層延伸到 human-approved 或 policy-governed 的半自動閉環控制。這屬於 <span class="status-tag status-extend">可延伸</span> 能力，不把它包裝成已全面自動上線的現況。</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="section">
+        <h2>對照表：市面 AI EnMS 與 EnClaw EnMS AI</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>面向</th>
+              <th>市面常見 AI EnMS</th>
+              <th>EnClaw EnMS AI</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>產品形態</strong></td>
+              <td>完整 EnMS / power monitoring suite 的 AI 功能層。</td>
+              <td>加在既有 EnMS 之上的 AI decision / copilot / governance layer。</td>
+            </tr>
+            <tr>
+              <td><strong>核心強項</strong></td>
+              <td>監控、告警、報表、power quality、可靠度、場域管理。</td>
+              <td>schema bootstrap、缺資料治理、可審核 analytics、reviewable AI runtime。</td>
+            </tr>
+            <tr>
+              <td><strong>資料假設</strong></td>
+              <td>通常假設本平台資料模型已完備。</td>
+              <td>假設資料可能不完美，因此回答前必須先做 availability 與 gap detection。</td>
+            </tr>
+            <tr>
+              <td><strong>AI 風格</strong></td>
+              <td>多半是 anomaly / forecast / copilot 等功能點。</td>
+              <td>AI 是完整執行層，要經過 planner、context、analytics、review、promotion。</td>
+            </tr>
+            <tr>
+              <td><strong>圖表生成</strong></td>
+              <td>通常綁在本平台 dashboard 與內建資料流。</td>
+              <td>可用可執行 SQL 或 inline rows/data，適合真實分析與 demo 驗證雙情境。</td>
+            </tr>
+            <tr>
+              <td><strong>導入方式</strong></td>
+              <td>偏平台導向。</td>
+              <td>偏 AI layer 導向，更適合加在現有 EnMS 之上。</td>
+            </tr>
+            <tr>
+              <td><strong>控制延伸</strong></td>
+              <td>若要做控制，多半由原生平台或既有 OT 系統主導。</td>
+              <td>若現場已接 MQTT、PLC 或其他可控介面，可往半自動 closed-loop control layer 延伸；這裡應視為 <span class="status-tag status-extend">可延伸</span>，不是已全面上線的現況。</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section class="section">
+        <h2>最準的對外說法</h2>
+        <div class="grid-2">
+          <article class="card">
+            <span class="chip">適合講的</span>
+            <ul>
+              <li>EnClaw 是內嵌於 EnMS 的 AI operating layer。</li>
+              <li>核心價值在於把 EnMS 資料變成可分析、可解釋、可治理的 AI 流程。</li>
+              <li>差異化在於 bootstrap、data-gap governance、explainable analytics、review loop。</li>
+              <li>若既有控制介面明確可控，可延伸到 human-approved 或 policy-governed 的半自動閉環控制。</li>
+            </ul>
+          </article>
+          <article class="card">
+            <span class="chip">不要講過頭</span>
+            <ul>
+              <li>不要講成已經比所有主流 EnMS 平台功能更完整。</li>
+              <li>不要一開始就講成已全面自動控制所有現場設備；更準的說法是目前先以 AI decision layer 與可延伸的 closed-loop 能力對外描述。</li>
+              <li>不要講成要取代既有 EnMS 主平台；更準的說法是「AI 增強層」。</li>
+            </ul>
+          </article>
+        </div>
+      </section>
+
+      <section class="section sources">
+        <h2>官方公開資料參考</h2>
+        <ul>
+          <li><a href="https://www.se.com/us/en/product-range/65404-ecostruxure-power-monitoring-expert/" target="_blank" rel="noreferrer">Schneider Electric EcoStruxure Power Monitoring Expert</a></li>
+          <li><a href="https://www.siemens.com/en-us/products/building-x/applications/energy-manager/" target="_blank" rel="noreferrer">Siemens Building X Energy Manager</a></li>
+          <li><a href="https://www.siemens.com/en-us/energy-manager/" target="_blank" rel="noreferrer">Siemens SIMATIC Energy Manager</a></li>
+          <li><a href="https://www.honeywell.com/us/en/solutions/honeywell-forge" target="_blank" rel="noreferrer">Honeywell Forge</a></li>
+        </ul>
+      </section>
+    </div>
+  </body>
+</html>
