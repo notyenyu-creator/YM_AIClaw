@@ -1,0 +1,1252 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>EnMS AIClaw 程式碼比例與模組對照</title>
+    <style>
+      :root {
+        --bg: #f4f7f7;
+        --surface: rgba(255, 255, 255, 0.94);
+        --surface-strong: #ffffff;
+        --text: #102330;
+        --muted: #5a6d7d;
+        --line: rgba(16, 35, 48, 0.12);
+        --teal: #0f766e;
+        --blue: #145da0;
+        --amber: #c56a00;
+        --green: #1f7a52;
+        --red: #b42318;
+        --ink: #071c28;
+        --shadow: 0 24px 70px rgba(10, 24, 34, 0.09);
+        --max: 1240px;
+      }
+
+      * { box-sizing: border-box; }
+
+      html { scroll-behavior: smooth; }
+
+      body {
+        margin: 0;
+        font-family: "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", sans-serif;
+        color: var(--text);
+        line-height: 1.72;
+        background:
+          radial-gradient(circle at top left, rgba(15, 118, 110, 0.13), transparent 25rem),
+          radial-gradient(circle at top right, rgba(20, 93, 160, 0.1), transparent 30rem),
+          linear-gradient(180deg, #fbfcfc 0%, var(--bg) 100%);
+      }
+
+      .shell {
+        max-width: var(--max);
+        margin: 0 auto;
+        padding: 28px 20px 72px;
+      }
+
+      .hero,
+      .section {
+        border: 1px solid var(--line);
+        border-radius: 30px;
+        background: var(--surface);
+        box-shadow: var(--shadow);
+        overflow: hidden;
+      }
+
+      .hero {
+        padding: 34px 36px;
+        color: #eef7f8;
+        background:
+          radial-gradient(circle at 86% 6%, rgba(138, 244, 210, 0.18), transparent 20rem),
+          linear-gradient(135deg, #071c28 0%, #0b3a4a 52%, #145da0 100%);
+      }
+
+      .hero-grid {
+        display: block;
+      }
+
+      .eyebrow,
+      .tag,
+      .status {
+        display: inline-flex;
+        align-items: center;
+        width: fit-content;
+        border-radius: 999px;
+        font-weight: 800;
+        letter-spacing: 0.06em;
+        white-space: nowrap;
+      }
+
+      .eyebrow {
+        padding: 8px 14px;
+        font-size: 12px;
+        text-transform: uppercase;
+        color: rgba(238, 247, 248, 0.94);
+        border: 1px solid rgba(255, 255, 255, 0.16);
+        background: rgba(255, 255, 255, 0.08);
+      }
+
+      .tag {
+        padding: 6px 11px;
+        font-size: 11px;
+        background: rgba(20, 93, 160, 0.1);
+        color: var(--blue);
+      }
+
+      .status {
+        padding: 7px 12px;
+        font-size: 11px;
+        line-height: 1;
+      }
+
+      .status-base { background: rgba(20, 93, 160, 0.1); color: var(--blue); }
+      .status-ym { background: rgba(15, 118, 110, 0.12); color: var(--teal); }
+      .status-mixed { background: rgba(197, 106, 0, 0.12); color: var(--amber); }
+      .status-risk { background: rgba(180, 35, 24, 0.1); color: var(--red); }
+
+      h1,
+      h2,
+      h3 {
+        margin: 0;
+        font-family: "Noto Serif TC", "PMingLiU", serif;
+        letter-spacing: -0.03em;
+        color: var(--ink);
+      }
+
+      .hero h1 {
+        margin-top: 18px;
+        color: #f6fbfb;
+        max-width: 620px;
+        font-size: clamp(34px, 4.2vw, 52px);
+        line-height: 1.1;
+      }
+
+      h2 {
+        font-size: clamp(28px, 3vw, 40px);
+        line-height: 1.12;
+      }
+
+      h3 {
+        font-size: 21px;
+        line-height: 1.18;
+      }
+
+      p {
+        margin: 0;
+        color: var(--muted);
+        font-size: 15px;
+      }
+
+      .hero p {
+        max-width: 780px;
+        margin-top: 16px;
+        color: rgba(238, 247, 248, 0.9);
+        font-size: 17px;
+      }
+
+      .meta-grid {
+        display: grid;
+        gap: 12px;
+      }
+
+      .meta-card {
+        border: 1px solid rgba(255, 255, 255, 0.14);
+        border-radius: 22px;
+        padding: 17px 18px;
+        background: rgba(255, 255, 255, 0.1);
+        backdrop-filter: blur(10px);
+      }
+
+      .meta-card b {
+        display: block;
+        margin-bottom: 3px;
+        color: #f7fbfc;
+        font-size: 13px;
+      }
+
+      .meta-card span {
+        color: rgba(238, 247, 248, 0.9);
+        font-size: 13px;
+      }
+
+      .hero code {
+        color: #d9fbff;
+        background: rgba(3, 16, 24, 0.46);
+        border: 1px solid rgba(255, 255, 255, 0.2);
+        box-shadow: inset 0 0 0 1px rgba(3, 16, 24, 0.12);
+      }
+
+      .section {
+        margin-top: 22px;
+        padding: 30px;
+      }
+
+      .section-head {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 20px;
+        align-items: start;
+        margin-bottom: 22px;
+      }
+
+      .section-head p {
+        max-width: 880px;
+        margin-top: 8px;
+      }
+
+      .answer-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 14px;
+      }
+
+      .direct-grid {
+        display: grid;
+        gap: 24px;
+      }
+
+      .summary-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 14px;
+        margin-bottom: 28px;
+      }
+
+      .summary-card {
+        border: 1px solid rgba(15, 118, 110, 0.24);
+        border-radius: 22px;
+        padding: 18px;
+        background:
+          linear-gradient(180deg, rgba(15, 118, 110, 0.08), rgba(20, 93, 160, 0.04));
+      }
+
+      .summary-card b {
+        display: block;
+        margin-bottom: 8px;
+        color: var(--ink);
+        font-size: 18px;
+      }
+
+      .summary-card p {
+        color: #334b5e;
+        font-size: 15px;
+      }
+
+      .answer-card,
+      .direct-card,
+      .method-card,
+      .file-card {
+        border: 1px solid var(--line);
+        border-radius: 22px;
+        padding: 18px;
+        background: var(--surface-strong);
+      }
+
+      .direct-card {
+        padding: 22px;
+      }
+
+      .direct-card h3 {
+        margin-top: 10px;
+        font-size: 24px;
+      }
+
+      .question-text {
+        margin-top: 10px;
+        border-radius: 16px;
+        padding: 12px 14px;
+        color: #355064;
+        background: rgba(20, 93, 160, 0.07);
+        font-size: 14px;
+        line-height: 1.65;
+      }
+
+      .answer-line {
+        margin-top: 14px;
+        border-radius: 18px;
+        padding: 15px 16px;
+        color: var(--ink);
+        background: rgba(15, 118, 110, 0.1);
+        font-weight: 850;
+      }
+
+      .answer-line strong {
+        color: var(--teal);
+      }
+
+      .scope-note {
+        margin-top: 14px;
+        color: var(--muted);
+      }
+
+      .module-map {
+        display: grid;
+        gap: 14px;
+        margin-top: 16px;
+      }
+
+      .module-map-card {
+        border: 1px solid var(--line);
+        border-radius: 18px;
+        padding: 16px;
+        background: rgba(255, 255, 255, 0.82);
+      }
+
+      .module-map-head {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        margin-bottom: 12px;
+      }
+
+      .module-map-head h4 {
+        margin: 0;
+        color: var(--ink);
+        font-size: 19px;
+        line-height: 1.25;
+      }
+
+      .module-map-body {
+        display: grid;
+        grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.35fr);
+        gap: 14px;
+      }
+
+      .module-map-col {
+        min-width: 0;
+        border: 1px solid rgba(16, 35, 48, 0.08);
+        border-radius: 16px;
+        padding: 14px;
+        background: rgba(248, 251, 252, 0.88);
+      }
+
+      .module-map-col.ym {
+        border-color: rgba(15, 118, 110, 0.2);
+        background: rgba(15, 118, 110, 0.08);
+      }
+
+      .module-map-col b {
+        display: block;
+        margin-bottom: 9px;
+        color: var(--ink);
+      }
+
+      .module-map-col p {
+        margin-top: 10px;
+        color: #365062;
+        font-size: 14px;
+      }
+
+      .path-list {
+        display: grid;
+        gap: 8px;
+        margin: 0;
+        padding: 0;
+        list-style: none;
+      }
+
+      .path-list li {
+        min-width: 0;
+      }
+
+      .path-list code {
+        display: block;
+        width: 100%;
+        padding: 8px 10px;
+        border-radius: 10px;
+        line-height: 1.45;
+        white-space: normal;
+        overflow-wrap: anywhere;
+        background: rgba(20, 93, 160, 0.08);
+      }
+
+      .mini-ratio {
+        width: 100%;
+        margin-top: 16px;
+        overflow-x: auto;
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        background: rgba(255, 255, 255, 0.74);
+      }
+
+      .mini-ratio table {
+        min-width: 980px;
+        table-layout: fixed;
+      }
+
+      .mini-ratio th,
+      .mini-ratio td {
+        padding: 11px 12px;
+        font-size: 13px;
+      }
+
+      .mini-ratio th {
+        white-space: normal;
+      }
+
+      .mapping-split {
+        display: grid;
+        grid-template-columns: 0.9fr 1.1fr;
+        gap: 14px;
+        margin-top: 16px;
+      }
+
+      .mapping-box {
+        border: 1px solid var(--line);
+        border-radius: 18px;
+        padding: 16px;
+        background: rgba(255, 255, 255, 0.76);
+      }
+
+      .mapping-box.ym {
+        border-color: rgba(15, 118, 110, 0.28);
+        background: rgba(15, 118, 110, 0.08);
+      }
+
+      .mapping-box b {
+        display: block;
+        margin-bottom: 8px;
+        color: var(--ink);
+      }
+
+      .mapping-box ul {
+        display: grid;
+        gap: 7px;
+        margin: 0;
+        padding-left: 18px;
+        color: #40566a;
+        font-size: 14px;
+      }
+
+      .module-pills {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 14px;
+      }
+
+      .module-pills span {
+        display: inline-flex;
+        align-items: center;
+        border-radius: 999px;
+        padding: 6px 10px;
+        color: #234156;
+        background: rgba(20, 93, 160, 0.08);
+        font-size: 12px;
+        font-weight: 800;
+      }
+
+      .ym-highlight {
+        border-color: rgba(15, 118, 110, 0.34);
+        background:
+          linear-gradient(180deg, rgba(15, 118, 110, 0.11), rgba(255, 255, 255, 0.96));
+        box-shadow: inset 0 0 0 1px rgba(15, 118, 110, 0.08);
+      }
+
+      .answer-card strong {
+        display: block;
+        margin: 10px 0 6px;
+        font-size: 20px;
+        color: var(--ink);
+      }
+
+      .answer-card p,
+      .method-card p,
+      .file-card p {
+        font-size: 14px;
+      }
+
+      .ratio-strip {
+        display: grid;
+        grid-template-columns: 0fr 46.52fr 53.48fr;
+        min-height: 18px;
+        overflow: hidden;
+        border-radius: 999px;
+        background: #e9eff2;
+      }
+
+      .ratio-strip span:nth-child(1) { background: #8fb4ca; }
+      .ratio-strip span:nth-child(2) { background: var(--blue); }
+      .ratio-strip span:nth-child(3) { background: var(--teal); }
+
+      .legend {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px 16px;
+        margin-top: 12px;
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      .legend i {
+        display: inline-block;
+        width: 10px;
+        height: 10px;
+        margin-right: 6px;
+        border-radius: 99px;
+        vertical-align: -1px;
+      }
+
+      .dot-open { background: #8fb4ca; }
+      .dot-dench { background: var(--blue); }
+      .dot-ym { background: var(--teal); }
+
+      .table-wrap {
+        overflow-x: auto;
+        border: 1px solid var(--line);
+        border-radius: 22px;
+        background: var(--surface-strong);
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        min-width: 940px;
+      }
+
+      .compact-table table {
+        min-width: 0;
+        table-layout: fixed;
+      }
+
+      th,
+      td {
+        padding: 14px 16px;
+        border-bottom: 1px solid var(--line);
+        text-align: left;
+        vertical-align: top;
+        font-size: 14px;
+      }
+
+      th {
+        color: var(--ink);
+        background: rgba(20, 93, 160, 0.08);
+        font-size: 13px;
+      }
+
+      .compact-table th,
+      .compact-table td {
+        padding: 13px 14px;
+      }
+
+      .subline {
+        display: block;
+        margin-top: 3px;
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.45;
+      }
+
+      .source-stack strong {
+        display: block;
+        color: var(--ink);
+      }
+
+      .ym-col {
+        color: #064e3b;
+        background: rgba(15, 118, 110, 0.08);
+      }
+
+      .ym-value {
+        color: var(--teal);
+        font-weight: 900;
+      }
+
+      td.num,
+      th.num {
+        text-align: right;
+        white-space: nowrap;
+      }
+
+      tr:last-child td { border-bottom: 0; }
+
+      code {
+        display: inline-block;
+        border-radius: 8px;
+        padding: 1px 6px;
+        color: #075985;
+        background: rgba(20, 93, 160, 0.08);
+        font-family: "SFMono-Regular", Consolas, monospace;
+        font-size: 0.92em;
+      }
+
+      .callout {
+        margin-top: 18px;
+        border-left: 4px solid var(--amber);
+        border-radius: 18px;
+        padding: 16px 18px;
+        background: rgba(197, 106, 0, 0.08);
+      }
+
+      .callout p {
+        color: #40566a;
+      }
+
+      .callout p + p {
+        margin-top: 8px;
+      }
+
+      .method-grid,
+      .file-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 14px;
+      }
+
+      .method-card b,
+      .file-card b {
+        display: block;
+        margin-bottom: 6px;
+        color: var(--ink);
+      }
+
+      .file-list {
+        display: grid;
+        gap: 8px;
+        margin: 12px 0 0;
+        padding: 0;
+        list-style: none;
+      }
+
+      .file-list li {
+        min-width: 0;
+      }
+
+      .file-list code {
+        display: block;
+        width: 100%;
+        padding: 8px 10px;
+        border-radius: 10px;
+        line-height: 1.45;
+        white-space: normal;
+        overflow-wrap: anywhere;
+        background: rgba(20, 93, 160, 0.08);
+      }
+
+      .quote {
+        border: 1px solid rgba(15, 118, 110, 0.22);
+        border-radius: 24px;
+        padding: 20px;
+        background: linear-gradient(180deg, rgba(15, 118, 110, 0.08), rgba(20, 93, 160, 0.05));
+      }
+
+      .quote + .quote { margin-top: 14px; }
+
+      .quote h3 { margin-bottom: 8px; }
+
+      .quote p {
+        color: #334b5e;
+      }
+
+      .quick-answer {
+        border-color: rgba(15, 118, 110, 0.24);
+        background:
+          linear-gradient(180deg, rgba(15, 118, 110, 0.1), rgba(20, 93, 160, 0.04));
+      }
+
+      .quick-answer p {
+        font-size: 16px;
+        line-height: 1.76;
+      }
+
+      .quick-answer b {
+        color: var(--ink);
+      }
+
+      .avoid table {
+        min-width: 840px;
+      }
+
+      .footer-note {
+        margin-top: 22px;
+        color: #6b7c88;
+        font-size: 13px;
+        text-align: center;
+      }
+
+      @media (max-width: 920px) {
+        .hero-grid,
+        .section-head,
+        .summary-grid,
+        .direct-grid,
+        .module-map-body,
+        .mapping-split,
+        .answer-grid,
+        .method-grid,
+        .file-grid {
+          grid-template-columns: 1fr;
+        }
+
+        .hero,
+        .section {
+          border-radius: 24px;
+          padding: 22px;
+        }
+
+        table { min-width: 820px; }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="shell">
+      <section class="hero">
+        <div class="hero-grid">
+          <div>
+            <span class="eyebrow">內部程式碼比對</span>
+            <h1>程式碼比例與模組對照</h1>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" id="answers">
+        <div class="section-head">
+          <div>
+            <span class="tag">重點結論</span>
+            <h2>先看結論</h2>
+            <p>先給比例與模組歸屬結論，後面再放詳細依據與對應檔案。</p>
+          </div>
+        </div>
+
+        <div class="summary-grid">
+          <article class="summary-card">
+            <b>30 秒看程式碼比例</b>
+            <p>針對本次統計的四類模組，主要行數歸因為 DenchClaw 原始碼 46.52%、洋銘 EnClaw 新增 / 整合 53.48%。OpenClaw 仍是 DenchClaw 的上游底盤來源，只是這四類模組中沒有找到 OpenClaw 可直接對應的同名 / 同路徑程式碼，因此不列入本表的主要行數歸因比例。</p>
+          </article>
+          <article class="summary-card">
+            <b>30 秒看模組對照</b>
+            <p>8 項模組中，6 項為洋銘新增，2 項為 DenchClaw 基礎上整合；開源底盤是 OpenClaw / DenchClaw。</p>
+          </article>
+        </div>
+
+        <div class="direct-grid">
+          <article class="direct-card">
+            <span class="status status-ym">程式碼比例</span>
+            <h3>四類模組程式碼比例</h3>
+            <p class="question-text">
+              範圍包含 Runtime Extension、Context Builder、Review Flow、Wiki Writeback 四類統計模組，
+              對照 DenchClaw 與洋銘 EnClaw 的主要行數占比，並補充 OpenClaw 是否存在可直接對應的同名 / 同路徑程式碼。
+            </p>
+            <div class="answer-line">
+              回答：四類統計模組合計的主要行數歸因為 DenchClaw <strong>46.52%</strong>、洋銘 EnClaw 新增 / 整合 <strong>53.48%</strong>；OpenClaw 仍是上游底盤來源，但在本統計範圍內沒有可直接對應的同名 / 同路徑程式碼，因此不列入本表的主要行數占比。
+            </div>
+            <div class="mini-ratio">
+              <table>
+                <thead>
+                  <tr>
+                    <th>模組</th>
+                    <th class="num">OpenClaw 直接對應占比<br />（限同名 / 同路徑）</th>
+                    <th class="num">DenchClaw 原始碼占比</th>
+                    <th class="num ym-col">洋銘 EnClaw 新增 / 整合占比</th>
+                    <th>涵蓋的 EnMS 能力</th>
+                    <th>行數依據</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td><strong>Runtime Extension</strong></td>
+                    <td class="num">0.00%</td>
+                    <td class="num">65.98%</td>
+                    <td class="num ym-value">34.02%</td>
+                    <td>EnMS-specific Runtime 擴充、資料治理 runtime 部分、分析模組整合、圖表輸出。</td>
+                    <td>0 / 8,244 / 4,250，共 12,494 行。</td>
+                  </tr>
+                  <tr>
+                    <td><strong>Context Builder</strong></td>
+                    <td class="num">0.00%</td>
+                    <td class="num">0.00%</td>
+                    <td class="num ym-value">100.00%</td>
+                    <td>Context Builder、Context Pack、資料治理 context 部分。</td>
+                    <td>0 / 0 / 2,400，共 2,400 行。</td>
+                  </tr>
+                  <tr>
+                    <td><strong>Review Flow</strong></td>
+                    <td class="num">0.00%</td>
+                    <td class="num">0.00%</td>
+                    <td class="num ym-value">100.00%</td>
+                    <td>Review Flow、learning draft、auto-trigger、human review 邊界。</td>
+                    <td>0 / 0 / 2,244，共 2,244 行。</td>
+                  </tr>
+                  <tr>
+                    <td><strong>Wiki Writeback</strong></td>
+                    <td class="num">0.00%</td>
+                    <td class="num">0.00%</td>
+                    <td class="num ym-value">100.00%</td>
+                    <td>Wiki Writeback、promotion、operation templates、playbook templates、知識沉澱流程。</td>
+                    <td>0 / 0 / 585，共 585 行。</td>
+                  </tr>
+                  <tr>
+                    <td><strong>合計</strong></td>
+                    <td class="num"><strong>0.00%</strong></td>
+                    <td class="num"><strong>46.52%</strong></td>
+                    <td class="num ym-value"><strong>53.48%</strong></td>
+                    <td><strong>覆蓋下方 8 項 EnMS 新增 / 整合能力；以 4 個不重複統計模組避免同一檔案被重複計算。</strong></td>
+                    <td><strong>0 / 8,244 / 9,479，共 17,723 行。</strong></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <p class="scope-note">
+              計算基準是排除測試檔後的 56 個相關檔案、17,723 行。OpenClaw 在本表顯示為 0.00%，意思是這四類統計模組沒有找到 OpenClaw 原始版本可直接對應的同名 / 同路徑程式碼；不代表 OpenClaw 沒有底層框架角色。
+            </p>
+            <p class="scope-note">
+              為避免同一檔案被重複計算，程式碼比例使用 4 個「不重複統計模組」；EnClaw 實際能力則在下方拆成 8 個 EnMS 模組。兩者不是矛盾，而是統計粒度不同。
+            </p>
+          </article>
+
+          <article class="direct-card ym-highlight">
+            <span class="status status-ym">模組對照</span>
+            <h3>EnClaw 與 DenchClaw 模組對照</h3>
+            <p class="question-text">
+              直接區分哪些模組屬於開源底盤，哪些屬於洋銘在 EnMS 場景下的新增或整合成果。
+            </p>
+            <div class="answer-line">
+              回答：下表直接分列 DenchClaw 既有模組與洋銘 EnMS / EnClaw 模組；標示「無」代表 DenchClaw 原始版本沒有同名 / 同路徑的 EnMS 專用模組。
+            </div>
+            <div class="module-map">
+              <article class="module-map-card">
+                <div class="module-map-head">
+                  <h4>1. EnMS-specific Runtime 擴充</h4>
+                  <span class="status status-mixed">混合：DenchClaw 基礎 + 洋銘 EnMS 接線</span>
+                </div>
+                <div class="module-map-body">
+                  <div class="module-map-col">
+                    <b>DenchClaw 既有模組（開源）</b>
+                    <ul class="path-list">
+                      <li><code>apps/web/app/api/chat/route.ts</code></li>
+                      <li><code>apps/web/app/api/web-sessions/shared.ts</code></li>
+                      <li><code>apps/web/lib/active-runs.ts</code></li>
+                    </ul>
+                    <p>既有 chat、session 與 active runs runtime 基礎沿用自 DenchClaw。</p>
+                  </div>
+                  <div class="module-map-col ym">
+                    <b>洋銘 EnMS / EnClaw 新增或整合</b>
+                    <ul class="path-list">
+                      <li><code>apps/web/app/api/chat/route.ts</code></li>
+                      <li><code>apps/web/lib/domain-bootstrap.ts</code></li>
+                    </ul>
+                    <p>在既有 runtime 中加入 EnMS routing、preflight、bootstrap、review 入口、analytics path 與 chart output 接線。</p>
+                  </div>
+                </div>
+              </article>
+
+              <article class="module-map-card">
+                <div class="module-map-head">
+                  <h4>2. Context Builder</h4>
+                  <span class="status status-ym">洋銘新增（EnClaw）</span>
+                </div>
+                <div class="module-map-body">
+                  <div class="module-map-col">
+                    <b>DenchClaw 既有模組（開源）</b>
+                    <p>無 EnMS 專用 context builder 同名 / 同路徑模組。</p>
+                  </div>
+                  <div class="module-map-col ym">
+                    <b>洋銘 EnMS / EnClaw 新增或整合</b>
+                    <ul class="path-list">
+                      <li><code>apps/web/lib/enms-context-builder.ts</code></li>
+                    </ul>
+                    <p>新增 EnMS intent 判斷、domain routing、schema / relation / query step 組裝。</p>
+                  </div>
+                </div>
+              </article>
+
+              <article class="module-map-card">
+                <div class="module-map-head">
+                  <h4>3. Context Pack</h4>
+                  <span class="status status-ym">洋銘新增（EnClaw）</span>
+                </div>
+                <div class="module-map-body">
+                  <div class="module-map-col">
+                    <b>DenchClaw 既有模組（開源）</b>
+                    <p>無 EnMS 專用 context pack 同名 / 同路徑模組。</p>
+                  </div>
+                  <div class="module-map-col ym">
+                    <b>洋銘 EnMS / EnClaw 新增或整合</b>
+                    <ul class="path-list">
+                      <li><code>apps/web/lib/enms-context-pack.ts</code></li>
+                      <li><code>skills/enms/SKILL.md</code></li>
+                      <li><code>schema/integration-profiles/enms.md</code></li>
+                    </ul>
+                    <p>新增 EnMS rules、wiki、playbook、integration profile 與 live query steps 的上下文包。</p>
+                  </div>
+                </div>
+              </article>
+
+              <article class="module-map-card">
+                <div class="module-map-head">
+                  <h4>4. Review Flow</h4>
+                  <span class="status status-ym">洋銘新增（EnClaw）</span>
+                </div>
+                <div class="module-map-body">
+                  <div class="module-map-col">
+                    <b>DenchClaw 既有模組（開源）</b>
+                    <p>無 EnMS 專用 review route / learning draft 模組。</p>
+                  </div>
+                  <div class="module-map-col ym">
+                    <b>洋銘 EnMS / EnClaw 新增或整合</b>
+                    <ul class="path-list">
+                      <li><code>apps/web/app/review/enms/page.tsx</code></li>
+                      <li><code>apps/web/lib/enms-learning-draft.ts</code></li>
+                      <li><code>apps/web/lib/enms-learning-auto-trigger.ts</code></li>
+                    </ul>
+                    <p>新增 EnMS review page、learning draft、auto-trigger、human review 邊界與 promotion 接線。</p>
+                  </div>
+                </div>
+              </article>
+
+              <article class="module-map-card">
+                <div class="module-map-head">
+                  <h4>5. 資料治理</h4>
+                  <span class="status status-ym">洋銘新增（EnClaw）</span>
+                </div>
+                <div class="module-map-body">
+                  <div class="module-map-col">
+                    <b>DenchClaw 既有模組（開源）</b>
+                    <p>無 EnMS 專用 schema availability、join semantics、gap governance 模組。</p>
+                  </div>
+                  <div class="module-map-col ym">
+                    <b>洋銘 EnMS / EnClaw 新增或整合</b>
+                    <ul class="path-list">
+                      <li><code>apps/web/lib/domain-bootstrap.ts</code></li>
+                      <li><code>skills/enms/reference/auto-schema-enms.md</code></li>
+                      <li><code>skills/enms/reference/db-schema-cheatsheet.md</code></li>
+                    </ul>
+                    <p>新增 EnMS schema、資料可用性檢查、join 語意、缺資料提示與資料不足時的風險邊界。</p>
+                  </div>
+                </div>
+              </article>
+
+              <article class="module-map-card">
+                <div class="module-map-head">
+                  <h4>6. 分析模組整合</h4>
+                  <span class="status status-ym">洋銘新增（EnClaw）</span>
+                </div>
+                <div class="module-map-body">
+                  <div class="module-map-col">
+                    <b>DenchClaw 既有模組（開源）</b>
+                    <p>無 EnMS 需量預警、異常偵測、告警治理引擎。</p>
+                  </div>
+                  <div class="module-map-col ym">
+                    <b>洋銘 EnMS / EnClaw 新增或整合</b>
+                    <ul class="path-list">
+                      <li><code>apps/web/lib/enms-demand-forecast-engine.ts</code></li>
+                      <li><code>apps/web/lib/enms-anomaly-detection-engine.ts</code></li>
+                      <li><code>apps/web/lib/enms-alert-governance-engine.ts</code></li>
+                    </ul>
+                    <p>新增需量預警、異常偵測、告警治理等 EnMS 分析引擎與 runtime 接線。</p>
+                  </div>
+                </div>
+              </article>
+
+              <article class="module-map-card">
+                <div class="module-map-head">
+                  <h4>7. 圖表輸出</h4>
+                  <span class="status status-mixed">混合：DenchClaw 基礎 + 洋銘 EnMS 接線</span>
+                </div>
+                <div class="module-map-body">
+                  <div class="module-map-col">
+                    <b>DenchClaw 既有模組（開源）</b>
+                    <p>DenchClaw 既有 report / chart UI 與部分 route 基礎。</p>
+                  </div>
+                  <div class="module-map-col ym">
+                    <b>洋銘 EnMS / EnClaw 新增或整合</b>
+                    <ul class="path-list">
+                      <li><code>apps/web/app/api/workspace/reports/execute/route.ts</code></li>
+                      <li><code>apps/web/app/components/chat-panel.tsx</code></li>
+                      <li><code>apps/web/lib/enms-context-builder.ts</code></li>
+                      <li><code>apps/web/lib/enms-context-pack.ts</code></li>
+                    </ul>
+                    <p>新增 EnMS 圖表輸出規則、報表執行路由、報表檢視與 chat panel 圖表接線。</p>
+                  </div>
+                </div>
+              </article>
+
+              <article class="module-map-card">
+                <div class="module-map-head">
+                  <h4>8. Wiki Writeback 整合與相關知識模板</h4>
+                  <span class="status status-ym">洋銘新增（EnClaw）</span>
+                </div>
+                <div class="module-map-body">
+                  <div class="module-map-col">
+                    <b>DenchClaw 既有模組（開源）</b>
+                    <p>無 EnMS 專用 wiki writeback、operation templates、playbook templates。</p>
+                  </div>
+                  <div class="module-map-col ym">
+                    <b>洋銘 EnMS / EnClaw 新增或整合</b>
+                    <ul class="path-list">
+                      <li><code>apps/web/lib/enms-learning-writeback.ts</code></li>
+                      <li><code>apps/web/lib/enms-learning-promotion.ts</code></li>
+                      <li><code>wiki/operations/enms/*</code></li>
+                      <li><code>wiki/playbooks/enms/*</code></li>
+                    </ul>
+                    <p>新增 EnMS learning writeback、promotion、wiki operation templates、playbook templates 與知識沉澱流程。</p>
+                  </div>
+                </div>
+              </article>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <section class="section" id="code-ratio">
+        <div class="section-head">
+          <div>
+            <span class="tag">詳細比例</span>
+            <h2>程式碼比例</h2>
+            <p>
+              說明 Runtime Extension、Context Builder、Review Flow、Wiki Writeback 等模組之程式碼比例中，
+              OpenClaw 是否有可直接對應的同名 / 同路徑程式碼、DenchClaw 原始碼占比、洋銘 EnClaw 新增 / 整合占比。
+            </p>
+          </div>
+        </div>
+
+        <div class="ratio-strip" aria-label="OpenClaw no direct same-path attribution in scoped modules, DenchClaw 46.52%, Yangming 53.48%">
+          <span></span><span></span><span></span>
+        </div>
+        <div class="legend">
+          <span><i class="dot-open"></i>OpenClaw 直接對應占比 0.00%（限同名 / 同路徑）</span>
+          <span><i class="dot-dench"></i>DenchClaw 原始碼占比 46.52%</span>
+          <span><i class="dot-ym"></i><strong>洋銘 EnClaw 新增 / 整合占比 53.48%</strong></span>
+        </div>
+
+        <div class="table-wrap compact-table" style="margin-top: 18px;">
+          <table>
+            <colgroup>
+              <col style="width: 17%;" />
+              <col style="width: 11%;" />
+              <col style="width: 13%;" />
+              <col style="width: 17%;" />
+              <col style="width: 19%;" />
+              <col style="width: 13%;" />
+              <col style="width: 10%;" />
+            </colgroup>
+            <thead>
+              <tr>
+                <th>模組類別</th>
+                <th class="num">檔案數</th>
+                <th class="num">OpenClaw 直接對應行數</th>
+                <th class="num">DenchClaw 原始碼行數</th>
+                <th class="num ym-col">洋銘 EnClaw 新增 / 整合行數</th>
+                <th class="num">合計行數</th>
+                <th class="num ym-col">新增行數占比</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><strong>Runtime Extension</strong></td>
+                <td class="num">22<span class="subline">新增 10 / 修改 12</span></td>
+                <td class="num">0<span class="subline">0.00%</span></td>
+                <td class="num">8,244<span class="subline">65.98%</span></td>
+                <td class="num ym-value">4,250<span class="subline">新增 / 整合</span></td>
+                <td class="num">12,494</td>
+                <td class="num ym-value">34.02%</td>
+              </tr>
+              <tr>
+                <td><strong>Context Builder</strong></td>
+                <td class="num">12<span class="subline">新增 12 / 修改 0</span></td>
+                <td class="num">0<span class="subline">0.00%</span></td>
+                <td class="num">0<span class="subline">0.00%</span></td>
+                <td class="num ym-value">2,400<span class="subline">新增 / 整合</span></td>
+                <td class="num">2,400</td>
+                <td class="num ym-value">100.00%</td>
+              </tr>
+              <tr>
+                <td><strong>Review Flow</strong></td>
+                <td class="num">9<span class="subline">新增 9 / 修改 0</span></td>
+                <td class="num">0<span class="subline">0.00%</span></td>
+                <td class="num">0<span class="subline">0.00%</span></td>
+                <td class="num ym-value">2,244<span class="subline">新增 / 整合</span></td>
+                <td class="num">2,244</td>
+                <td class="num ym-value">100.00%</td>
+              </tr>
+              <tr>
+                <td><strong>Wiki Writeback</strong></td>
+                <td class="num">13<span class="subline">新增 13 / 修改 0</span></td>
+                <td class="num">0<span class="subline">0.00%</span></td>
+                <td class="num">0<span class="subline">0.00%</span></td>
+                <td class="num ym-value">585<span class="subline">新增 / 整合</span></td>
+                <td class="num">585</td>
+                <td class="num ym-value">100.00%</td>
+              </tr>
+              <tr>
+                <td><strong>合計</strong></td>
+                <td class="num"><strong>56</strong><span class="subline">新增 44 / 修改 12</span></td>
+                <td class="num"><strong>0</strong><span class="subline">0.00%</span></td>
+                <td class="num"><strong>8,244</strong><span class="subline">46.52%</span></td>
+                <td class="num ym-value"><strong>9,479</strong><span class="subline">新增 / 整合</span></td>
+                <td class="num"><strong>17,723</strong></td>
+                <td class="num ym-value"><strong>53.48%</strong></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="callout">
+          <p>
+            這裡的 <strong>0.00%</strong> 不是在說 OpenClaw 對整體系統的技術貢獻為零，而是指在 <strong>Runtime Extension、Context Builder、Review Flow、Wiki Writeback</strong> 這四類統計模組內，沒有找到 OpenClaw 可直接對應的同名 / 同路徑程式碼。
+          </p>
+          <p>
+            換句話說，本表統計的是「可直接 trace 到哪個版本的實際程式碼行數」，不是在統計整體架構 lineage。OpenClaw 仍然是 DenchClaw 的上游 agent / gateway framework，這個底盤角色是真實存在的，只是沒有用這張表的行數方式被直接歸因。
+          </p>
+          <p>
+            因此閱讀方式應該是：<strong>OpenClaw = 上游底盤來源</strong>；<strong>DenchClaw 46.52%</strong> 與 <strong>洋銘 EnClaw 53.48%</strong> = 本次四類模組中可直接追溯到的主要行數歸因。
+          </p>
+        </div>
+      </section>
+
+      <section class="section">
+        <div class="section-head">
+          <div>
+            <span class="tag">比對方法</span>
+            <h2>比對方法與證據版本</h2>
+            <p>本次比對重點是 DenchClaw 到 EnClaw 的差異，使用可重跑的 Git 紀錄與行數歸因，而不是用主觀估算。</p>
+          </div>
+        </div>
+
+        <div class="method-grid">
+          <article class="method-card">
+            <b>1. 比對基準</b>
+            <p><code>origin/main...HEAD</code>，用於追蹤從 DenchClaw fork 出來的起點，到目前 EnClaw 分支之間的差異。</p>
+          </article>
+          <article class="method-card">
+            <b>2. 模組範圍</b>
+            <p>只納入指定四類統計模組，不納入整份程式碼庫，也不納入無關 UI / docs。</p>
+          </article>
+          <article class="method-card">
+            <b>3. 歸因規則</b>
+            <p>新增檔案計入 EnClaw 新增 / 整合；修改檔案中 DenchClaw 原本保留的行數計入 DenchClaw 原始碼，新增行數計入 EnClaw 新增 / 整合。</p>
+          </article>
+          <article class="method-card">
+            <b>4. 排除測試</b>
+            <p>正式引用時建議採用排除測試檔後的表，較接近產品 runtime / domain module 本身。</p>
+          </article>
+        </div>
+
+        <div class="table-wrap" style="margin-top: 18px;">
+          <table>
+            <thead>
+              <tr>
+                <th>項目</th>
+                <th>版本 / Commit</th>
+                <th>用途</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>OpenClaw</td>
+                <td><code>e0018382eb00b8f2bad6ada8ee5f66956ac9cc21</code></td>
+                <td>底層開源 agent / gateway framework 來源說明。</td>
+              </tr>
+              <tr>
+                <td>DenchClaw 原始版本</td>
+                <td><code>de50a4782fdb7f329d424f3eb5b4a70188a955d1</code></td>
+                <td>本次主要比對基準。</td>
+              </tr>
+              <tr>
+                <td>EnClaw 目前版本</td>
+                <td><code>e7fd5bbc235ea6f3437d0e4acfb68bfa598584a7</code></td>
+                <td>洋銘目前分支狀態。</td>
+              </tr>
+              <tr>
+                <td>最早可見 YM / NotYen 客製 commit</td>
+                <td><code>2026-04-14 · f57613f4b9</code></td>
+                <td>目前 repo 中可 trace 到的洋銘側整體客製起點；此 commit 主題是 Y-CRM integration，不是 EnMS 能管模組起點。</td>
+              </tr>
+              <tr>
+                <td>EnMS / EnClaw 能管 runtime 主體 commit</td>
+                <td><code>2026-06-02 · 7d7092315f</code></td>
+                <td>Y-CRM / ERP / EnMS runtime 與 chart flows 對齊；此列才是本文件 EnMS / EnClaw 能管模組的主要 trace 起點。</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="section" id="files">
+        <div class="section-head">
+          <div>
+            <span class="tag">主要對應檔案</span>
+            <h2>主要對應檔案</h2>
+            <p>這裡按上方 8 個 EnMS / EnClaw 模組列出代表性檔案，不是完整檔案清單。</p>
+          </div>
+        </div>
+
+        <div class="file-grid">
+          <article class="file-card">
+            <b>1. EnMS-specific Runtime 擴充</b>
+            <ul class="file-list">
+              <li><code>apps/web/app/api/chat/route.ts</code></li>
+              <li><code>apps/web/lib/domain-bootstrap.ts</code></li>
+              <li><code>apps/web/app/api/web-sessions/shared.ts</code></li>
+              <li><code>apps/web/lib/active-runs.ts</code></li>
+            </ul>
+          </article>
+          <article class="file-card">
+            <b>2. Context Builder</b>
+            <ul class="file-list">
+              <li><code>apps/web/lib/enms-context-builder.ts</code></li>
+              <li><code>apps/web/app/api/debug/enms-context-builder/route.ts</code></li>
+            </ul>
+          </article>
+          <article class="file-card">
+            <b>3. Context Pack</b>
+            <ul class="file-list">
+              <li><code>apps/web/lib/enms-context-pack.ts</code></li>
+              <li><code>skills/enms/SKILL.md</code></li>
+              <li><code>schema/integration-profiles/enms.md</code></li>
+            </ul>
+          </article>
+          <article class="file-card">
+            <b>4. Review Flow</b>
+            <ul class="file-list">
+              <li><code>apps/web/app/review/enms/page.tsx</code></li>
+              <li><code>apps/web/app/components/learning-review-workspace.tsx</code></li>
+              <li><code>apps/web/lib/enms-learning-draft.ts</code></li>
+              <li><code>apps/web/lib/enms-learning-auto-trigger.ts</code></li>
+            </ul>
+          </article>
+          <article class="file-card">
+            <b>5. 資料治理</b>
+            <ul class="file-list">
+              <li><code>apps/web/lib/domain-bootstrap.ts</code></li>
+              <li><code>skills/enms/reference/auto-schema-enms.md</code></li>
+              <li><code>skills/enms/reference/db-schema-cheatsheet.md</code></li>
+              <li><code>schema/integration-profiles/enms.md</code></li>
+            </ul>
+          </article>
+          <article class="file-card">
+            <b>6. 分析模組整合</b>
+            <ul class="file-list">
+              <li><code>apps/web/lib/enms-demand-forecast-engine.ts</code></li>
+              <li><code>apps/web/lib/enms-anomaly-detection-engine.ts</code></li>
+              <li><code>apps/web/lib/enms-alert-governance-engine.ts</code></li>
+              <li><code>apps/web/lib/enms-analytics-types.ts</code></li>
+            </ul>
+          </article>
+          <article class="file-card">
+            <b>7. 圖表輸出</b>
+            <ul class="file-list">
+              <li><code>apps/web/app/api/workspace/reports/execute/route.ts</code></li>
+              <li><code>apps/web/app/components/chat-panel.tsx</code></li>
+              <li><code>apps/web/lib/enms-context-builder.ts</code></li>
+              <li><code>apps/web/lib/enms-context-pack.ts</code></li>
+            </ul>
+          </article>
+          <article class="file-card">
+            <b>8. Wiki Writeback 與知識模板</b>
+            <ul class="file-list">
+              <li><code>apps/web/lib/enms-learning-writeback.ts</code></li>
+              <li><code>apps/web/lib/enms-learning-promotion.ts</code></li>
+              <li><code>wiki/operations/enms/*</code></li>
+              <li><code>wiki/playbooks/enms/*</code></li>
+            </ul>
+          </article>
+        </div>
+      </section>
+
+      <p class="footer-note">
+        內部備註：若未來 EnClaw 持續新增功能，比例會改變；正式引用或進入法務盡調前，建議重新跑一次程式碼行數歸因。
+      </p>
+    </main>
+  </body>
+</html>
