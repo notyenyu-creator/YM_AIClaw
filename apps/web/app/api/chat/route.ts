@@ -10,6 +10,7 @@ import {
   startSubscribeRun,
   hasActiveRun,
   getActiveRun,
+  createSyntheticCompletedRun,
   subscribeToRun,
   persistUserMessage,
   persistSubscribeUserMessage,
@@ -43,7 +44,6 @@ import {
 import {
   buildYcrmContext,
   createDefaultYcrmContextInput,
-  shouldPersistYcrmPlannerPreflight,
   summarizeYcrmContextPlan,
   type YcrmContextBuilderInput,
   type YcrmIntent,
@@ -60,6 +60,9 @@ import {
   buildEnmsContextPack,
   decorateMessageWithEnmsContextPack,
 } from "@/lib/enms-context-pack";
+import { buildEnmsDirectAnswer } from "@/lib/enms-direct-answer";
+import { buildEnmsVerifiedDirectQueryAnswer } from "@/lib/enms-verified-direct-query";
+import { selectOperationalDomainRoute } from "@/lib/operational-domain-routing";
 import {
   buildErpContext,
   shouldPersistErpPlannerPreflight,
@@ -378,6 +381,7 @@ export async function POST(req: Request) {
     sessionKey,
     distinctId,
     userHtml,
+    currentSystemHint,
     modelOverride,
     acknowledgeUnsafeOpenAiSwitch,
     hasAssistantHistory: hasAssistantHistoryHint,
@@ -387,6 +391,7 @@ export async function POST(req: Request) {
     sessionKey?: string;
     distinctId?: string;
     userHtml?: string;
+    currentSystemHint?: "enms" | "erp" | "ycrm" | "none" | null;
     modelOverride?: string;
     acknowledgeUnsafeOpenAiSwitch?: boolean;
     hasAssistantHistory?: boolean;
@@ -512,11 +517,24 @@ export async function POST(req: Request) {
       messages,
       sessionMeta,
     );
+    if (
+      currentSystemHint === "ycrm" &&
+      ycrmPlannerInput.request.current_system_hint == null
+    ) {
+      ycrmPlannerInput.request.current_system_hint = "ycrm";
+    }
     const ycrmPlannerPlan = buildYcrmContext(ycrmPlannerInput);
     const ycrmPlannerSummary = summarizeYcrmContextPlan(ycrmPlannerPlan);
     const ycrmContextPack = buildYcrmContextPack(ycrmPlannerPlan);
+    const ycrmClaimed =
+      ycrmPlannerSummary.shouldRouteToYcrm &&
+      !(
+        ycrmPlannerSummary.intent === "unknown" &&
+        ycrmPlannerSummary.confidence === "low" &&
+        currentSystemHint !== "ycrm"
+      );
 
-    if (shouldPersistYcrmPlannerPreflight(ycrmPlannerSummary)) {
+    if (ycrmClaimed || ycrmPlannerSummary.intent !== "unknown") {
       updateSessionPlannerPreflight(sessionId, ycrmPlannerSummary);
       updateSessionPlannerContextPack(sessionId, ycrmContextPack);
       invalidateSessionErpPlannerArtifacts(sessionId, {
@@ -531,7 +549,7 @@ export async function POST(req: Request) {
       });
     }
 
-    if (ycrmPlannerSummary.shouldRouteToYcrm) {
+    if (ycrmClaimed) {
       agentMessage = decorateMessageWithYcrmContextPack(
         agentMessage,
         ycrmContextPack,
@@ -554,11 +572,34 @@ export async function POST(req: Request) {
     let routedToErp = false;
     let routedToEnms = false;
 
-    if (!ycrmPlannerSummary.shouldRouteToYcrm) {
+    let directAssistantReply: string | null = null;
+
+    if (!ycrmClaimed) {
       const erpPreflight = buildErpContext({
-        request: { user_message: agentMessage },
+        request: {
+          user_message: agentMessage,
+          current_system_hint:
+            currentSystemHint === "erp" || currentSystemHint === "ycrm" || currentSystemHint === "none"
+              ? currentSystemHint
+              : null,
+        },
       });
-      if (shouldPersistErpPlannerPreflight(erpPreflight)) {
+      const enmsPreflight = buildEnmsContext({
+        request: {
+          user_message: agentMessage,
+          current_system_hint: currentSystemHint ?? null,
+        },
+      });
+      const operationalRoute = selectOperationalDomainRoute({
+        currentSystemHint: currentSystemHint ?? null,
+        erpPreflight,
+        enmsPreflight,
+      });
+
+      if (
+        operationalRoute.domain === "erp" &&
+        shouldPersistErpPlannerPreflight(erpPreflight)
+      ) {
         routedToErp = true;
         const erpContextPack = buildErpContextPack(erpPreflight);
         updateSessionErpPlannerPreflight(sessionId, erpPreflight);
@@ -579,37 +620,46 @@ export async function POST(req: Request) {
           agentMessage,
           erpBootstrapSnapshot,
         );
+      } else if (
+        operationalRoute.domain === "enms" &&
+        shouldPersistEnmsPlannerPreflight(enmsPreflight)
+      ) {
+        routedToEnms = true;
+        const enmsContextPack = buildEnmsContextPack(enmsPreflight);
+        updateSessionEnmsPlannerPreflight(sessionId, enmsPreflight);
+        updateSessionEnmsPlannerContextPack(sessionId, enmsContextPack);
+        invalidateSessionErpPlannerArtifacts(sessionId, {
+          preserveReviewedLearningDraft: true,
+        });
+        agentMessage = decorateMessageWithEnmsContextPack(
+          agentMessage,
+          enmsContextPack,
+        );
+        const enmsBootstrapSnapshot = await buildDomainBootstrapSnapshot({
+          system: "enms",
+          userMessage: userText,
+          pack: enmsContextPack,
+        });
+        directAssistantReply =
+          (await buildEnmsVerifiedDirectQueryAnswer({
+            userMessage: userText,
+          })) ??
+          buildEnmsDirectAnswer({
+            userMessage: userText,
+            preflight: enmsPreflight,
+            snapshot: enmsBootstrapSnapshot,
+          });
+        agentMessage = decorateMessageWithDomainBootstrapSnapshot(
+          agentMessage,
+          enmsBootstrapSnapshot,
+        );
       } else {
         invalidateSessionErpPlannerArtifacts(sessionId, {
           preserveReviewedLearningDraft: true,
         });
-
-        const enmsPreflight = buildEnmsContext({
-          request: { user_message: agentMessage },
+        invalidateSessionEnmsPlannerArtifacts(sessionId, {
+          preserveReviewedLearningDraft: true,
         });
-        if (shouldPersistEnmsPlannerPreflight(enmsPreflight)) {
-          routedToEnms = true;
-          const enmsContextPack = buildEnmsContextPack(enmsPreflight);
-          updateSessionEnmsPlannerPreflight(sessionId, enmsPreflight);
-          updateSessionEnmsPlannerContextPack(sessionId, enmsContextPack);
-          agentMessage = decorateMessageWithEnmsContextPack(
-            agentMessage,
-            enmsContextPack,
-          );
-          const enmsBootstrapSnapshot = await buildDomainBootstrapSnapshot({
-            system: "enms",
-            userMessage: userText,
-            pack: enmsContextPack,
-          });
-          agentMessage = decorateMessageWithDomainBootstrapSnapshot(
-            agentMessage,
-            enmsBootstrapSnapshot,
-          );
-        } else {
-          invalidateSessionEnmsPlannerArtifacts(sessionId, {
-            preserveReviewedLearningDraft: true,
-          });
-        }
       }
     }
 
@@ -622,28 +672,35 @@ export async function POST(req: Request) {
       agentMessage = decorateMessageWithGenericChartGuardrail(agentMessage);
     }
 
-    const rollingContext = buildRollingChatContext(messages, userText);
-    agentMessage = decorateMessageWithRollingContext(
-      agentMessage,
-      rollingContext,
-    );
-
-    const imageAttachments = extractImageAttachmentsFromMessage(agentMessage);
-
-    try {
-      startRun({
+    if (directAssistantReply) {
+      await createSyntheticCompletedRun({
         sessionId,
-        message: agentMessage,
-        agentSessionId: gatewayThreadId,
-        overrideAgentId: effectiveAgentId,
-        modelOverride: normalizedModelOverride,
-        imageAttachments:
-          imageAttachments.length > 0 ? imageAttachments : undefined,
+        text: directAssistantReply,
       });
-    } catch (err) {
-      return new Response(err instanceof Error ? err.message : String(err), {
-        status: 500,
-      });
+    } else {
+      const rollingContext = buildRollingChatContext(messages, userText);
+      agentMessage = decorateMessageWithRollingContext(
+        agentMessage,
+        rollingContext,
+      );
+
+      const imageAttachments = extractImageAttachmentsFromMessage(agentMessage);
+
+      try {
+        startRun({
+          sessionId,
+          message: agentMessage,
+          agentSessionId: gatewayThreadId,
+          overrideAgentId: effectiveAgentId,
+          modelOverride: normalizedModelOverride,
+          imageAttachments:
+            imageAttachments.length > 0 ? imageAttachments : undefined,
+        });
+      } catch (err) {
+        return new Response(err instanceof Error ? err.message : String(err), {
+          status: 500,
+        });
+      }
     }
   }
 

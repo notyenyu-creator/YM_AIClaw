@@ -27,6 +27,28 @@ describe("detectEnmsIntent", () => {
     expect(result.matchedKeywords).toContain("mqtt_raw_messages");
   });
 
+  it("detects efficiency_analysis intent on ROI / what-if phrasing", () => {
+    const result = detectEnmsIntent("請做這個場域的節能 ROI 與 what-if 試算。");
+    expect(result.intent).toBe("efficiency_analysis");
+    expect(result.matchedKeywords).toContain("roi");
+  });
+
+  it("detects natural_language_query intent on energy trend phrasing", () => {
+    const result = detectEnmsIntent(
+      "請問我在2026年1月到今天的能源趨勢分析可以提供給我嗎？",
+    );
+    expect(result.intent).toBe("natural_language_query");
+    expect(result.matchedKeywords).toContain("能源趨勢分析");
+  });
+
+  it("prefers site_benchmarking for power-factor comparison phrasing", () => {
+    const result = detectEnmsIntent(
+      "阿里山與洋銘資訊最近 30 天平均功率因數是否低於建議值？",
+    );
+    expect(result.intent).toBe("site_benchmarking");
+    expect(result.matchedKeywords).toContain("功率因數");
+  });
+
   it("returns unknown when no keywords match", () => {
     const result = detectEnmsIntent("今天天氣如何？");
     expect(result.intent).toBe("unknown");
@@ -56,6 +78,27 @@ describe("buildEnmsContext", () => {
     expect(result.confidence).toBe("medium");
   });
 
+  it("routes energy trend analysis wording into EnMS", () => {
+    const result = buildEnmsContext({
+      request: {
+        user_message: "請問我在2026年1月到今天的能源趨勢分析可以提供給我嗎？",
+      },
+    });
+    expect(result.shouldRouteToEnms).toBe(true);
+    expect(result.intent).toBe("natural_language_query");
+  });
+
+  it("routes power-factor comparison wording into EnMS site benchmarking", () => {
+    const result = buildEnmsContext({
+      request: {
+        user_message: "阿里山與洋銘資訊最近 30 天平均功率因數是否低於建議值？",
+      },
+    });
+    expect(result.shouldRouteToEnms).toBe(true);
+    expect(result.intent).toBe("site_benchmarking");
+    expect(result.confidence).toBe("high");
+  });
+
   it("does not route when other system signal is stronger", () => {
     const result = buildEnmsContext({
       request: { user_message: "這筆訂單的用電、聯絡人 LINE 互動與庫存有問題嗎？" },
@@ -83,6 +126,18 @@ describe("buildEnmsContext", () => {
     expect(result.presentation.chart_guardrail_reason).toBe(
       "chart_optional_if_non_empty_aggregates_available",
     );
+  });
+
+  it("does not auto-request charts for benchmark ranking prompts without explicit visual words", () => {
+    const result = buildEnmsContext({
+      request: {
+        user_message:
+          "請比較阿里山與洋銘資訊最近 30 天的總用電、最大需量、平均功率因數，並做多場域 benchmarking 排名與差異說明。",
+      },
+    });
+    expect(result.intent).toBe("site_benchmarking");
+    expect(result.presentation.optional_chart_requested).toBe(false);
+    expect(result.presentation.chart_render_allowed).toBe(false);
   });
 });
 

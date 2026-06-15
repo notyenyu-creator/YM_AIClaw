@@ -11,7 +11,10 @@ import {
 	useRef,
 	useState,
 } from "react";
-import { HeroSuggestions } from "./hero-suggestions";
+import {
+	HeroSuggestions,
+	type HeroSuggestionSystemHint,
+} from "./hero-suggestions";
 import { ChatMessage } from "./chat-message";
 import { PlannerPreflightHeader } from "./planner-preflight-header";
 import { ChatEditor, type ChatEditorHandle } from "./tiptap/chat-editor";
@@ -63,6 +66,22 @@ type ChatCloudState = {
 	selectedDenchModel: string | null;
 	models: ChatModelOption[];
 };
+
+function plainTextToHtml(text: string): string {
+	if (!text.trim()) {
+		return "<p></p>";
+	}
+	return text
+		.split(/\r?\n/)
+		.map((line) => {
+			const escaped = line
+				.replace(/&/g, "&amp;")
+				.replace(/</g, "&lt;")
+				.replace(/>/g, "&gt;");
+			return `<p>${escaped || "<br>"}</p>`;
+		})
+		.join("");
+}
 
 function asRecord(value: unknown): Record<string, unknown> | null {
 	if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -931,13 +950,61 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 		const [queuedMessages, setQueuedMessages] = useState<QueuedMessage[]>([]);
 		const [rawView, _setRawView] = useState(false);
 		const [cloudState, setCloudState] = useState<ChatCloudState | null>(null);
+		const pendingSystemHintRef = useRef<HeroSuggestionSystemHint | null>(null);
+		const [heroPendingPrompt, setHeroPendingPrompt] = useState<string | null>(null);
 		// ── Hero state (new chat screen) ──
-		const greeting = "What can I help with?";
-
-		const handlePromptClick = useCallback((prompt: string) => {
-			editorRef.current?.setText(prompt);
-			setEditorEmpty(false);
-		}, []);
+		const heroSuggestionPreset = useMemo(() => {
+			if (enmsPlannerPreflight?.shouldRouteToEnms) {
+				return "enms" as const;
+			}
+			if (erpPlannerPreflight?.shouldRouteToErp) {
+				return "erp" as const;
+			}
+			if (plannerPreflight?.shouldRouteToYcrm) {
+				return "ycrm" as const;
+			}
+			return "enms" as const;
+		}, [enmsPlannerPreflight, erpPlannerPreflight, plannerPreflight]);
+		const heroCopy = useMemo(() => {
+			switch (heroSuggestionPreset) {
+				case "enms":
+					return {
+						title: "今天想先看哪一個能管問題？",
+						subtitle:
+							"從需量、異常、告警到多場域比較與節能試算，先用本地 EnMS 資料快速切入。",
+						modeLabel: "目前模式",
+						modeValue: "EnMS",
+						trustItems: ["本地資料優先", "資料不足會明講", "可切換其他系統"],
+					};
+				case "erp":
+					return {
+						title: "今天想先看哪一個營運問題？",
+						subtitle:
+							"從訂單、出貨、庫存到帳款分析，優先使用 ERP 真實交易資料回答。",
+						modeLabel: "目前模式",
+						modeValue: "ERP",
+						trustItems: ["交易資料優先", "缺資料會指出", "可切換其他系統"],
+					};
+				case "ycrm":
+					return {
+						title: "今天想先整理哪一段客戶脈絡？",
+						subtitle:
+							"從客戶背景、商機摘要到工作區健康度，優先使用 Y-CRM 工作區資料回答。",
+						modeLabel: "目前模式",
+						modeValue: "Y-CRM",
+						trustItems: ["工作區資料優先", "缺資料會指出", "可切換其他系統"],
+					};
+				default:
+					return {
+						title: "今天想先處理哪個問題？",
+						subtitle:
+							"先選系統、再選問題模板，讓入口更接近產品而不是工程工具。",
+						modeLabel: "目前模式",
+						modeValue: "EnMS",
+						trustItems: ["可切換系統", "資料來源清楚", "模板可直接點選"],
+					};
+			}
+		}, [heroSuggestionPreset]);
 
 		const handleVoiceTranscript = useCallback((text: string) => {
 			editorRef.current?.appendText(text);
@@ -1003,6 +1070,10 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 						if (pendingHtmlRef.current) {
 							extra.userHtml = pendingHtmlRef.current;
 							pendingHtmlRef.current = null;
+						}
+						if (pendingSystemHintRef.current) {
+							extra.currentSystemHint = pendingSystemHintRef.current;
+							pendingSystemHintRef.current = null;
 						}
 					return extra;
 				},
@@ -1780,6 +1851,20 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 			prevStatusRef.current = status;
 		}, [status]);
 
+		useEffect(() => {
+			if (messages.length > 0) {
+				setHeroPendingPrompt(null);
+				return;
+			}
+
+			const wasActive =
+				previousStatus === "streaming" ||
+				previousStatus === "submitted";
+			if (wasActive && status === "ready") {
+				setHeroPendingPrompt(null);
+			}
+		}, [messages.length, previousStatus, status]);
+
 		// ── Actions ──
 
 		// Ref for handleNewSession so handleEditorSubmit doesn't depend on the hook order
@@ -2094,6 +2179,7 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 			setPlannerLearningDraft(null);
 			setErpPlannerLearningDraft(null);
 			setEnmsPlannerLearningDraft(null);
+			setHeroPendingPrompt(null);
 			savedMessageIdsRef.current.clear();
 			userHtmlMapRef.current.clear();
 			isFirstFileMessageRef.current = true;
@@ -2106,6 +2192,19 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 
 		// Keep the ref in sync so handleEditorSubmit can call it
 		handleNewSessionRef.current = handleNewSession;
+
+		const handlePromptClick = useCallback((prompt: string, systemHint?: HeroSuggestionSystemHint) => {
+			pendingSystemHintRef.current = systemHint ?? null;
+
+			if (!editorEmpty) {
+				editorRef.current?.setText(prompt);
+				setEditorEmpty(false);
+				return;
+			}
+
+			setHeroPendingPrompt(prompt);
+			void handleEditorSubmit(prompt, [], plainTextToHtml(prompt));
+		}, [editorEmpty, handleEditorSubmit]);
 
 		useImperativeHandle(
 			ref,
@@ -2283,7 +2382,13 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 		});
 		const showStreamActivity = isStreaming && !!streamActivityLabel;
 
-		const showHeroState = messages.length === 0 && (!compact || !fileContext) && !isSubagentMode && !loadingSession;
+		const showHeroState =
+			messages.length === 0 &&
+			!heroPendingPrompt &&
+			status === "ready" &&
+			(!compact || !fileContext) &&
+			!isSubagentMode &&
+			!loadingSession;
 
 		// ── Input bar content (shared between hero and bottom positions) ──
 
@@ -2700,14 +2805,60 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 					) : showHeroState ? (
 						<div className={`flex flex-col items-center justify-center py-8 md:py-12 ${compact ? "min-h-[60vh]" : "min-h-[75vh]"}`}>
 							{/* Hero greeting */}
-							{greeting && (
+							<div className="w-full max-w-[860px] mx-auto px-4 text-center mb-6 md:mb-8">
+								<div className="flex items-center justify-center gap-2 flex-wrap mb-4">
+									<span
+										className="inline-flex items-center rounded-full px-3 py-1 text-[11px] font-semibold tracking-[0.12em] uppercase border"
+										style={{
+											background: "rgba(255,255,255,0.04)",
+											borderColor: "var(--color-border)",
+											color: "var(--color-text-muted)",
+										}}
+									>
+										{heroCopy.modeLabel}
+									</span>
+									<span
+										className="inline-flex items-center rounded-full px-3.5 py-1.5 text-xs font-semibold border"
+										style={{
+											background: "rgba(15, 23, 42, 0.92)",
+											borderColor: "rgba(15, 23, 42, 0.92)",
+											color: "#ffffff",
+										}}
+									>
+										{heroCopy.modeValue}
+									</span>
+								</div>
+
 								<h1
-									className="text-3xl md:text-5xl font-light tracking-normal font-instrument mb-6 md:mb-10 text-center px-4"
+									className="text-[34px] md:text-[58px] font-light tracking-[-0.03em] font-instrument text-center"
 									style={{ color: "var(--color-text)" }}
 								>
-									{greeting}
+									{heroCopy.title}
 								</h1>
-							)}
+
+								<p
+									className="mt-4 text-sm md:text-base leading-7 max-w-[720px] mx-auto"
+									style={{ color: "var(--color-text-secondary)" }}
+								>
+									{heroCopy.subtitle}
+								</p>
+
+								<div className="mt-4 flex items-center justify-center gap-2 flex-wrap">
+									{heroCopy.trustItems.map((item) => (
+										<span
+											key={item}
+											className="inline-flex items-center rounded-full border px-3 py-1.5 text-[11px] md:text-xs font-medium"
+											style={{
+												background: "rgba(255,255,255,0.04)",
+												borderColor: "var(--color-border)",
+												color: "var(--color-text-secondary)",
+											}}
+										>
+											{item}
+										</span>
+									))}
+								</div>
+							</div>
 
 							{/* Centered input bar */}
 							<div className="w-full max-w-[720px] mx-auto px-3 md:px-4">
@@ -2718,7 +2869,43 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 							<HeroSuggestions
 								compact={!!compact}
 								onPromptClick={handlePromptClick}
+								defaultPreset={heroSuggestionPreset}
+								enablePresetTabs
 							/>
+						</div>
+					) : heroPendingPrompt && messages.length === 0 ? (
+						<div className={`${compact ? "" : "max-w-2xl mx-auto"} py-6 md:py-8`}>
+							<div className="flex justify-end">
+								<div
+									className="max-w-[85%] rounded-[24px] px-4 py-3 text-sm leading-6 shadow-sm"
+									style={{
+										background: "var(--color-surface-hover)",
+										border: "1px solid var(--color-border)",
+										color: "var(--color-text)",
+									}}
+								>
+									{heroPendingPrompt}
+								</div>
+							</div>
+							<div className="mt-4 flex justify-start">
+								<div
+									className="inline-flex max-w-full items-center gap-2 rounded-full px-3 py-1.5"
+									style={{
+										background: "var(--color-surface-hover)",
+										border: "1px solid var(--color-border)",
+										color: "var(--color-text-muted)",
+									}}
+								>
+									<UnicodeSpinner
+										name="braille"
+										className="text-sm opacity-90"
+										style={{ color: "inherit" }}
+									/>
+									<span className="text-xs truncate">
+										{streamActivityLabel}
+									</span>
+								</div>
+							</div>
 						</div>
 					) : messages.length === 0 ? (
 						<div className="flex items-center justify-center h-full min-h-[60vh]">
@@ -2853,6 +3040,16 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 						style={{ background: "var(--color-bg-glass)" }}
 					>
 						<div className={compact ? "" : "max-w-[720px] mx-auto"}>
+							{!compact && !isSubagentMode && messages.length > 0 && status === "ready" && !heroPendingPrompt && (
+								<div className="mb-3">
+									<HeroSuggestions
+										compact
+										onPromptClick={handlePromptClick}
+										defaultPreset={heroSuggestionPreset}
+										enablePresetTabs
+									/>
+								</div>
+							)}
 							{inputBarContainer(handleInputDragOver, handleInputDragLeave, handleInputDrop)}
 						</div>
 					</div>

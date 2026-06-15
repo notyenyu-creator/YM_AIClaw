@@ -200,6 +200,15 @@ describe("buildYcrmContext", () => {
     expect(result.notes.blockers).toContain("intent_unknown");
   });
 
+  it("does not claim messages that explicitly exclude Y-CRM", () => {
+    const result = buildYcrmContext(makeInput(
+      "請用 EnMS 資料比較阿里山與洋銘資訊最近 30 天總用電與功率因數，不要看 ERP 或 Y-CRM。",
+    ));
+
+    expect(result.decision.should_route_to_ycrm).toBe(false);
+    expect(result.decision.confidence).toBe("low");
+  });
+
   it("falls back cleanly when wiki pages are unavailable", () => {
     const result = buildYcrmContext(makeInput(
       "幫我看一下這個客戶最近的 LINE 對話重點。",

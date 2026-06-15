@@ -69,6 +69,21 @@ const CHART_KEYWORDS = [
   "dashboard",
 ];
 
+const EXPLICIT_CHART_KEYWORDS = [
+  "圖表",
+  "chart",
+  "圖",
+  "bar",
+  "pie",
+  "line",
+  "報表",
+  "分析圖",
+  "長條圖",
+  "圓餅圖",
+  "儀表板",
+  "dashboard",
+];
+
 const INTENT_KEYWORDS: Record<EnmsIntent, string[]> = {
   demand_forecast: [
     "需量",
@@ -99,9 +114,15 @@ const INTENT_KEYWORDS: Record<EnmsIntent, string[]> = {
     "波動",
   ],
   natural_language_query: [
+    "enms",
     "用電",
     "能耗",
     "耗電",
+    "能源趨勢",
+    "能源趨勢分析",
+    "總表",
+    "主電表",
+    "主電總表",
     "電表",
     "電號",
     "kwh",
@@ -127,9 +148,18 @@ const INTENT_KEYWORDS: Record<EnmsIntent, string[]> = {
   alert_governance: [
     "alert",
     "警報",
+    "告警",
     "告警治理",
     "超約預警",
     "預警",
+    "摘要",
+    "類型",
+    "分類",
+    "噪音",
+    "抑制",
+    "可抑制",
+    "重複",
+    "去重",
     "門檻",
     "DemandAlertHistory",
     "治理",
@@ -137,8 +167,24 @@ const INTENT_KEYWORDS: Record<EnmsIntent, string[]> = {
   efficiency_analysis: [
     "能效",
     "節能",
+    "節電",
+    "省電",
+    "節費",
+    "省多少",
+    "帳單",
+    "台電帳單",
+    "billing",
     "節能挖掘",
     "energy efficiency",
+    "roi",
+    "what-if",
+    "what if",
+    "投資回收",
+    "回收期",
+    "payback",
+    "情境模擬",
+    "模擬",
+    "試算",
     "密度",
     "坪效",
     "kvarh",
@@ -214,6 +260,7 @@ export function detectEnmsIntent(message: string): {
   matchedKeywords: string[];
   totalMatches: number;
 } {
+  const normalizedMessage = normalize(message);
   let bestIntent: EnmsIntent = "unknown";
   let bestScore = 0;
   const allMatched: string[] = [];
@@ -233,8 +280,18 @@ export function detectEnmsIntent(message: string): {
   }
 
   const uniqueMatched = Array.from(new Set(allMatched));
+  const asksPowerFactorComparison =
+    (normalizedMessage.includes("功率因數") ||
+      normalizedMessage.includes("功因") ||
+      normalizedMessage.includes("power factor")) &&
+    (normalizedMessage.includes("哪個場域") ||
+      normalizedMessage.includes("各場域") ||
+      normalizedMessage.includes("比較") ||
+      normalizedMessage.includes("最差") ||
+      normalizedMessage.includes("低於建議值"));
+
   return {
-    intent: bestIntent,
+    intent: asksPowerFactorComparison ? "site_benchmarking" : bestIntent,
     matchedKeywords: uniqueMatched,
     totalMatches: uniqueMatched.length,
   };
@@ -244,6 +301,7 @@ export function buildEnmsContext(
   input: EnmsContextBuilderInput,
 ): EnmsPlannerPreflight {
   const message = input.request.user_message ?? "";
+  const normalizedMessage = normalize(message);
   const hint = input.request.current_system_hint;
 
   const { intent, matchedKeywords, totalMatches } = detectEnmsIntent(message);
@@ -273,8 +331,26 @@ export function buildEnmsContext(
     warnings.push("routed_without_clear_intent");
   }
 
+  if (
+    shouldRouteToEnms &&
+    intent === "site_benchmarking" &&
+    (normalizedMessage.includes("功率因數") ||
+      normalizedMessage.includes("功因")) &&
+    (normalizedMessage.includes("哪個場域") ||
+      normalizedMessage.includes("各場域") ||
+      normalizedMessage.includes("比較") ||
+      normalizedMessage.includes("低於建議值") ||
+      normalizedMessage.includes("最差"))
+  ) {
+    confidence = "high";
+  }
+
   const chartHits = countMatches(message, CHART_KEYWORDS);
-  const optionalChartRequested = chartHits.count > 0;
+  const explicitChartHits = countMatches(message, EXPLICIT_CHART_KEYWORDS);
+  const optionalChartRequested =
+    intent === "site_benchmarking"
+      ? explicitChartHits.count > 0
+      : chartHits.count > 0;
   const presentation = {
     optional_chart_requested: optionalChartRequested,
     chart_render_allowed: optionalChartRequested && shouldRouteToEnms,

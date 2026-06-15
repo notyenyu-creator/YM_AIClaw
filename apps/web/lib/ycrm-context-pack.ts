@@ -89,12 +89,15 @@ function buildLiveQuerySteps(plan: YcrmContextBuilderOutput): string[] {
 function buildExecutionHints(plan: YcrmContextBuilderOutput): string[] {
 	const hints = [
 		"Use the OpenClaw Gateway session runtime and follow the Hermes-style planner/context flow for this request.",
+		"Treat Y-CRM questions as source-of-truth-first requests: check live Y-CRM workspace data before answering from generic model knowledge.",
 		"Treat the AI Wiki layer as the durable knowledge source; prefer planner.read_first and wiki references over generic workspace guesses.",
 		"Keep Y-CRM as the source-of-truth for customer, contact, and opportunity semantics.",
 		"Do not fabricate CRM records; verify live data before making operational claims.",
 		"Do not start from workspace README.md for Y-CRM routing; use planner.read_first entries first because README may be absent.",
 		"Only read schema references that match the resolved Y-CRM workspace in planner.read_first. Do not probe other workspace auto-schema files.",
 		"Owner/assignee foreign keys are table-scoped. Never reuse a field like fuZeYeWuId on person/company unless that table's auto-schema explicitly shows it.",
+		"If Y-CRM facts do not cover the requested workspace, object, owner, chart aggregate, or time range, explicitly say what is missing instead of substituting generic sales or CRM advice.",
+		"Only provide external market or industry background when the user explicitly asks for it, and clearly label it as external information rather than Y-CRM data.",
 		"When token pressure is high, prefer a concise text summary and skip optional charts, extra panels, and raw result dumps.",
 	];
 

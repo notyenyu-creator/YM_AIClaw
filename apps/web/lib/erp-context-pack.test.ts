@@ -65,6 +65,12 @@ describe("decorateMessageWithErpContextPack", () => {
 		expect(decorated).toContain("runtime.knowledge_layer=ai_wiki");
 		expect(decorated).toContain("planner.intent=inventory_status");
 		expect(decorated).toContain("planner.read_first=skills/erp/SKILL.md");
+		expect(pack.execution_hints.join(" ")).toContain(
+			"source-of-truth-first requests",
+		);
+		expect(pack.execution_hints.join(" ")).toContain(
+			"explicitly say what is missing",
+		);
 		expect(decorated).toContain("原始訊息");
 	});
 

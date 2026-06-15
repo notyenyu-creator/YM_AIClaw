@@ -40,6 +40,7 @@ import {
 	parseErrorBody,
 	parseErrorFromStderr,
 } from "./agent-runner";
+import { EventEmitter } from "node:events";
 
 // ── Types ──
 
@@ -693,6 +694,69 @@ export function startRun(params: {
 	}
 
 	wireChildProcess(run);
+	return run;
+}
+
+function createNoopProcessHandle(): AgentProcessHandle {
+	const emitter = new EventEmitter();
+	const handle: AgentProcessHandle = {
+		stdout: null,
+		stderr: null,
+		kill: () => false,
+		on: ((event: string, listener: (...args: unknown[]) => void) => {
+			emitter.on(event, listener);
+			return handle;
+		}) as AgentProcessHandle["on"],
+		once: ((event: string, listener: (...args: unknown[]) => void) => {
+			emitter.once(event, listener);
+			return handle;
+		}) as AgentProcessHandle["once"],
+	};
+	return handle;
+}
+
+export async function createSyntheticCompletedRun(params: {
+	sessionId: string;
+	text: string;
+}): Promise<ActiveRun> {
+	const { sessionId, text } = params;
+	const existing = activeRuns.get(sessionId);
+	if (existing) {cleanupRun(sessionId);}
+
+	const textId = `text-${Date.now()}-1`;
+	const run: ActiveRun = {
+		sessionId,
+		childProcess: createNoopProcessHandle(),
+		eventBuffer: [
+			{ type: "text-start", id: textId },
+			{ type: "text-delta", id: textId, delta: text },
+			{ type: "text-end", id: textId },
+		],
+		subscribers: new Set(),
+		accumulated: {
+			id: `assistant-${sessionId}-${Date.now()}`,
+			role: "assistant",
+			parts: [{ type: "text", text }],
+		},
+		status: "completed",
+		startedAt: Date.now(),
+		exitCode: 0,
+		abortController: new AbortController(),
+		_persistTimer: null,
+		_lastPersistedAt: 0,
+		lastGlobalSeq: 0,
+		_subscribeRetryTimer: null,
+		_subscribeRetryAttempt: 0,
+		_waitingFinalizeTimer: null,
+	};
+
+	activeRuns.set(sessionId, run);
+	await flushPersistence(run);
+	setTimeout(() => {
+		if (activeRuns.get(sessionId) === run) {
+			cleanupRun(sessionId);
+		}
+	}, CLEANUP_GRACE_MS);
 	return run;
 }
 

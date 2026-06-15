@@ -266,10 +266,18 @@ function detectIntent(message: string, priorIntentHint: YcrmIntent | null): Ycrm
 }
 
 function shouldRouteToYcrm(message: string, hint: string | null, intent: YcrmIntent): boolean {
+  const mentionsYcrm = lowerIncludes(message, "y-crm") || message.includes("Y-CRM");
+  const negativeYcrmMention = /(不要|別|勿|不用|不看|排除|不要查|不要用).{0,16}(Y-CRM|y-crm)|(Y-CRM|y-crm).{0,16}(不要|別|勿|不用|不看|排除)/i.test(message);
+
   if (hint === "ycrm") {
     return true;
   }
-  if (lowerIncludes(message, "y-crm") || message.includes("Y-CRM")) {
+
+  if (negativeYcrmMention) {
+    return false;
+  }
+
+  if (mentionsYcrm) {
     return true;
   }
   if (["客戶", "商機", "聯絡人", "公司", "業務", "line", "LINE"].some((keyword) => lowerIncludes(message, keyword))) {

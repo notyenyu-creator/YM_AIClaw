@@ -152,11 +152,14 @@ function buildExecutionHints(
 ): string[] {
 	const hints = [
 		"Use the OpenClaw Gateway session runtime and follow the Hermes-style planner/context flow for this request.",
+		"Treat ERP questions as source-of-truth-first requests: check real ERP rows before answering from generic model knowledge.",
 		"Treat the AI Wiki layer as durable operating knowledge, but treat ERP itself as the transaction source-of-truth.",
 		"Keep ERP scoped to transaction, inventory, shipment, and finance facts. Do not substitute CRM semantics for ERP truth.",
 		"Always read the ERP skill and auto-schema reference before writing SQL or assuming field names.",
 		'Use quoted uppercase table names such as erp.public."SO" and erp.public."INVENTORY".',
 		"Use postgres_scanner in READ_ONLY mode and never emit INSERT/UPDATE/DELETE statements.",
+		"If ERP facts do not cover the requested company, site, document, item, or time range, explicitly say what is missing instead of substituting generic business background.",
+		"Only provide external market or industry background when the user explicitly asks for it, and clearly label it as external information rather than ERP data.",
 		"When token pressure is high, prefer a concise summary over dumping raw rows or oversized charts.",
 	];
 

@@ -29,6 +29,10 @@ describe("buildEnmsContextPack", () => {
     expect(pack.execution_hints.join(" ")).toContain(
       "statistical demand forecast against contract capacity",
     );
+    expect(pack.execution_hints.join(" ")).toContain(
+      "host=118.168.188.27 port=55433 dbname=EnMS user=sa password=ym@mes42769778 sslmode=disable",
+    );
+    expect(pack.execution_hints.join(" ")).toContain("dbname=enms_27");
   });
 
   it("routes anomaly questions toward raw hypertable drill-down", () => {
@@ -65,6 +69,26 @@ describe("buildEnmsContextPack", () => {
     expect(pack.playbooks).toContain(
       "wiki/playbooks/enms/ENMS_SITE_BENCHMARKING_PLAYBOOK_TEMPLATE.md",
     );
+    expect(pack.execution_hints.join(" ")).toContain(
+      "aggregate the same time window across sites",
+    );
+  });
+
+  it("adds ROI / what-if guidance for efficiency sessions", () => {
+    const preflight = buildEnmsContext({
+      request: { user_message: "請做這個場域的節能 ROI 與 what-if 試算。" },
+    });
+
+    const pack = buildEnmsContextPack(preflight);
+
+    expect(pack.planner.intent).toBe("efficiency_analysis");
+    expect(pack.playbooks).toContain(
+      "wiki/playbooks/enms/ENMS_ROI_WHAT_IF_PLAYBOOK_TEMPLATE.md",
+    );
+    expect(pack.live_query_steps).toContain("join_billing_tariff_scope");
+    expect(pack.execution_hints.join(" ")).toContain(
+      "estimate 5% and 10% savings scenarios",
+    );
   });
 
   it("adds VALUES-based chart guardrails for chart-style EnMS requests", () => {
@@ -96,6 +120,10 @@ describe("decorateMessageWithEnmsContextPack", () => {
     expect(decorated).toContain("runtime.knowledge_layer=ai_wiki");
     expect(decorated).toContain("planner.system_scope=enms");
     expect(decorated).toContain("planner.read_first=skills/enms/SKILL.md");
+    expect(decorated).toContain("Treat EnMS questions as DB-first requests");
+    expect(pack.execution_hints.join(" ")).toContain(
+      "explicitly say what is missing",
+    );
     expect(decorated).toContain("原始訊息");
   });
 

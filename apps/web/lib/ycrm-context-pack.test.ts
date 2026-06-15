@@ -55,6 +55,12 @@ describe("buildYcrmContextPack", () => {
 		expect(decorated).toContain("For charts, query real CRM data first and only then emit report-json VALUES payloads.");
 		expect(decorated).toContain("Only read schema references that match the resolved Y-CRM workspace in planner.read_first. Do not probe other workspace auto-schema files.");
 		expect(decorated).toContain("Owner/assignee foreign keys are table-scoped. Never reuse a field like fuZeYeWuId on person/company unless that table's auto-schema explicitly shows it.");
+		expect(pack.execution_hints.join(" ")).toContain(
+			"source-of-truth-first requests",
+		);
+		expect(pack.execution_hints.join(" ")).toContain(
+			"explicitly say what is missing",
+		);
 		expect(decorated).toContain("原始訊息");
 	});
 
