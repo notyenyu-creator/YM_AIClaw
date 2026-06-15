@@ -6,7 +6,9 @@
 ## Query Pattern
 1. 先讀 `DeviceDataSummaryView`
 2. join `sites / site_gateways / ComCompany`
-3. 視需求加入坪均 / 人均 / 功因指標
+3. 在相同時間窗下比較 `TotalConsumption / MaxDemand / AvgPowerFactor`
+4. 若 `EmployeeNum / TotalFloorArea` 可用，再補 `kWh/人`、`kWh/坪`
+5. 若所有場域都屬於同一公司，明確標註這是 first-pass multi-site comparison，不是完整 peer-group benchmarking
 
 ## Output Contract
 - 場域排名

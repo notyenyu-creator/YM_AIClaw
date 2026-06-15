@@ -36,18 +36,25 @@ metadata: { "openclaw": { "always": true, "emoji": "⚡" } }
    - 再看 `timescaledb_information`
    - 不假設 schema / table / column 一定存在
 
-4. **先摘要層，後原始層**
+4. **禁止猜測 EnMS 連線資訊**
+   - 需要使用 DuckDB `postgres_scanner` 時，只能使用本文件列出的 `.27 / EnMS` 連線資訊
+   - **禁止**自行改寫成 `dbname=enms_27`
+   - **禁止**改寫成 `host=localhost port=5432`
+   - **禁止**改寫成 `user=postgres password=postgres`
+   - 若該連線失敗，應明確回報缺少連線或資料，而不是換用猜測的資料庫名稱
+
+5. **先摘要層，後原始層**
    - 趨勢、KPI、需量、benchmarking：優先 `DeviceDataSummaryView`
    - 異常、根因、電力品質、即時 drill-down：再進 `mqtt_raw_data`
 
-5. **不要只靠 FK 推導資料圖**
+6. **不要只靠 FK 推導資料圖**
    - EnMS 的關聯不一定全部做成真 FK
    - 需同時理解：
      - 真正 FK
      - Fluent API / EF 關聯
      - 業務邏輯關聯
 
-6. **回答前一定先補語意**
+7. **回答前一定先補語意**
    - `mqtt_raw_data` 只有原始量測值時，不足以直接回答使用者
    - 要先補：
      - `ElectricityMeter`
@@ -56,17 +63,52 @@ metadata: { "openclaw": { "always": true, "emoji": "⚡" } }
      - `site_gateways`
      - `ComCompany`
 
-7. **圖表要先有非空聚合資料**
+8. **圖表要先有非空聚合資料**
    - 先 query 真實資料
    - 先做聚合
    - 確認非空後才畫圖
    - 若要輸出 `report-json`，請先把真實查詢結果轉成 `VALUES` 常量，讓圖表與文字摘要完全對齊
    - 不可在 SQL 未確認或聚合結果為空時產生圖表卡
 
-8. **預警 / 告警不能只靠 LLM 臨場發揮**
+9. **預警 / 告警不能只靠 LLM 臨場發揮**
    - 需量預警要依歷史 summary layer 與契約容量語意判斷
    - 異常偵測要同時看 summary baseline 與 raw signal
    - 告警治理要區分 `prewarning` 與 `alert`
+
+10. **高頻查詢不要亂猜 join 與表名**
+   - 場域級 summary 查詢：
+     - `DeviceDataSummaryView.MacAddress -> site_gateways.mac_address -> sites.site_id / sites.site_name`
+     - **不要**直接用 `DeviceDataSummaryView.site_name`
+     - **不要**直接用 `DeviceDataSummaryView.SiteId`
+   - 設備 / 迴路 / 電號查詢：
+     - `DeviceDataSummaryView.(MacAddress, CircuitSeq) -> ElectricityMeter.(DeviceAddress, CircuitSeq) -> PowerAccounts.AccountId -> PowerAccounts.SiteId -> sites.site_id`
+   - 若 prompt 已給明確 `電號 / AccountNumber`
+     - 先從 `PowerAccounts.AccountNumber` 與 `TaipowerBills.AccountNumber` 查
+     - **不要**把 `Demo 展示工廠` / `YMOffice` 這類電號名稱誤當成 `sites.site_name`
+   - **不要**把 `阿里山` / `洋銘資訊` 這類場域名拿去搜尋 `DeviceAddress` / `MacAddress`
+   - 帳單表就是 `TaipowerBills`
+     - **不要**亂猜 `electricity_bills`、`power_bills`、`site_roi_preview`
+     - `BillingMonth` 是民國年月格式
+       - 例如西元 `2025` 對應 `11401..11412`
+       - 目前 `BillingMonth` 是字串欄位，做年份篩選時要先 cast
+   - 契約容量：
+     - `PowerAccounts` 在目前 restored schema **沒有** `ContractCapacity`
+     - 若要找契約容量證據，先看 `DemandAlertHistory.ContractCapacity`
+   - `DemandAlertHistory` 為真實表
+     - 使用 quoted CamelCase 欄位，如 `AlertTime`、`AccountNumber`、`CurrentDemand`、`ContractCapacity`、`UtilizationRate`
+   - 功率因數比較：
+     - 優先用 `avg(DeviceDataSummaryView.AvgPowerFactor)`
+     - 若算出的結果超過 `0..1` 合理範圍，表示計算方式有問題，應標示資料 / 計算異常，而不是直接把不合理值當結果
+   - 設備耗電排行：
+     - 用 `sum(DeviceDataSummaryView.TotalConsumption)` 依 `site + DeviceAlias/DeviceName + CircuitSeq` 聚合
+     - `ElectricityMeter` 目前用的是 `DeviceAlias`，**不要**亂猜 `MeterAlias`
+     - **不要**回成單筆 timestamp 排行，除非使用者明確要求 drill-down
+   - 最近 6 期帳單趨勢：
+     - 用 `TaipowerBills` 依 `AccountNumber` 查
+     - `ORDER BY BillingMonth DESC LIMIT 6`
+   - 節電 5% / 10% 能省多少：
+     - 若 `TaipowerBills` 有資料，應同時估 `kWh` 與 `NTD` 節省
+     - 不要只回 kWh，卻忽略使用者明確在問 savings / ROI
 
 ---
 
@@ -132,6 +174,35 @@ SSL：disable
 - 類型：DuckDB `postgres_scanner`
 - 模式：`:memory:` + `READ_ONLY`
 
+### 首選查詢方式（優先使用）
+
+若是透過 `exec` 工具查 EnMS，**優先使用固定 helper script**，不要每次重打 `ATTACH`：
+
+```bash
+bash skills/enms/scripts/query_enms.sh "SELECT * FROM enms.public.\"TaipowerBills\" LIMIT 5;"
+```
+
+如果 SQL 很長、含有很多 quoted identifier、`ORDER BY`、`CASE WHEN`、多行條件，**不要**把整段 SQL 硬塞成單一 shell quoted 字串；請改用 heredoc：
+
+```bash
+cat <<'SQL' | bash skills/enms/scripts/query_enms.sh
+SELECT "BillingMonth", "UsageAmount", "TotalAmount"
+FROM enms.public."TaipowerBills"
+WHERE "AccountNumber" = '8888888888'
+ORDER BY "BillingMonth" DESC
+LIMIT 6;
+SQL
+```
+
+這支 script 已經固定：
+
+- `.27 / EnMS`
+- `port=55433`
+- `user=sa`
+- `password=ym@mes42769778`
+- alias = `enms`
+- `READ_ONLY`
+
 ```bash
 duckdb -json ':memory:' "
 INSTALL postgres_scanner;
@@ -140,6 +211,16 @@ ATTACH 'host=118.168.188.27 port=55433 dbname=EnMS user=sa password=ym@mes427697
 AS enms (TYPE postgres_scanner, READ_ONLY);
 SELECT version();
 "
+```
+
+### 禁止使用的錯誤範例
+
+```bash
+# 錯誤：不要猜資料庫名
+ATTACH 'dbname=enms_27 user=postgres password=postgres host=localhost port=5432'
+
+# 錯誤：不要把 Y-CRM / 預設 PostgreSQL 連線套到 EnMS
+ATTACH 'dbname=default user=postgres password=postgres host=localhost port=5432'
 ```
 
 ### 不建議當主來源
@@ -326,6 +407,12 @@ mqtt_raw_data
 - `HasLeadingPowerFactor`
 - `TotalKvarh`
 
+重要：
+
+- `DeviceDataSummaryView` 用的是 `MacAddress`
+- `mqtt_raw_data` 用的是 `mac`
+- **不要把 raw layer 的 `mac` 拿去查 `DeviceDataSummaryView`**
+
 ### 第二優先：`mqtt_raw_data`
 
 關鍵欄位：
@@ -390,6 +477,12 @@ mqtt_raw_data
 - `DeviceAreaId`
 - `IsActive`
 
+重要：
+
+- 在目前這份 restored EnMS schema 中，`PowerAccounts` **沒有** `ContractCapacity`
+- 若問題需要契約容量證據，優先看 `DemandAlertHistory.ContractCapacity`
+- 若問題需要電價 / tariff 路徑，走 `PowerAccounts.CurrentPlanId -> ElectricityPricePlans -> ElectricityPriceRates`
+
 #### `sites`
 
 - `SiteId`
@@ -434,6 +527,18 @@ mqtt_raw_data
 | 多場域比較          | `DeviceDataSummaryView` + `sites` + `site_gateways` + `ComCompany` |
 | Alert 智能治理      | `mqtt_raw_data` + `DemandAlertHistory` + `ElectricityMeter`        |
 | 能效分析 / 節能挖掘 | `DeviceDataSummaryView` + `ComCompany` + `sites` + `PowerAccounts` |
+
+## 不要猜不存在的 EnMS 物件
+
+- 不要查 `site_roi_preview` 這種名字
+  - 這只應該被視為 **derived fact / bootstrap label**，不是實體資料表
+- 不要查 `PowerPlans`
+  - 目前正確電價主資料表是：
+    - `ElectricityPricePlans`
+    - `ElectricityPriceRates`
+- 最終回覆不要出現 `bootstrap`、`snapshot`、`引導快照`、`derived fact` 這些工程內部字眼
+  - 若 context 中有 `roi_preview_fact`、`site_benchmark_30d`、`top_load_7d` 等標籤，請翻成「本地 EnMS DB 已彙整資料」
+  - 這些標籤不是表名，不可拿去 SQL 查詢
 
 ---
 
@@ -506,6 +611,132 @@ LEFT JOIN enms.public."ElectricityMeter" e
 ORDER BY r.timestamp DESC
 LIMIT 100;
 ```
+
+### Pattern F：電號需量告警筆數與類型分布
+
+適用問題：
+
+- `電號 04043717102 目前有多少筆需量告警紀錄？`
+- `幫我用圖表呈現告警類型分布`
+
+```sql
+SELECT COUNT(*) AS demand_alert_count
+FROM enms.public."DemandAlertHistory"
+WHERE "AccountNumber" = '04043717102';
+```
+
+```sql
+SELECT
+  "AlertType",
+  COUNT(*) AS alert_count
+FROM enms.public."DemandAlertHistory"
+WHERE "AccountNumber" = '04043717102'
+GROUP BY "AlertType"
+ORDER BY alert_count DESC;
+```
+
+若要輸出圖表，請用第二段查詢的真實結果轉成 `report-json` 的 `VALUES` 或 inline rows。
+
+### Pattern G：設備 / 迴路耗電排行
+
+適用問題：
+
+- `找出最近 7 天最耗電的設備或迴路`
+- `列出場域、電表別名、耗電量與優先關注原因`
+
+```sql
+SELECT
+  COALESCE(s.site_name, '(未對應場域)') AS site_name,
+  COALESCE(NULLIF(em."DeviceAlias", ''), em."DeviceName", v."MacAddress") AS meter_name,
+  v."CircuitSeq",
+  ROUND(SUM(v."TotalConsumption")::numeric, 2) AS total_kwh,
+  ROUND(MAX(v."MaxDemand")::numeric, 2) AS peak_kw,
+  ROUND(AVG(v."AvgPowerFactor")::numeric, 4) AS avg_pf
+FROM enms.public."DeviceDataSummaryView" v
+LEFT JOIN enms.public."ElectricityMeter" em
+  ON em."DeviceAddress" = v."MacAddress"
+ AND em."CircuitSeq" = v."CircuitSeq"
+LEFT JOIN enms.public."PowerAccounts" p
+  ON p."AccountId" = em."PowerAccountId"
+LEFT JOIN enms.public.sites s
+  ON s.site_id = p."SiteId"
+WHERE v."RecordTime" >= NOW() - INTERVAL '7 days'
+GROUP BY 1, 2, 3
+HAVING SUM(v."TotalConsumption") > 0
+ORDER BY total_kwh DESC
+LIMIT 10;
+```
+
+優先關注原因可依下列 DB 結果判斷：
+
+- `total_kwh` 高：用電集中，優先檢查排程與負載
+- `peak_kw` 高：可能造成需量壓力
+- `avg_pf` 低於 `0.9`：功因改善空間
+
+### Pattern H：能源趨勢分析
+
+適用問題：
+
+- `2026年1月到今天的能源趨勢分析`
+- `用圖表呈現用電趨勢`
+
+```sql
+SELECT
+  DATE_TRUNC('day', v."RecordTime") AS day,
+  ROUND(SUM(v."TotalConsumption")::numeric, 2) AS total_kwh,
+  ROUND(MAX(v."MaxDemand")::numeric, 2) AS peak_kw,
+  ROUND(AVG(v."AvgPowerFactor")::numeric, 4) AS avg_pf
+FROM enms.public."DeviceDataSummaryView" v
+WHERE v."RecordTime" >= TIMESTAMPTZ '2026-01-01 00:00:00+08'
+GROUP BY 1
+ORDER BY 1;
+```
+
+注意：
+
+- 用電趨勢用 `SUM(TotalConsumption)`
+- 需量趨勢用 `MAX(MaxDemand)`
+- 功率因數用 `AVG(AvgPowerFactor)`
+- 不要把 `WeightedPowerFactorSum` 當成可直接展示的功率因數
+
+### Pattern I：2025 節能 ROI / what-if
+
+適用問題：
+
+- `可以查 2025 年的節能 ROI 嗎？`
+- `節電 5% / 10% 大概可以省多少？`
+
+```sql
+WITH bills_2025 AS (
+  SELECT
+    p."SiteId",
+    s.site_name,
+    b."AccountNumber",
+    SUM(b."UsageAmount") AS usage_kwh,
+    SUM(b."TotalAmount") AS total_amount
+  FROM enms.public."TaipowerBills" b
+  JOIN enms.public."PowerAccounts" p
+    ON p."AccountNumber" = b."AccountNumber"
+  LEFT JOIN enms.public.sites s
+    ON s.site_id = p."SiteId"
+  WHERE b."BillingMonth" ~ '^[0-9]+$'
+    AND b."BillingMonth"::int BETWEEN 11401 AND 11412
+  GROUP BY 1, 2, 3
+)
+SELECT
+  site_name,
+  COUNT(DISTINCT "AccountNumber") AS billed_accounts,
+  ROUND(SUM(usage_kwh)::numeric, 2) AS baseline_kwh,
+  ROUND(SUM(total_amount)::numeric, 2) AS baseline_bill,
+  ROUND((SUM(total_amount) / NULLIF(SUM(usage_kwh), 0))::numeric, 4) AS avg_rate,
+  ROUND((SUM(total_amount) * 0.05)::numeric, 2) AS savings_5pct,
+  ROUND((SUM(total_amount) * 0.10)::numeric, 2) AS savings_10pct
+FROM bills_2025
+GROUP BY site_name
+ORDER BY baseline_bill DESC;
+```
+
+若沒有 CAPEX，請清楚說這是節電情境效益，不是完整投資回收期。
 
 ---
 
