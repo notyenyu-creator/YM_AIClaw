@@ -155,6 +155,21 @@ export function buildRollingChatContext(
 	};
 }
 
+export function compactRollingChatContext(
+	context: RollingChatContext,
+): RollingChatContext {
+	if (context.mode === "none") {
+		return context;
+	}
+
+	return {
+		mode: "window_only",
+		reason: `${context.reason}_compact_local_model`,
+		recent_window: context.recent_window.slice(-2),
+		rolling_summary: null,
+	};
+}
+
 export function decorateMessageWithRollingContext(
 	userMessage: string,
 	context: RollingChatContext,

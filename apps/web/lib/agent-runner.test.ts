@@ -288,6 +288,36 @@ describe("agent-runner", () => {
 			proc.kill("SIGTERM");
 		});
 
+		it("preserves explicit provider-prefixed model overrides", async () => {
+			const MockWs = installMockWsModule();
+			const { spawnAgentProcess } = await import("./agent-runner.js");
+
+			const proc = spawnAgentProcess(
+				"hello",
+				"sess-hermes-model",
+				undefined,
+				"gx10_hermes/qwen3:30b",
+			);
+			await waitFor(() => MockWs.instances[0]?.methods.includes("chat.send"));
+
+			const ws = MockWs.instances[0];
+			const patchFrame = ws.requestFrames.find(
+				(frame) => frame.method === "sessions.patch",
+			);
+
+			expect(patchFrame?.params).toMatchObject({
+				key: "agent:main:web:sess-hermes-model",
+				model: "gx10_hermes/qwen3:30b",
+			});
+			expect(patchFrame?.params).toMatchObject({
+				verboseLevel: "full",
+			});
+			expect(patchFrame?.params).not.toHaveProperty("thinkingLevel");
+			expect(patchFrame?.params).not.toHaveProperty("reasoningLevel");
+
+			proc.kill("SIGTERM");
+		});
+
 		it("connects to wss: URL for TLS gateways", async () => {
 			const MockWs = installMockWsModule();
 			process.env.OPENCLAW_GATEWAY_URL = "wss://gateway.example.com:443";

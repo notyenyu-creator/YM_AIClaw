@@ -559,7 +559,7 @@ describe("domain bootstrap snapshots", () => {
     expect(snapshot?.facts.join(" ")).toContain("power_factor_30d: site=蘆竹廠");
   });
 
-  it("decorates the prompt with a compact bootstrap snapshot", async () => {
+  it("decorates the prompt with a full bootstrap snapshot by default", async () => {
     const { decorateMessageWithDomainBootstrapSnapshot } = await import(
       "./domain-bootstrap"
     );
@@ -584,6 +584,42 @@ describe("domain bootstrap snapshots", () => {
     expect(decorated).toContain("bootstrap.response_template_when_partial_or_blocked:");
     expect(decorated).toContain("缺少資料：明確列出缺哪張表");
     expect(decorated).toContain("原始訊息");
+  });
+
+  it("supports a compact bootstrap snapshot mode for local models", async () => {
+    const { decorateMessageWithDomainBootstrapSnapshot } = await import(
+      "./domain-bootstrap"
+    );
+
+    const decorated = decorateMessageWithDomainBootstrapSnapshot(
+      "原始訊息",
+      {
+        system: "enms",
+        source: "live_db",
+        scope: "enms.public",
+        availability: "partial",
+        facts: [
+          "fact-1",
+          "fact-2",
+          "fact-3",
+          "fact-4",
+          "fact-5",
+        ],
+        joins: ["join-1", "join-2", "join-3"],
+        cautions: ["caution-1", "caution-2", "caution-3", "caution-4"],
+        gaps: ["gap-1", "gap-2", "gap-3", "gap-4"],
+        stillAvailable: ["available-1", "available-2", "available-3"],
+      },
+      { compact: true },
+    );
+
+    expect(decorated).toContain("fact-4");
+    expect(decorated).not.toContain("fact-5");
+    expect(decorated).toContain("join-2");
+    expect(decorated).not.toContain("join-3");
+    expect(decorated).toContain("gap-3");
+    expect(decorated).not.toContain("gap-4");
+    expect(decorated).not.toContain("bootstrap.response_template_when_partial_or_blocked:");
   });
 
   it("prioritizes relevant ROI facts when decorating the prompt", async () => {

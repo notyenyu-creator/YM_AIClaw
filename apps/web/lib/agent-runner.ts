@@ -184,9 +184,39 @@ function normalizeModelOverride(modelOverride?: string): string | undefined {
 		return undefined;
 	}
 	const normalized = modelOverride.trim();
-	return normalized.startsWith("dench-cloud/")
-		? normalized
-		: `dench-cloud/${normalized}`;
+	if (normalized.startsWith("dench-cloud/")) {
+		return normalized;
+	}
+	// Preserve explicit provider/model ids like "gx10_hermes/qwen3:30b".
+	// Only bare model ids should be treated as Dench Cloud shorthands.
+	return normalized.includes("/") ? normalized : `dench-cloud/${normalized}`;
+}
+
+function isGx10HermesModelOverride(modelOverride?: string): boolean {
+	const normalized = normalizeModelOverride(modelOverride)?.toLowerCase() ?? "";
+	return normalized.startsWith("gx10_hermes/");
+}
+
+function buildSessionPatchParams(
+	sessionKey: string,
+	modelOverride?: string,
+): Record<string, string> {
+	const normalizedModelOverride = normalizeModelOverride(modelOverride);
+	const patchParams: Record<string, string> = {
+		key: sessionKey,
+		verboseLevel: "full",
+	};
+
+	if (!isGx10HermesModelOverride(modelOverride)) {
+		patchParams.thinkingLevel = "high";
+		patchParams.reasoningLevel = "on";
+	}
+
+	if (normalizedModelOverride) {
+		patchParams.model = normalizedModelOverride;
+	}
+
+	return patchParams;
 }
 
 type AgentSubscribeSupport = "unknown" | "supported" | "unsupported";
@@ -1079,16 +1109,7 @@ class GatewayProcessHandle
 			return;
 		}
 
-		const patchParams: Record<string, string> = {
-			key: sessionKey,
-			thinkingLevel: "high",
-			verboseLevel: "full",
-			reasoningLevel: "on",
-		};
-		const normalizedModelOverride = normalizeModelOverride(modelOverride);
-		if (normalizedModelOverride) {
-			patchParams.model = normalizedModelOverride;
-		}
+		const patchParams = buildSessionPatchParams(sessionKey, modelOverride);
 
 		let attempt = 0;
 		let lastMessage = "";

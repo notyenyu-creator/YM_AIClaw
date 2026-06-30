@@ -120,7 +120,12 @@ vi.mock("./integrations", () => ({
   refreshIntegrationsRuntime: mocks.refreshIntegrationsRuntime,
 }));
 
-import { saveApiKey, saveVoiceId, selectModel } from "./dench-cloud-settings";
+import {
+  getCloudSettingsState,
+  saveApiKey,
+  saveVoiceId,
+  selectModel,
+} from "./dench-cloud-settings";
 
 describe("dench cloud settings", () => {
   beforeEach(() => {
@@ -244,5 +249,75 @@ describe("dench cloud settings", () => {
 
     const written = JSON.parse(mocks.state.configText);
     expect(written.messages.tts.providers.elevenlabs.voiceId).toBe("voice_456");
+  });
+
+  it("exposes configured chat models for the chat UI without changing Dench Cloud settings behavior", async () => {
+    mocks.state.configText = JSON.stringify({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-4.1-mini",
+          },
+          models: {
+            "openai/gpt-4.1-mini": {
+              alias: "GPT",
+            },
+            "gx10_hermes/qwen3:30b": {
+              alias: "GX10-Hermes",
+            },
+            "ollama/gemma4:e2b": {
+              alias: "Gemma4-E2B",
+            },
+          },
+        },
+      },
+      models: {
+        providers: {
+          gx10_hermes: {
+            models: [
+              {
+                id: "qwen3:30b",
+                name: "GX10 Hermes Qwen3 30B",
+                reasoning: true,
+              },
+            ],
+          },
+          ollama: {
+            models: [
+              {
+                id: "gemma4:e2b",
+                name: "Gemma 4 E2B (Local)",
+                reasoning: false,
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    const state = await getCloudSettingsState();
+
+    expect(state.primaryModel).toBe("openai/gpt-4.1-mini");
+    expect(state.chatModels).toEqual([
+      {
+        stableId: "openai/gpt-4.1-mini",
+        displayName: "GPT",
+        provider: "openai",
+        reasoning: true,
+      },
+      {
+        stableId: "gx10_hermes/qwen3:30b",
+        displayName: "GX10-Hermes",
+        provider: "hermes",
+        reasoning: true,
+      },
+      {
+        stableId: "ollama/gemma4:e2b",
+        displayName: "Gemma4-E2B",
+        provider: "ollama",
+        reasoning: false,
+      },
+    ]);
+    expect(state.models).toEqual([]);
   });
 });

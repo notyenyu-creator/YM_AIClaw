@@ -599,6 +599,25 @@ describe("workspace utilities", () => {
       );
     });
 
+    it("treats malformed empty postgres_scanner JSON as empty rows", async () => {
+      const { duckdbQueryExternalPgAsync, mockExists, mockExecFile } = await importWorkspace();
+      mockExists.mockImplementation((p) => String(p) === "/opt/homebrew/bin/duckdb");
+      mockExecFile.mockImplementation((_file: unknown, _args: unknown, _opts: unknown, cb: unknown) => {
+        (cb as (err: null, r: { stdout: string }) => void)(null, {
+          stdout: "[{]\n",
+        });
+        return {} as never;
+      });
+
+      const result = await duckdbQueryExternalPgAsync(
+        "host=118.168.188.27 port=55433 dbname=EnMS user=sa password=secret sslmode=disable",
+        'SELECT * FROM enms.public."DeviceDataSummaryView" WHERE "RecordTime" >= NOW() - INTERVAL \'7 days\'',
+        "enms",
+      );
+
+      expect(result).toEqual([]);
+    });
+
     it("returns empty array when external postgres execFile fails", async () => {
       const { duckdbQueryExternalPgAsync, mockExists, mockExecFile } = await importWorkspace();
       mockExists.mockImplementation((p) => String(p) === "/opt/homebrew/bin/duckdb");

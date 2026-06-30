@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 // Mock active-runs module
 vi.mock("@/lib/active-runs", () => ({
   startRun: vi.fn(),
+  createSyntheticCompletedRun: vi.fn(),
   hasActiveRun: vi.fn(() => false),
   subscribeToRun: vi.fn(),
   persistUserMessage: vi.fn(),
@@ -39,6 +40,7 @@ vi.mock("@/app/api/web-sessions/shared", () => ({
   updateSessionEnmsPlannerPreflight: vi.fn(),
   updateSessionErpPlannerContextPack: vi.fn(),
   updateSessionErpPlannerPreflight: vi.fn(),
+  updateSessionLastAnswerMeta: vi.fn(),
   updateSessionPlannerPreflight: vi.fn(),
   updateSessionPlannerContextPack: vi.fn(),
   resolveSessionKey: vi.fn(
@@ -57,9 +59,11 @@ vi.mock("@/app/api/sessions/shared", () => ({
 describe("Chat API routes", () => {
   beforeEach(() => {
     vi.resetModules();
+    vi.clearAllMocks();
     // Re-wire mocks
     vi.mock("@/lib/active-runs", () => ({
       startRun: vi.fn(),
+      createSyntheticCompletedRun: vi.fn(),
       hasActiveRun: vi.fn(() => false),
       subscribeToRun: vi.fn(),
       persistUserMessage: vi.fn(),
@@ -92,6 +96,7 @@ describe("Chat API routes", () => {
       updateSessionEnmsPlannerPreflight: vi.fn(),
       updateSessionErpPlannerContextPack: vi.fn(),
       updateSessionErpPlannerPreflight: vi.fn(),
+      updateSessionLastAnswerMeta: vi.fn(),
       updateSessionPlannerPreflight: vi.fn(),
       updateSessionPlannerContextPack: vi.fn(),
       resolveSessionKey: vi.fn(
@@ -163,7 +168,16 @@ describe("Chat API routes", () => {
       const res = await POST(req);
       expect(res.status).toBe(200);
       expect(res.headers.get("Content-Type")).toBe("text/event-stream");
-      expect(startRun).toHaveBeenCalled();
+      expect(startRun).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionId: "s1",
+          completionTrace: expect.objectContaining({
+            answerMode: "model_run",
+            requestedModelId: null,
+            domainId: null,
+          }),
+        }),
+      );
       expect(subscribeToRun).toHaveBeenCalledWith(
         "s1",
         expect.any(Function),
@@ -464,37 +478,18 @@ describe("Chat API routes", () => {
     });
 
     it("resolves workspace file paths in message", async () => {
-      const { resolveAgentWorkspacePrefix } = await import("@/lib/workspace");
-      vi.mocked(resolveAgentWorkspacePrefix).mockReturnValue("workspace");
-      const { startRun, hasActiveRun, subscribeToRun } = await import("@/lib/active-runs");
-      vi.mocked(hasActiveRun).mockReturnValue(false);
-      vi.mocked(subscribeToRun).mockReturnValue(() => {});
+      const { rewriteWorkspaceFileContextPaths } = await import("@/lib/workspace-file-context");
 
-      const { POST } = await import("./route.js");
-      const req = new Request("http://localhost/api/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          messages: [
-            {
-              id: "m1",
-              role: "user",
-              parts: [{ type: "text", text: "[Context: workspace file 'doc.md']" }],
-            },
-          ],
-          sessionId: "s1",
-        }),
-      });
-      await POST(req);
-      expect(startRun).toHaveBeenCalledWith(
-        expect.objectContaining({
-          message: expect.stringContaining("workspace/doc.md"),
-        }),
-      );
+      expect(
+        rewriteWorkspaceFileContextPaths(
+          "[Context: workspace file 'doc.md'] 請幫我閱讀這個檔案，摘要裡面的 routing 規則。",
+          "workspace",
+        ),
+      ).toContain("workspace/doc.md");
     });
 
     it("injects Y-CRM planner preflight into the agent message and stores planner metadata", async () => {
-      const { startRun, hasActiveRun, subscribeToRun } = await import("@/lib/active-runs");
+      const { startRun, createSyntheticCompletedRun, hasActiveRun, subscribeToRun } = await import("@/lib/active-runs");
       const {
         updateSessionPlannerPreflight,
         updateSessionPlannerContextPack,
@@ -538,25 +533,22 @@ describe("Chat API routes", () => {
           live_query_steps: expect.arrayContaining(["read_real_data", "read_auto_schema_first", "resolve_workspace_member_fk"]),
         }),
       );
-      expect(startRun).toHaveBeenCalledWith(
+      expect(startRun).not.toHaveBeenCalled();
+      expect(createSyntheticCompletedRun).toHaveBeenCalledWith(
         expect.objectContaining({
-          message: expect.stringContaining("[Y-CRM Context Pack]"),
-        }),
-      );
-      expect(startRun).toHaveBeenCalledWith(
-        expect.objectContaining({
-          message: expect.stringContaining("planner.intent=entity_summary"),
-        }),
-      );
-      expect(startRun).toHaveBeenCalledWith(
-        expect.objectContaining({
-          message: expect.stringContaining("resolve_workspace_member_fk"),
+          sessionId: "s1",
+          text: expect.any(String),
+          completionTrace: expect.objectContaining({
+            answerMode: "system_direct",
+            requestedModelId: null,
+            domainId: "ycrm",
+          }),
         }),
       );
     });
 
     it("injects ERP context pack when ERP keywords are present and Y-CRM does not claim the message", async () => {
-      const { startRun, hasActiveRun, subscribeToRun } = await import("@/lib/active-runs");
+      const { startRun, createSyntheticCompletedRun, hasActiveRun, subscribeToRun } = await import("@/lib/active-runs");
       const {
         invalidateSessionYcrmPlannerArtifacts,
         updateSessionErpPlannerContextPack,
@@ -632,19 +624,16 @@ describe("Chat API routes", () => {
           ]),
         }),
       );
-      expect(startRun).toHaveBeenCalledWith(
+      expect(startRun).not.toHaveBeenCalled();
+      expect(createSyntheticCompletedRun).toHaveBeenCalledWith(
         expect.objectContaining({
-          message: expect.stringContaining("[ERP Context Pack]"),
-        }),
-      );
-      expect(startRun).toHaveBeenCalledWith(
-        expect.objectContaining({
-          message: expect.stringContaining("planner.intent=sales_order"),
-        }),
-      );
-      expect(startRun).toHaveBeenCalledWith(
-        expect.objectContaining({
-          message: expect.stringContaining("runtime.orchestration=hermes_style"),
+          sessionId: "s-erp",
+          text: expect.any(String),
+          completionTrace: expect.objectContaining({
+            answerMode: "system_direct",
+            requestedModelId: null,
+            domainId: "erp",
+          }),
         }),
       );
     });

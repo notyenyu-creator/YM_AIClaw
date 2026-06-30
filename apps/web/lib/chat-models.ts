@@ -7,6 +7,10 @@ export type ChatModelOption = {
 	reasoning: boolean;
 };
 
+const GX10_PUBLIC_MODEL_IDS = new Set([
+	"gx10_hermes/hermes-agent",
+]);
+
 export function findChatModelByStableOrCatalogId(
 	models: ChatModelOption[],
 	id: string | null | undefined,
@@ -34,6 +38,28 @@ export function normalizeDenchModelId(
 		: normalized;
 }
 
+export function isGx10HermesModelId(
+	model: string | null | undefined,
+): boolean {
+	const normalized = normalizeDenchModelId(model)?.toLowerCase() ?? "";
+	return normalized.startsWith("gx10_hermes/");
+}
+
+export function isPublicChatModel(model: ChatModelOption): boolean {
+	const stableId = model.stableId.trim().toLowerCase();
+	if (!stableId.startsWith("gx10_hermes/")) {
+		return true;
+	}
+	return GX10_PUBLIC_MODEL_IDS.has(stableId);
+}
+
+export function filterPublicChatModels(
+	models: ChatModelOption[],
+): ChatModelOption[] {
+	const visible = models.filter(isPublicChatModel);
+	return visible.length > 0 ? visible : models;
+}
+
 export function isLikelyOpenAiModelId(
 	model: string | null | undefined,
 ): boolean {
@@ -46,6 +72,40 @@ export function isLikelyOpenAiModelId(
 		normalized.startsWith("o4") ||
 		normalized.includes("openai")
 	);
+}
+
+export function isLikelyCloudModelId(
+	model: string | null | undefined,
+): boolean {
+	const normalized = normalizeDenchModelId(model)?.toLowerCase() ?? "";
+	if (!normalized) {
+		return false;
+	}
+
+	if (isGx10HermesModelId(normalized) || normalized.startsWith("ollama/")) {
+		return false;
+	}
+
+	if (isLikelyOpenAiModelId(normalized)) {
+		return true;
+	}
+
+	return [
+		"anthropic.",
+		"anthropic/",
+		"claude",
+		"gemini",
+		"google/",
+		"google.",
+		"deepseek",
+		"xai/",
+		"grok",
+		"mistral/",
+		"mistral-",
+		"cohere/",
+		"command-",
+		"bedrock/",
+	].some((prefix) => normalized.startsWith(prefix));
 }
 
 export function resolveActiveChatModelId({
@@ -113,4 +173,3 @@ export function needsOpenAiSwitchAcknowledgement(
 	}
 	return false;
 }
-

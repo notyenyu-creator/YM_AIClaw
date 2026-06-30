@@ -14,6 +14,7 @@ import type { EnmsLearningDraft } from "@/lib/enms-learning-draft";
 import type { ErpPlannerPreflight } from "@/lib/erp-context-builder";
 import type { ErpContextPack } from "@/lib/erp-context-pack";
 import type { ErpLearningDraft } from "@/lib/erp-learning-draft";
+import type { SessionExecutionTrace } from "@/lib/chat-execution-trace";
 import type { YcrmContextPack } from "@/lib/ycrm-context-pack";
 import type { YcrmLearningDraft } from "@/lib/ycrm-learning-draft";
 import { resolveActiveAgentId, resolveWebChatDir } from "@/lib/workspace";
@@ -79,6 +80,8 @@ export type WebSessionMeta = {
   erpPlannerContextPack?: ErpContextPack;
   /** Latest ERP learning draft generated from the persisted planner context and session transcript. */
   erpPlannerLearningDraft?: ErpLearningDraft;
+  /** Last assistant answer execution mode for quick UX verification. */
+  lastAnswerMeta?: SessionExecutionTrace;
 };
 
 export function ensureDir() {
@@ -260,6 +263,20 @@ export function updateSessionEnmsPlannerPreflight(
     return;
   }
   session.enmsPlannerPreflight = plannerPreflight;
+  session.updatedAt = Date.now();
+  writeIndex(sessions);
+}
+
+export function updateSessionLastAnswerMeta(
+  sessionId: string,
+  lastAnswerMeta: SessionExecutionTrace,
+): void {
+  const sessions = readIndex();
+  const session = sessions.find((entry) => entry.id === sessionId);
+  if (!session) {
+    return;
+  }
+  session.lastAnswerMeta = lastAnswerMeta;
   session.updatedAt = Date.now();
   writeIndex(sessions);
 }

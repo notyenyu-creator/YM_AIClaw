@@ -15,6 +15,7 @@ import {
   refreshIntegrationsRuntime,
   type IntegrationRuntimeRefresh,
 } from "./integrations";
+import type { ChatModelOption } from "./chat-models";
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -85,6 +86,135 @@ function resolvePrimaryModel(config: UnknownRecord): string | null {
   const modelRecord = asRecord(model);
   const primary = modelRecord?.primary;
   return typeof primary === "string" && primary.trim() ? primary.trim() : null;
+}
+
+function parseConfiguredModelId(fullId: string): { providerKey: string; modelId: string } | null {
+  const trimmed = fullId.trim();
+  const slashIndex = trimmed.indexOf("/");
+  if (slashIndex <= 0 || slashIndex === trimmed.length - 1) {
+    return null;
+  }
+  return {
+    providerKey: trimmed.slice(0, slashIndex),
+    modelId: trimmed.slice(slashIndex + 1),
+  };
+}
+
+function inferChatProviderLabel(providerKey: string, catalogProvider?: string | null): string {
+  if (catalogProvider?.trim()) {
+    return catalogProvider.trim();
+  }
+
+  const normalized = providerKey.trim().toLowerCase();
+  if (normalized.includes("openai")) return "openai";
+  if (normalized.includes("anthropic") || normalized.includes("claude")) return "anthropic";
+  if (normalized.includes("google") || normalized.includes("gemini")) return "google";
+  if (normalized.includes("mistral")) return "mistral";
+  if (normalized.includes("perplexity")) return "perplexity";
+  if (normalized.includes("deepseek")) return "deepseek";
+  if (normalized.includes("kimi") || normalized.includes("moonshot")) return "kimi";
+  if (normalized.includes("minimax") || normalized.includes("mini-max")) return "minimax";
+  if (normalized.includes("ollama")) return "ollama";
+  if (normalized.includes("hermes")) return "hermes";
+  if (normalized === "dench-cloud") return "dench-cloud";
+  return providerKey;
+}
+
+function chooseConfiguredModelDisplayName({
+	providerKey,
+	modelId,
+	alias,
+	providerModelName,
+	catalogDisplayName,
+}: {
+	providerKey: string;
+	modelId: string;
+  alias: string | null;
+	providerModelName: string | null;
+	catalogDisplayName: string | null;
+}): string {
+	if (alias) {
+		return alias;
+	}
+	if (providerModelName) {
+		return providerModelName;
+	}
+	if (catalogDisplayName) {
+		return catalogDisplayName;
+	}
+	return modelId;
+}
+
+function buildChatModelsFromConfig(
+  config: UnknownRecord,
+  catalogModels: DenchCloudCatalogModel[] = [],
+): ChatModelOption[] {
+  const configuredModels = asRecord(asRecord(asRecord(config.agents)?.defaults)?.models);
+  if (!configuredModels) {
+    return [];
+  }
+
+  const providers = asRecord(asRecord(config.models)?.providers);
+  const providerModelMap = new Map<string, { name: string | null; reasoning: boolean }>();
+  for (const [providerKey, providerValue] of Object.entries(providers ?? {})) {
+    const providerRecord = asRecord(providerValue);
+    const providerModels = Array.isArray(providerRecord?.models) ? providerRecord.models : [];
+    for (const entry of providerModels) {
+      const modelRecord = asRecord(entry);
+      const modelId = readString(modelRecord?.id);
+      if (!modelId) {
+        continue;
+      }
+      providerModelMap.set(`${providerKey}/${modelId}`, {
+        name: readString(modelRecord?.name),
+        reasoning: Boolean(modelRecord?.reasoning),
+      });
+    }
+  }
+
+  const catalogMap = new Map<string, DenchCloudCatalogModel>();
+  for (const model of catalogModels) {
+    catalogMap.set(model.stableId, model);
+    catalogMap.set(model.id, model);
+  }
+
+  const chatModels: ChatModelOption[] = [];
+  const seen = new Set<string>();
+  for (const [fullId, configuredEntry] of Object.entries(configuredModels)) {
+    const parsed = parseConfiguredModelId(fullId);
+    if (!parsed) {
+      continue;
+    }
+
+    const configuredRecord = asRecord(configuredEntry);
+    const alias = readString(configuredRecord?.alias) ?? readString(configuredRecord?.name);
+    const providerModel = providerModelMap.get(`${parsed.providerKey}/${parsed.modelId}`) ?? null;
+    const catalogModel = parsed.providerKey === "dench-cloud"
+      ? (catalogMap.get(parsed.modelId) ?? catalogMap.get(fullId) ?? null)
+      : null;
+    const stableId = parsed.providerKey === "dench-cloud" ? parsed.modelId : fullId;
+
+    if (seen.has(stableId)) {
+      continue;
+    }
+    seen.add(stableId);
+
+    chatModels.push({
+      stableId,
+      ...(stableId !== fullId ? { catalogId: fullId } : {}),
+      displayName: chooseConfiguredModelDisplayName({
+        providerKey: parsed.providerKey,
+        modelId: parsed.modelId,
+        alias,
+        providerModelName: providerModel?.name ?? null,
+        catalogDisplayName: catalogModel?.displayName ?? null,
+      }),
+      provider: inferChatProviderLabel(parsed.providerKey, catalogModel?.provider ?? null),
+      reasoning: providerModel?.reasoning ?? catalogModel?.reasoning ?? true,
+    });
+  }
+
+  return chatModels;
 }
 
 function ensureRecord(parent: UnknownRecord, key: string): UnknownRecord {
@@ -235,6 +365,7 @@ export type CloudSettingsState = {
   primaryModel: string | null;
   isDenchPrimary: boolean;
   selectedDenchModel: string | null;
+  chatModels: ChatModelOption[];
   selectedVoiceId: string | null;
   elevenLabsEnabled: boolean;
   models: DenchCloudCatalogModel[];
@@ -314,6 +445,7 @@ export async function getCloudSettingsState(): Promise<CloudSettingsState> {
       primaryModel,
       isDenchPrimary,
       selectedDenchModel: null,
+      chatModels: buildChatModelsFromConfig(config),
       selectedVoiceId: voiceState.selectedVoiceId,
       elevenLabsEnabled: voiceState.elevenLabsEnabled,
       models: [],
@@ -329,6 +461,7 @@ export async function getCloudSettingsState(): Promise<CloudSettingsState> {
       primaryModel,
       isDenchPrimary,
       selectedDenchModel: null,
+      chatModels: buildChatModelsFromConfig(config),
       selectedVoiceId: voiceState.selectedVoiceId,
       elevenLabsEnabled: voiceState.elevenLabsEnabled,
       models: [],
@@ -346,6 +479,7 @@ export async function getCloudSettingsState(): Promise<CloudSettingsState> {
     primaryModel,
     isDenchPrimary,
     selectedDenchModel: settings.selectedModel ?? null,
+    chatModels: buildChatModelsFromConfig(config, catalog.models),
     selectedVoiceId: voiceState.selectedVoiceId,
     elevenLabsEnabled: voiceState.elevenLabsEnabled,
     models: catalog.models,

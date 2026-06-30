@@ -60,8 +60,90 @@ describe("buildEnmsVerifiedDirectQueryAnswer", () => {
       userMessage: "請問我在2026年1月到今天的能源趨勢分析可以提供給我嗎？",
     });
 
-    expect(answer).toBeNull();
-    expect(duckdbQueryExternalPgAsyncDetailed).not.toHaveBeenCalled();
+    expect(answer).not.toBeNull();
+    expect(duckdbQueryExternalPgAsyncDetailed).toHaveBeenCalledTimes(1);
+  });
+
+  it("answers EnMS bill-trend prompts from local billing rows and emits report-json", async () => {
+    const { duckdbQueryExternalPgAsyncDetailed } = await import("./workspace");
+    vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockResolvedValueOnce({
+      rows: [
+        {
+          period: "2026-01",
+          bill_count: 1,
+          account_count: 1,
+          total_kwh: 1200.5,
+          total_bill: 4200,
+          avg_rate: 3.4985,
+        },
+        {
+          period: "2026-02",
+          bill_count: 1,
+          account_count: 1,
+          total_kwh: 1188.2,
+          total_bill: 4310,
+          avg_rate: 3.6273,
+        },
+      ],
+      error: null,
+    });
+
+    const { buildEnmsVerifiedDirectQueryAnswer } = await import(
+      "./enms-verified-direct-query"
+    );
+
+    const answer = await buildEnmsVerifiedDirectQueryAnswer({
+      userMessage: "電號 8888888888 最近 6 期台電帳單趨勢如何？請用圖表呈現。",
+    });
+
+    expect(duckdbQueryExternalPgAsyncDetailed).toHaveBeenCalledTimes(1);
+    const sql = vi.mocked(duckdbQueryExternalPgAsyncDetailed).mock.calls[0]?.[1] ?? "";
+    expect(sql).toContain('AND pa."AccountNumber" = \'8888888888\'');
+    expect(answer).toContain("最近 6 期台電帳單趨勢已整理完成");
+    expect(answer).toContain("最新期 2026-02");
+    expect(answer).toContain("\"enms-bill-trend-amount\"");
+  });
+
+  it("does not let bill-trend prompts get intercepted by site bill ranking", async () => {
+    const { duckdbQueryExternalPgAsyncDetailed } = await import("./workspace");
+    vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockResolvedValueOnce({
+      rows: [],
+      error: null,
+    });
+
+    const { buildEnmsVerifiedDirectQueryAnswer } = await import(
+      "./enms-verified-direct-query"
+    );
+
+    const answer = await buildEnmsVerifiedDirectQueryAnswer({
+      userMessage: "阿里山最近 6 期台電帳單趨勢如何？請用圖表呈現。",
+    });
+
+    expect(duckdbQueryExternalPgAsyncDetailed).toHaveBeenCalledTimes(1);
+    expect(answer).toContain("不能用 DB 產出帳單趨勢圖");
+    expect(answer).not.toContain("電費 / 用電排行");
+  });
+
+  it("answers meter count requests from EnMS DB rows and emits report-json", async () => {
+    const { duckdbQueryExternalPgAsyncDetailed } = await import("./workspace");
+    vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockResolvedValueOnce({
+      rows: [{ total_count: 128 }],
+      error: null,
+    });
+
+    const { buildEnmsVerifiedDirectQueryAnswer } = await import(
+      "./enms-verified-direct-query"
+    );
+
+    const answer = await buildEnmsVerifiedDirectQueryAnswer({
+      userMessage: "可以幫我用圖表呈現一下目前有多少電表嗎？",
+    });
+
+    expect(duckdbQueryExternalPgAsyncDetailed).toHaveBeenCalledTimes(1);
+    expect(answer).toContain("目前共有 128 個電表");
+    expect(answer).toContain("```report-json");
+    expect(answer).toContain("\"meter_count-bar\"");
+    expect(answer).toContain("\"type\": \"bar\"");
   });
 
   it("answers year-based ROI requests from EnMS billing rows and emits report-json", async () => {
@@ -282,9 +364,93 @@ describe("buildEnmsVerifiedDirectQueryAnswer", () => {
       userMessage: "阿里山最近 7 天的設備耗電排行如何？請列出 Top 5。",
     });
 
-    expect(answer).toContain("阿里山最近 7 天設備 / 迴路耗電 Top 1");
+    expect(answer).toContain("阿里山最近 7 天的設備 / 迴路耗電 Top 1");
     expect(answer).toContain("主電錶");
     expect(answer).toContain("平均功率因數偏低");
+  });
+
+  it("explains missing recent top-load data with absolute dates and latest available 7-day fallback", async () => {
+    const { duckdbQueryExternalPgAsyncDetailed } = await import("./workspace");
+    vi.mocked(duckdbQueryExternalPgAsyncDetailed)
+      .mockResolvedValueOnce({
+        rows: [],
+        error: null,
+      })
+      .mockResolvedValueOnce({
+        rows: [
+          {
+            requested_window_start: "2026-06-16 15:10:00+08",
+            requested_window_end: "2026-06-23 15:10:00+08",
+            earliest_summary_time: "2026-05-21 19:00:00+08",
+            latest_summary_time: "2026-06-15 01:45:00+08",
+            fallback_window_start: "2026-06-08 01:45:00+08",
+            fallback_window_end: "2026-06-15 01:45:00+08",
+            summary_rows_requested_window: 0,
+          },
+        ],
+        error: null,
+      })
+      .mockResolvedValueOnce({
+        rows: [
+          {
+            site_name: "阿里山",
+            meter_name: "主電錶",
+            circuit_seq: 1,
+            total_kwh: 3454.5,
+            peak_kw: 12993.01,
+            avg_pf: 0.6896,
+          },
+        ],
+        error: null,
+      });
+
+    const { buildEnmsVerifiedDirectQueryAnswer } = await import(
+      "./enms-verified-direct-query"
+    );
+
+    const answer = await buildEnmsVerifiedDirectQueryAnswer({
+      userMessage: "請找出最近 7 天最耗電的設備或迴路，列出場域、電表別名、耗電量與需優先關注的原因。",
+    });
+
+    expect(duckdbQueryExternalPgAsyncDetailed).toHaveBeenCalledTimes(3);
+    expect(answer).toContain("你要求的查詢條件是 全部場域最近 7 天設備 / 迴路耗電排行");
+    expect(answer).toContain("實際查詢區間：2026-06-16 15:10:00+08 至 2026-06-23 15:10:00+08");
+    expect(answer).toContain("目前這個範圍可見的 summary 資料時間帶為 2026-05-21 19:00:00+08 至 2026-06-15 01:45:00+08");
+    expect(answer).toContain("最新可用 7 天（2026-06-08 01:45:00+08 至 2026-06-15 01:45:00+08）");
+    expect(answer).toContain("主電錶");
+    expect(answer).toContain("請查 2026-06-01 到 2026-06-15 的設備 / 迴路耗電排行");
+  });
+
+  it("answers top-load ranking with explicit date ranges", async () => {
+    const { duckdbQueryExternalPgAsyncDetailed } = await import("./workspace");
+    vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockResolvedValueOnce({
+      rows: [
+        {
+          site_name: "阿里山",
+          meter_name: "主電錶",
+          circuit_seq: 1,
+          total_kwh: 3454.5,
+          peak_kw: 12993.01,
+          avg_pf: 0.6896,
+        },
+      ],
+      error: null,
+    });
+
+    const { buildEnmsVerifiedDirectQueryAnswer } = await import(
+      "./enms-verified-direct-query"
+    );
+
+    const answer = await buildEnmsVerifiedDirectQueryAnswer({
+      userMessage: "請查 2026-06-01 到 2026-06-15 的設備耗電排行，列出最耗電電表。",
+    });
+
+    expect(duckdbQueryExternalPgAsyncDetailed).toHaveBeenCalledTimes(1);
+    const sql = vi.mocked(duckdbQueryExternalPgAsyncDetailed).mock.calls[0]?.[1] ?? "";
+    expect(sql).toContain("DATE '2026-06-01'");
+    expect(sql).toContain("DATE '2026-06-15' + INTERVAL '1 day'");
+    expect(answer).toContain("全部場域 2026-06-01 到 2026-06-15的設備 / 迴路耗電 Top 1");
+    expect(answer).toContain("主電錶");
   });
 
   it("answers recent anomaly and power-quality questions from summary and raw rows", async () => {
@@ -399,6 +565,203 @@ describe("buildEnmsVerifiedDirectQueryAnswer", () => {
     expect(answer).toContain("阿里山（2025）");
     expect(answer).toContain("節電 5% 約省 50,343.15 kWh / NT$ 179,649");
     expect(answer).toContain("此回答只使用本地 EnMS DB");
+  });
+
+  it("answers latest bill ranking questions from EnMS billing rows", async () => {
+    const { duckdbQueryExternalPgAsyncDetailed } = await import("./workspace");
+    vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockResolvedValueOnce({
+      rows: [
+        {
+          site_name: "阿里山",
+          gregorian_year: 2025,
+          billed_accounts: 1,
+          bill_count: 12,
+          baseline_kwh: 1006863,
+          baseline_bill: 3592971,
+          savings_5pct_kwh: 50343.15,
+          savings_10pct_kwh: 100686.3,
+          savings_5pct_ntd: 179648.55,
+          savings_10pct_ntd: 359297.1,
+        },
+        {
+          site_name: "洋銘資訊",
+          gregorian_year: 2025,
+          billed_accounts: 2,
+          bill_count: 12,
+          baseline_kwh: 17177,
+          baseline_bill: 57638,
+          savings_5pct_kwh: 858.85,
+          savings_10pct_kwh: 1717.7,
+          savings_5pct_ntd: 2881.9,
+          savings_10pct_ntd: 5763.8,
+        },
+      ],
+      error: null,
+    });
+
+    const { buildEnmsVerifiedDirectQueryAnswer } = await import(
+      "./enms-verified-direct-query"
+    );
+
+    const answer = await buildEnmsVerifiedDirectQueryAnswer({
+      userMessage: "哪個場域最新年度電費最高？請用圖表呈現各場域電費排行。",
+    });
+
+    expect(duckdbQueryExternalPgAsyncDetailed).toHaveBeenCalledTimes(1);
+    expect(answer).toContain("2025 年台電帳單 baseline 的電費 / 用電排行");
+    expect(answer).toContain("1. 阿里山：年度電費 NT$ 3,592,971");
+    expect(answer).toContain("2. 洋銘資訊：年度電費 NT$ 57,638");
+    expect(answer).toContain("```report-json");
+    expect(answer).toContain("\"enms-site-bill-ranking\"");
+    expect(answer).toContain("\"baseline_bill\"");
+    expect(answer).toContain("\"baseline_kwh\"");
+  });
+
+  it("answers EnMS energy trend questions with a verified time-series report", async () => {
+    const { duckdbQueryExternalPgAsyncDetailed } = await import("./workspace");
+    vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockResolvedValueOnce({
+      rows: [
+        { period: "2026-01", total_kwh: 5707.52, peak_kw: 57, avg_pf: 0.9821 },
+        { period: "2026-02", total_kwh: 5696.46, peak_kw: 55, avg_pf: 0.9784 },
+        { period: "2026-03", total_kwh: 6033.12, peak_kw: 58, avg_pf: 0.9812 },
+      ],
+      error: null,
+    });
+
+    const { buildEnmsVerifiedDirectQueryAnswer } = await import(
+      "./enms-verified-direct-query"
+    );
+
+    const answer = await buildEnmsVerifiedDirectQueryAnswer({
+      userMessage: "請問我在2026年1月到今天的能源趨勢分析可以提供給我嗎？也可以幫我用圖表呈現出來。",
+    });
+
+    expect(duckdbQueryExternalPgAsyncDetailed).toHaveBeenCalledTimes(1);
+    expect(answer).toContain("能源趨勢已整理完成");
+    expect(answer).toContain("時間粒度：月");
+    expect(answer).toContain("最新區間 2026-03：用電 6,033.12 kWh");
+    expect(answer).toContain("```report-json");
+    expect(answer).toContain("\"enms-energy-trend-kwh\"");
+    expect(answer).toContain("\"enms-energy-trend-demand\"");
+    expect(answer).toContain("\"enms-energy-trend-pf\"");
+  });
+
+  it("does not let ROI prompts get intercepted by energy trend detection", async () => {
+    const { duckdbQueryExternalPgAsyncDetailed } = await import("./workspace");
+    vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockResolvedValueOnce({
+      rows: [
+        {
+          site_name: "阿里山",
+          account_count: 1,
+          billed_accounts: 1,
+          bill_count: 12,
+          baseline_kwh: 1006863,
+          baseline_bill: 3592971,
+          avg_rate: 3.5685,
+          savings_5pct: 179648.55,
+          savings_10pct: 359297.1,
+        },
+      ],
+      error: null,
+    });
+
+    const { buildEnmsVerifiedDirectQueryAnswer } = await import(
+      "./enms-verified-direct-query"
+    );
+
+    const answer = await buildEnmsVerifiedDirectQueryAnswer({
+      userMessage: "可以查 2025 年節能 ROI 趨勢分析圖嗎？",
+    });
+
+    expect(duckdbQueryExternalPgAsyncDetailed).toHaveBeenCalledTimes(1);
+    expect(answer).toContain("2025 年節能 ROI 的年度帳單基線試算");
+    expect(answer).not.toContain("能源趨勢已整理完成");
+  });
+
+  it("answers EnMS explicit date-range energy trend questions without falling back", async () => {
+    const { duckdbQueryExternalPgAsyncDetailed } = await import("./workspace");
+    vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockResolvedValueOnce({
+      rows: [
+        { period: "2026-01-01", total_kwh: 5707.52, peak_kw: 57, avg_pf: 0.9821 },
+        { period: "2026-01-02", total_kwh: 5696.46, peak_kw: 55, avg_pf: 0.9784 },
+      ],
+      error: null,
+    });
+
+    const { buildEnmsVerifiedDirectQueryAnswer } = await import(
+      "./enms-verified-direct-query"
+    );
+
+    const answer = await buildEnmsVerifiedDirectQueryAnswer({
+      userMessage: "請用 EnMS 資料分析 2026-01-01 到 2026-01-02 的能源趨勢，並用圖表呈現。",
+    });
+
+    expect(duckdbQueryExternalPgAsyncDetailed).toHaveBeenCalledTimes(1);
+    const sql = vi.mocked(duckdbQueryExternalPgAsyncDetailed).mock.calls[0]?.[1] ?? "";
+    expect(sql).toContain("DATE '2026-01-01'");
+    expect(sql).toContain("DATE '2026-01-02' + INTERVAL '1 day'");
+    expect(answer).toContain("能源趨勢已整理完成");
+    expect(answer).toContain("時間粒度：日");
+    expect(answer).toContain("最新區間 2026-01-02：用電 5,696.46 kWh");
+  });
+
+  it("does not misroute site KPI questions into asset counts", async () => {
+    const { duckdbQueryExternalPgAsyncDetailed } = await import("./workspace");
+    vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockResolvedValueOnce({
+      rows: [
+        {
+          site_name: "阿里山",
+          total_kwh: 1006863,
+          peak_kw: 12993.01,
+          avg_pf: 0.9123,
+          min_pf: 0.8012,
+          point_count: 1440,
+        },
+      ],
+      error: null,
+    });
+
+    const { buildEnmsVerifiedDirectQueryAnswer } = await import(
+      "./enms-verified-direct-query"
+    );
+
+    const answer = await buildEnmsVerifiedDirectQueryAnswer({
+      userMessage: "最近 30 天各場域總用電是多少？請做比較。",
+    });
+
+    expect(duckdbQueryExternalPgAsyncDetailed).toHaveBeenCalledTimes(1);
+    expect(answer).toContain("最近 30 天場域 benchmarking");
+    expect(answer).toContain("總用電 1,006,863 kWh");
+    expect(answer).not.toContain("目前共有");
+  });
+
+  it("keeps peak-demand ranking questions on the peak-demand path when phrased as ranking", async () => {
+    const { duckdbQueryExternalPgAsyncDetailed } = await import("./workspace");
+    vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockResolvedValueOnce({
+      rows: [
+        {
+          site_name: "阿里山",
+          meter_name: "主電錶",
+          circuit_seq: 1,
+          peak_kw: 12993.01,
+          peak_time: "2026-06-10 11:45:00+08",
+        },
+      ],
+      error: null,
+    });
+
+    const { buildEnmsVerifiedDirectQueryAnswer } = await import(
+      "./enms-verified-direct-query"
+    );
+
+    const answer = await buildEnmsVerifiedDirectQueryAnswer({
+      userMessage: "最近 30 天最大需量排名，列出時間與數值。",
+    });
+
+    expect(duckdbQueryExternalPgAsyncDetailed).toHaveBeenCalledTimes(1);
+    expect(answer).toContain("最近 30 天場域最大需量排行");
+    expect(answer).toContain("時間 2026-06-10 11:45:00+08");
+    expect(answer).not.toContain("場域 benchmarking");
   });
 
   it("answers executive briefs and quick wins from combined EnMS DB rows", async () => {

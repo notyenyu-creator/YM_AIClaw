@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { Component, useMemo, type ReactNode } from "react";
 import {
   BarChart,
   Bar,
@@ -114,6 +114,83 @@ function formatLabel(val: unknown): string {
   return str;
 }
 
+function toStringArray(value: unknown): string[] {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed ? [trimmed] : [];
+  }
+
+  if (!Array.isArray(value)) {return [];}
+
+  return value
+    .filter((item): item is string => typeof item === "string")
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function safeYAxis(mapping: PanelConfig["mapping"], fallback: string[]): string[] {
+  const yAxis = toStringArray((mapping as { yAxis?: unknown }).yAxis);
+  if (yAxis.length > 0) {return yAxis;}
+  return fallback.filter(Boolean);
+}
+
+function safeColors(mapping: PanelConfig["mapping"]): string[] {
+  const colors = toStringArray((mapping as { colors?: unknown }).colors);
+  return colors.length > 0 ? colors : CHART_PALETTE;
+}
+
+function ChartConfigError({ compact }: { compact?: boolean }) {
+  return (
+    <div
+      className="flex items-center justify-center rounded-xl"
+      style={{
+        height: compact ? 200 : 320,
+        background: "var(--color-surface)",
+        border: "1px solid var(--color-border)",
+        color: "#f87171",
+        fontSize: 13,
+      }}
+    >
+      圖表設定格式有誤
+    </div>
+  );
+}
+
+type ChartPanelErrorBoundaryProps = {
+  children: ReactNode;
+  compact?: boolean;
+  resetKey: string;
+};
+
+type ChartPanelErrorBoundaryState = {
+  hasError: boolean;
+};
+
+class ChartPanelErrorBoundary extends Component<
+  ChartPanelErrorBoundaryProps,
+  ChartPanelErrorBoundaryState
+> {
+  state = { hasError: false };
+
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+
+  componentDidUpdate(prevProps: ChartPanelErrorBoundaryProps) {
+    if (prevProps.resetKey !== this.props.resetKey && this.state.hasError) {
+      this.setState({ hasError: false });
+    }
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return <ChartConfigError compact={this.props.compact} />;
+    }
+
+    return this.props.children;
+  }
+}
+
 // --- Chart renderers ---
 
 function CartesianChart({
@@ -133,8 +210,8 @@ function CartesianChart({
 }) {
   const { mapping } = config;
   const xKey = mapping.xAxis ?? Object.keys(data[0] ?? {})[0] ?? "x";
-  const yKeys = mapping.yAxis ?? Object.keys(data[0] ?? {}).filter((k) => k !== xKey);
-  const colors = mapping.colors ?? CHART_PALETTE;
+  const yKeys = safeYAxis(mapping, Object.keys(data[0] ?? {}).filter((k) => k !== xKey));
+  const colors = safeColors(mapping);
   const height = compact ? 200 : 320;
   const ttStyle = tooltipStyle();
 
@@ -201,7 +278,7 @@ function PieDonutChart({
   const { mapping, type } = config;
   const nameKey = mapping.nameKey ?? Object.keys(data[0] ?? {})[0] ?? "name";
   const valueKey = mapping.valueKey ?? Object.keys(data[0] ?? {})[1] ?? "value";
-  const colors = mapping.colors ?? CHART_PALETTE;
+  const colors = safeColors(mapping);
   const height = compact ? 280 : 360;
   const ttStyle = tooltipStyle();
   const innerRadius = type === "donut" ? "50%" : 0;
@@ -255,8 +332,8 @@ function RadarChartPanel({
 }) {
   const { mapping } = config;
   const nameKey = mapping.xAxis ?? mapping.nameKey ?? Object.keys(data[0] ?? {})[0] ?? "name";
-  const valueKeys = mapping.yAxis ?? [Object.keys(data[0] ?? {})[1] ?? "value"];
-  const colors = mapping.colors ?? CHART_PALETTE;
+  const valueKeys = safeYAxis(mapping, [Object.keys(data[0] ?? {})[1] ?? "value"]);
+  const colors = safeColors(mapping);
   const height = compact ? 200 : 320;
   const ttStyle = tooltipStyle();
 
@@ -294,8 +371,8 @@ function ScatterChartPanel({
 }) {
   const { mapping } = config;
   const xKey = mapping.xAxis ?? Object.keys(data[0] ?? {})[0] ?? "x";
-  const yKeys = mapping.yAxis ?? [Object.keys(data[0] ?? {})[1] ?? "y"];
-  const colors = mapping.colors ?? CHART_PALETTE;
+  const yKeys = safeYAxis(mapping, [Object.keys(data[0] ?? {})[1] ?? "y"]);
+  const colors = safeColors(mapping);
   const height = compact ? 200 : 320;
   const ttStyle = tooltipStyle();
 
@@ -332,7 +409,7 @@ function FunnelChartPanel({
   const { mapping } = config;
   const nameKey = mapping.nameKey ?? Object.keys(data[0] ?? {})[0] ?? "name";
   const valueKey = mapping.valueKey ?? Object.keys(data[0] ?? {})[1] ?? "value";
-  const colors = mapping.colors ?? CHART_PALETTE;
+  const colors = safeColors(mapping);
   const height = compact ? 200 : 320;
   const ttStyle = tooltipStyle();
 
@@ -368,12 +445,22 @@ function FunnelChartPanel({
 // --- Main ChartPanel component ---
 
 export function ChartPanel({ config, data, compact }: ChartPanelProps) {
+  const resetKey = `${config.id}:${config.type}:${data.length}`;
+
+  return (
+    <ChartPanelErrorBoundary compact={compact} resetKey={resetKey}>
+      <ChartPanelInner config={config} data={data} compact={compact} />
+    </ChartPanelErrorBoundary>
+  );
+}
+
+function ChartPanelInner({ config, data, compact }: ChartPanelProps) {
   // Coerce numeric values for Recharts
   const processedData = useMemo(() => {
     if (!data || data.length === 0) {return [];}
     const { mapping } = config;
     const numericKeys = new Set([
-      ...(mapping.yAxis ?? []),
+      ...safeYAxis(mapping, []),
       ...(mapping.valueKey ? [mapping.valueKey] : []),
     ]);
 

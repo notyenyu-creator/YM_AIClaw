@@ -75,6 +75,16 @@ type TopLoadRow = {
   avg_pf?: number | string;
 };
 
+type TopLoadAvailabilityRow = {
+  requested_window_start?: string | null;
+  requested_window_end?: string | null;
+  earliest_summary_time?: string | null;
+  latest_summary_time?: string | null;
+  fallback_window_start?: string | null;
+  fallback_window_end?: string | null;
+  summary_rows_requested_window?: number | string;
+};
+
 type AnomalySummaryRow = {
   site_name?: string | null;
   meter_name?: string | null;
@@ -127,6 +137,26 @@ type SiteKpiRow = {
   point_count?: number | string;
 };
 
+type EnergyTrendRow = {
+  period?: string | null;
+  total_kwh?: number | string;
+  peak_kw?: number | string;
+  avg_pf?: number | string;
+};
+
+type BillTrendRow = {
+  period?: string | null;
+  bill_count?: number | string;
+  account_count?: number | string;
+  total_kwh?: number | string;
+  total_bill?: number | string;
+  avg_rate?: number | string;
+};
+
+type AssetCountRow = {
+  total_count?: number | string;
+};
+
 export type EnmsVerifiedDirectQueryInput = {
   userMessage: string;
 };
@@ -156,6 +186,95 @@ function isDemandAlertCountRequest(message: string) {
   return Boolean(extractAccountNumber(message)) && hasDemandAlertScope && asksCount;
 }
 
+type AssetCountTarget = {
+  label: string;
+  tableName:
+    | "ElectricityMeter"
+    | "sites"
+    | "site_gateways"
+    | "PowerAccounts";
+  key: "meter_count" | "site_count" | "gateway_count" | "power_account_count";
+};
+
+function detectAssetCountTarget(message: string): AssetCountTarget | null {
+  const normalized = message.toLowerCase();
+  const asksCount = includesAny(normalized, [
+    "多少",
+    "幾個",
+    "幾筆",
+    "筆數",
+    "數量",
+    "count",
+    "總數",
+  ]);
+
+  if (!asksCount) {
+    return null;
+  }
+
+  if (
+    includesAny(normalized, [
+      "告警",
+      "alert",
+      "需量",
+      "總用電",
+      "用電量",
+      "最大需量",
+      "功率因數",
+      "平均功率因數",
+      "最低功率因數",
+      "電費",
+      "帳單",
+      "roi",
+      "節電",
+      "benchmarking",
+      "比較",
+      "排名",
+      "排行",
+      "趨勢",
+      "異常",
+      "電力品質",
+    ])
+  ) {
+    return null;
+  }
+
+  if (includesAny(normalized, ["電表", "meter"])) {
+    return {
+      label: "電表",
+      tableName: "ElectricityMeter",
+      key: "meter_count",
+    };
+  }
+  if (includesAny(normalized, ["場域", "site"])) {
+    return {
+      label: "場域",
+      tableName: "sites",
+      key: "site_count",
+    };
+  }
+  if (includesAny(normalized, ["gateway", "閘道", "閘道器", "網關"])) {
+    return {
+      label: "gateway",
+      tableName: "site_gateways",
+      key: "gateway_count",
+    };
+  }
+  if (includesAny(normalized, ["電號", "account", "power account"])) {
+    return {
+      label: "電號",
+      tableName: "PowerAccounts",
+      key: "power_account_count",
+    };
+  }
+
+  return null;
+}
+
+function isAssetCountRequest(message: string) {
+  return detectAssetCountTarget(message) != null;
+}
+
 function extractGregorianYear(message: string): number | null {
   const match = message.match(/\b(20\d{2})\b/);
   if (!match) return null;
@@ -180,6 +299,9 @@ function isRoiYearRequest(message: string) {
 
 function isAlertTypeSummaryRequest(message: string) {
   const normalized = message.toLowerCase();
+  if (extractAccountNumber(message)) {
+    return false;
+  }
   const asksRecentAlertType =
     includesAny(normalized, ["最近", "7 天", "七天", "近 7 天", "近七天"]) &&
     includesAny(normalized, ["告警", "alert"]) &&
@@ -261,6 +383,15 @@ function isPeakDemandRankingRequest(message: string) {
 
 function isSiteBenchmarkRequest(message: string) {
   const normalized = message.toLowerCase();
+  if (includesAny(normalized, ["趨勢", "trend", "time-series", "timeseries"])) {
+    return false;
+  }
+  if (
+    includesAny(normalized, ["最大需量", "需量最高", "尖峰需量"]) &&
+    includesAny(normalized, ["時間", "數值"])
+  ) {
+    return false;
+  }
   return (
     includesAny(normalized, ["最近 30 天", "近 30 天", "三十天"]) &&
     includesAny(normalized, ["benchmarking", "比較", "排名", "總用電", "平均功率因數", "功率因數最差"])
@@ -273,6 +404,348 @@ function isSavingsScenarioRequest(message: string) {
     includesAny(normalized, ["節電 5%", "節電5%", "5% / 10%", "5%/10%", "節電"]) &&
     includesAny(normalized, ["10%", "省多少", "帳單", "估算"])
   );
+}
+
+function isSiteBillRankingRequest(message: string) {
+  const normalized = message.toLowerCase();
+  if (includesAny(normalized, ["趨勢", "trend", "最近 6 期", "近 6 期", "最近6期", "近6期"])) {
+    return false;
+  }
+  const hasBillScope = includesAny(normalized, [
+    "電費",
+    "帳單",
+    "台電",
+    "bill",
+  ]);
+  const asksRanking = includesAny(normalized, [
+    "最高",
+    "排行",
+    "排名",
+    "top",
+    "比較",
+    "圖表",
+    "呈現",
+    "哪個場域",
+  ]);
+
+  return hasBillScope && asksRanking;
+}
+
+function extractRecentBillPeriodWindow(message: string): number | null {
+  const match = message.match(/(?:最近|近)\s*(\d{1,2})\s*期/);
+  if (!match) return null;
+  const periods = Number(match[1]);
+  return Number.isFinite(periods) && periods > 0 ? periods : null;
+}
+
+function detectBillTrendTarget(message: string): BillTrendTarget | null {
+  const normalized = message.toLowerCase();
+  const hasBillScope = includesAny(normalized, [
+    "台電帳單",
+    "帳單",
+    "電費",
+    "bill",
+    "billing",
+  ]);
+  const asksTrend = includesAny(normalized, [
+    "趨勢",
+    "trend",
+    "走勢",
+    "最近 6 期",
+    "近 6 期",
+    "最近6期",
+    "近6期",
+    "圖表",
+    "chart",
+    "line",
+    "折線",
+  ]);
+
+  if (!hasBillScope || !asksTrend) {
+    return null;
+  }
+
+  if (
+    includesAny(normalized, [
+      "roi",
+      "節能roi",
+      "節能 roi",
+      "節能投資",
+      "投資回收",
+      "回收期",
+      "what-if",
+      "節能試算",
+      "排行",
+      "排名",
+      "最高",
+      "哪個場域",
+      "benchmarking",
+      "比較",
+    ])
+  ) {
+    return null;
+  }
+
+  const accountNumber = extractAccountNumber(message);
+  const siteName = detectKnownSiteName(message);
+  const year = extractGregorianYear(message);
+  const periodLimit = extractRecentBillPeriodWindow(message) ?? 6;
+  const scopeLabel = accountNumber
+    ? `電號 ${accountNumber}`
+    : siteName
+      ? `${siteName} 場域`
+      : "目前可見 EnMS 帳單資料";
+
+  return {
+    label:
+      year != null
+        ? `${scopeLabel}${year} 年台電帳單趨勢`
+        : `${scopeLabel}最近 ${periodLimit} 期台電帳單趨勢`,
+    scopeLabel,
+    accountNumber,
+    siteName,
+    year,
+    periodLimit,
+  };
+}
+
+type EnergyTrendTarget = {
+  label: string;
+  grain: "day" | "month";
+  startSql: string;
+  endSql: string;
+  siteName: string | null;
+  scopeLabel: string;
+};
+
+type BillTrendTarget = {
+  label: string;
+  scopeLabel: string;
+  accountNumber: string | null;
+  siteName: string | null;
+  year: number | null;
+  periodLimit: number;
+};
+
+type TopLoadTarget = {
+  label: string;
+  scopeLabel: string;
+  windowLabel: string;
+  startSql: string;
+  endSql: string;
+  siteName: string | null;
+};
+
+function extractRecentDayWindow(message: string): number | null {
+  const match = message.match(/(?:最近|近)\s*(\d{1,3})\s*(?:天|日)/);
+  if (!match) return null;
+  const days = Number(match[1]);
+  return Number.isFinite(days) && days > 0 ? days : null;
+}
+
+function normalizeIsoDateParts(year: number, month: number, day: number): string | null {
+  if (
+    !Number.isFinite(year) ||
+    !Number.isFinite(month) ||
+    !Number.isFinite(day) ||
+    month < 1 ||
+    month > 12 ||
+    day < 1 ||
+    day > 31
+  ) {
+    return null;
+  }
+  const normalized = `${String(year).padStart(4, "0")}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+  const date = new Date(`${normalized}T00:00:00Z`);
+  if (Number.isNaN(date.getTime())) {
+    return null;
+  }
+  if (date.toISOString().slice(0, 10) !== normalized) {
+    return null;
+  }
+  return normalized;
+}
+
+function extractIsoDateCandidates(message: string): string[] {
+  const results: string[] = [];
+  for (const match of message.matchAll(/\b(20\d{2})[\/-](\d{1,2})[\/-](\d{1,2})\b/g)) {
+    const normalized = normalizeIsoDateParts(
+      Number(match[1]),
+      Number(match[2]),
+      Number(match[3]),
+    );
+    if (normalized && !results.includes(normalized)) {
+      results.push(normalized);
+    }
+  }
+  return results.slice(0, 2);
+}
+
+function detectTopLoadTarget(message: string): TopLoadTarget | null {
+  if (!isTopLoadRankingRequest(message)) {
+    return null;
+  }
+
+  const normalized = message.toLowerCase();
+  const siteName = detectKnownSiteName(message);
+  const scopeLabel = siteName ?? "全部場域";
+  const isoDateCandidates = extractIsoDateCandidates(message);
+
+  if (isoDateCandidates.length >= 2) {
+    const [startDate, endDate] = isoDateCandidates.sort();
+    return {
+      label: `${scopeLabel} ${startDate} 到 ${endDate} 設備 / 迴路耗電排行`,
+      scopeLabel,
+      windowLabel: `${startDate} 到 ${endDate}`,
+      startSql: `DATE '${startDate}'`,
+      endSql: `DATE '${endDate}' + INTERVAL '1 day'`,
+      siteName,
+    };
+  }
+
+  if (
+    isoDateCandidates.length === 1 &&
+    includesAny(normalized, ["到今天", "至今", "到現在", "today"])
+  ) {
+    const [startDate] = isoDateCandidates;
+    return {
+      label: `${scopeLabel} ${startDate} 到今天設備 / 迴路耗電排行`,
+      scopeLabel,
+      windowLabel: `${startDate} 到今天`,
+      startSql: `DATE '${startDate}'`,
+      endSql: "NOW()",
+      siteName,
+    };
+  }
+
+  const recentDayWindow = extractRecentDayWindow(message) ?? 7;
+  return {
+    label: `${scopeLabel}最近 ${recentDayWindow} 天設備 / 迴路耗電排行`,
+    scopeLabel,
+    windowLabel: `最近 ${recentDayWindow} 天`,
+    startSql: `NOW() - INTERVAL '${recentDayWindow} days'`,
+    endSql: "NOW()",
+    siteName,
+  };
+}
+
+function detectEnergyTrendTarget(message: string): EnergyTrendTarget | null {
+  const normalized = message.toLowerCase();
+  const asksEnergyTrend =
+    includesAny(normalized, [
+      "能源趨勢",
+      "能源趨勢分析",
+      "用電趨勢",
+      "能耗趨勢",
+      "趨勢分析",
+    ]) ||
+    (includesAny(normalized, ["總用電", "用電量", "最大需量", "功率因數"]) &&
+      includesAny(normalized, ["趨勢", "圖表", "分析"]));
+
+  if (!asksEnergyTrend) {
+    return null;
+  }
+
+  if (
+    includesAny(normalized, [
+      "帳單趨勢",
+      "電費趨勢",
+      "台電帳單",
+      "bill trend",
+      "roi",
+      "節能roi",
+      "節能 roi",
+      "節能投資",
+      "投資回收",
+      "回收期",
+      "what-if",
+      "節能試算",
+    ])
+  ) {
+    return null;
+  }
+
+  const siteName = detectKnownSiteName(message);
+  const scopeLabel = siteName ? `${siteName} 場域` : "目前可見 EnMS summary 資料";
+  const recentDayWindow = extractRecentDayWindow(message);
+  if (recentDayWindow) {
+    return {
+      label: `${scopeLabel}最近 ${recentDayWindow} 天能源趨勢`,
+      grain: recentDayWindow > 92 ? "month" : "day",
+      startSql: `CURRENT_DATE - INTERVAL '${recentDayWindow} days'`,
+      endSql: `CURRENT_DATE + INTERVAL '1 day'`,
+      siteName,
+      scopeLabel,
+    };
+  }
+
+  const isoDateCandidates = extractIsoDateCandidates(message);
+  if (isoDateCandidates.length >= 2) {
+    const [startDate, endDate] = isoDateCandidates.sort();
+    return {
+      label: `${scopeLabel}${startDate} 到 ${endDate} 能源趨勢`,
+      grain: "day",
+      startSql: `DATE '${startDate}'`,
+      endSql: `DATE '${endDate}' + INTERVAL '1 day'`,
+      siteName,
+      scopeLabel,
+    };
+  }
+
+  if (isoDateCandidates.length === 1 && includesAny(normalized, ["到今天", "至今", "到現在", "today"])) {
+    const [startDate] = isoDateCandidates;
+    return {
+      label: `${scopeLabel}${startDate} 到今天能源趨勢`,
+      grain: "day",
+      startSql: `DATE '${startDate}'`,
+      endSql: `CURRENT_DATE + INTERVAL '1 day'`,
+      siteName,
+      scopeLabel,
+    };
+  }
+
+  const yearMonthMatch = message.match(/\b(20\d{2})\s*年\s*(\d{1,2})\s*月/);
+  if (yearMonthMatch && includesAny(normalized, ["到今天", "至今", "到現在", "today"])) {
+    const year = Number(yearMonthMatch[1]);
+    const month = Number(yearMonthMatch[2]);
+    if (Number.isFinite(year) && Number.isFinite(month) && month >= 1 && month <= 12) {
+      const paddedMonth = String(month).padStart(2, "0");
+      return {
+        label: `${scopeLabel}${year}-${paddedMonth} 起能源趨勢`,
+        grain: "month",
+        startSql: `DATE '${year}-${paddedMonth}-01'`,
+        endSql: `CURRENT_DATE + INTERVAL '1 day'`,
+        siteName,
+        scopeLabel,
+      };
+    }
+  }
+
+  const yearOnly = extractGregorianYear(message);
+  if (yearOnly) {
+    const currentYear = new Date().getFullYear();
+    const endSql =
+      yearOnly === currentYear && includesAny(normalized, ["到今天", "至今", "到現在", "today"])
+        ? `CURRENT_DATE + INTERVAL '1 day'`
+        : `DATE '${yearOnly + 1}-01-01'`;
+    return {
+      label: `${scopeLabel}${yearOnly} 年能源趨勢`,
+      grain: "month",
+      startSql: `DATE '${yearOnly}-01-01'`,
+      endSql,
+      siteName,
+      scopeLabel,
+    };
+  }
+
+  return {
+    label: `${scopeLabel}最近 30 天能源趨勢`,
+    grain: "day",
+    startSql: `CURRENT_DATE - INTERVAL '30 days'`,
+    endSql: `CURRENT_DATE + INTERVAL '1 day'`,
+    siteName,
+    scopeLabel,
+  };
 }
 
 function isPriorityConsumptionIssueRequest(message: string) {
@@ -340,6 +813,71 @@ function round(value: number, digits = 2) {
 
 function formatTime(value: string | null | undefined) {
   return value && value.trim() ? value : "無資料";
+}
+
+function buildTopLoadLine(row: TopLoadRow, index: number, requestedSite: string | null) {
+  const totalKwh = toNumber(row.total_kwh);
+  const peakKw = toNumber(row.peak_kw);
+  const avgPf = toNumber(row.avg_pf);
+  const reasons = [
+    totalKwh > 0 ? "耗電量最高，優先檢查排程與基載" : "",
+    peakKw > 0 ? "尖峰需量會影響契約容量風險" : "",
+    avgPf > 0 && avgPf < 0.9 ? "平均功率因數偏低，可能有功因改善空間" : "",
+  ].filter(Boolean);
+
+  return `${index + 1}. ${row.site_name ?? requestedSite ?? "未對應場域"} / ${row.meter_name ?? "未知電表"} / 迴路 ${row.circuit_seq ?? "n/a"}：耗電 ${formatKwh(totalKwh)}，尖峰 ${formatKw(peakKw)}，平均功因 ${round(avgPf, 4)}。關注原因：${reasons.join("；") || "用電量在排序中靠前"}。`;
+}
+
+function formatTopLoadScopeWindowLabel(scopeLabel: string, windowLabel: string) {
+  return windowLabel.startsWith("最近")
+    ? `${scopeLabel}${windowLabel}`
+    : `${scopeLabel} ${windowLabel}`;
+}
+
+function buildAssetCountReport(
+  target: AssetCountTarget,
+  row: AssetCountRow | undefined,
+) {
+  const totalCount = toNumber(row?.total_count);
+  const noun = target.label;
+  const rowKey = target.key;
+  const chartRows = [
+    {
+      category: noun,
+      total_count: totalCount,
+    },
+  ];
+
+  return [
+    `根據本地 EnMS DB 的 ${target.tableName} 查詢，目前共有 ${formatNumber(totalCount)} 個${noun}。`,
+    "",
+    `查詢依據：${target.tableName}。此回答只使用本地 EnMS DB，不使用外部網路資料。`,
+    "",
+    "```report-json",
+    JSON.stringify(
+      {
+        version: 1,
+        title: `目前 ${noun} 總數`,
+        description: `本地 EnMS DB 查詢結果，${noun}總數為 ${formatNumber(totalCount)}。`,
+        panels: [
+          {
+            id: `${rowKey}-bar`,
+            title: `${noun}總數圖表`,
+            type: "bar",
+            rows: chartRows,
+            mapping: {
+              xAxis: "category",
+              yAxis: ["total_count"],
+            },
+            size: "full",
+          },
+        ],
+      },
+      null,
+      2,
+    ),
+    "```",
+  ].join("\n");
 }
 
 function buildAlertTypeSummaryReport(rows: AlertTypeSummaryRow[]) {
@@ -533,36 +1071,77 @@ function buildSiteAccountsReport(rows: SiteAccountsRow[]) {
   return lines.join("\n");
 }
 
-function buildTopLoadReport(rows: TopLoadRow[], requestedSite: string | null) {
+function buildTopLoadReport(
+  rows: TopLoadRow[],
+  requestedSite: string | null,
+  windowLabel: string = "最近 7 天",
+) {
+  const scopeWindowLabel = formatTopLoadScopeWindowLabel(
+    requestedSite ?? "全部場域",
+    windowLabel,
+  );
   if (rows.length === 0) {
     return [
-      `根據本地 EnMS DB 查詢，${requestedSite ?? "指定場域"}最近 7 天沒有可統計的設備 / 迴路耗電資料。`,
+      `根據本地 EnMS DB 查詢，${scopeWindowLabel}沒有可統計的設備 / 迴路耗電資料。`,
       "查詢依據：DeviceDataSummaryView + ElectricityMeter + PowerAccounts + sites。此回答只使用本地 EnMS DB。",
     ].join("\n");
   }
 
   const lines = [
-    `根據本地 EnMS DB 的 DeviceDataSummaryView、ElectricityMeter、PowerAccounts 與 sites 查詢，${requestedSite ?? "指定場域"}最近 7 天設備 / 迴路耗電 Top ${Math.min(rows.length, 5)} 如下：`,
+    `根據本地 EnMS DB 的 DeviceDataSummaryView、ElectricityMeter、PowerAccounts 與 sites 查詢，${scopeWindowLabel}的設備 / 迴路耗電 Top ${Math.min(rows.length, 5)} 如下：`,
     "",
   ];
 
   rows.slice(0, 5).forEach((row, index) => {
-    const totalKwh = toNumber(row.total_kwh);
-    const peakKw = toNumber(row.peak_kw);
-    const avgPf = toNumber(row.avg_pf);
-    const reasons = [
-      totalKwh > 0 ? "耗電量最高，優先檢查排程與基載" : "",
-      peakKw > 0 ? "尖峰需量會影響契約容量風險" : "",
-      avgPf > 0 && avgPf < 0.9 ? "平均功率因數偏低，可能有功因改善空間" : "",
-    ].filter(Boolean);
-    lines.push(
-      `${index + 1}. ${row.site_name ?? requestedSite ?? "未對應場域"} / ${row.meter_name ?? "未知電表"} / 迴路 ${row.circuit_seq ?? "n/a"}：耗電 ${formatKwh(totalKwh)}，尖峰 ${formatKw(peakKw)}，平均功因 ${round(avgPf, 4)}。關注原因：${reasons.join("；") || "用電量在排序中靠前"}。`,
-    );
+    lines.push(buildTopLoadLine(row, index, requestedSite));
   });
 
   lines.push(
     "",
     "查詢依據：sum(DeviceDataSummaryView.TotalConsumption)、max(DeviceDataSummaryView.MaxDemand)、avg(DeviceDataSummaryView.AvgPowerFactor)，並透過 ElectricityMeter / PowerAccounts / sites 對應場域與電表別名。此回答只使用本地 EnMS DB。",
+  );
+
+  return lines.join("\n");
+}
+
+function buildTopLoadNoRecentDataReport(
+  target: TopLoadTarget,
+  availability: TopLoadAvailabilityRow | undefined,
+  fallbackRows: TopLoadRow[],
+) {
+  const requestedWindowStart = formatTime(availability?.requested_window_start);
+  const requestedWindowEnd = formatTime(availability?.requested_window_end);
+  const latestSummaryTime = formatTime(availability?.latest_summary_time);
+  const earliestSummaryTime = formatTime(availability?.earliest_summary_time);
+  const fallbackWindowStart = formatTime(availability?.fallback_window_start);
+  const fallbackWindowEnd = formatTime(availability?.fallback_window_end);
+
+  const lines = [
+    `你要求的查詢條件是 ${target.label}。`,
+    `實際查詢區間：${requestedWindowStart} 至 ${requestedWindowEnd}。`,
+    `但本地 EnMS summary layer 在這個區間內沒有可統計的設備 / 迴路耗電資料；目前這個範圍可見的 summary 資料時間帶為 ${earliestSummaryTime} 至 ${latestSummaryTime}。`,
+  ];
+
+  if (fallbackRows.length > 0) {
+    lines.push(
+      "",
+      `我先改用最新可用 7 天（${fallbackWindowStart} 至 ${fallbackWindowEnd}）整理出設備 / 迴路耗電 Top ${Math.min(fallbackRows.length, 5)}：`,
+      "",
+    );
+    fallbackRows.slice(0, 5).forEach((row, index) => {
+      lines.push(buildTopLoadLine(row, index, target.siteName));
+    });
+  } else {
+    lines.push(
+      "",
+      `補查最新可用 7 天（${fallbackWindowStart} 至 ${fallbackWindowEnd}）後，仍沒有可用的耗電排行資料。`,
+    );
+  }
+
+  lines.push(
+    "",
+    "如果你要改查其他日期，可以直接指定區間，例如：請查 2026-06-01 到 2026-06-15 的設備 / 迴路耗電排行。",
+    "查詢依據：DeviceDataSummaryView + ElectricityMeter + PowerAccounts + sites。此回答只使用本地 EnMS DB，不使用外部網路資料。",
   );
 
   return lines.join("\n");
@@ -720,6 +1299,246 @@ function buildSavingsScenarioReport(rows: SavingsScenarioRow[], requestedSite: s
   );
 
   return lines.join("\n");
+}
+
+function buildSiteBillRankingReport(rows: SavingsScenarioRow[], requestedSite: string | null) {
+  if (rows.length === 0) {
+    return [
+      "我判斷這是 EnMS 最新年度電費 / 用電排行查詢，已優先查本地 EnMS DB。",
+      requestedSite
+        ? `目前在 ${requestedSite} 找不到可用的台電帳單 baseline，因此不能用 DB 產出電費排行或圖表。`
+        : "目前找不到可用的台電帳單 baseline，因此不能用 DB 產出場域電費排行或圖表。",
+      "我不會改用外部網路資料或假資料補齊；請先確認 TaipowerBills、PowerAccounts 與 sites 是否已有最新帳單資料。",
+    ].join("\n");
+  }
+
+  const latestYear = rows.reduce((maxYear, row) => {
+    const year = toNumber(row.gregorian_year);
+    return year > maxYear ? year : maxYear;
+  }, 0);
+  const normalizedRows = rows.map((row, index) => ({
+    rank: index + 1,
+    site_name: row.site_name ?? "未命名場域",
+    baseline_bill: round(toNumber(row.baseline_bill), 0),
+    baseline_kwh: round(toNumber(row.baseline_kwh), 0),
+    billed_accounts: toNumber(row.billed_accounts),
+    bill_count: toNumber(row.bill_count),
+  }));
+
+  const lines = [
+    `根據本地 EnMS DB 的 TaipowerBills、PowerAccounts 與 sites 查詢，以下是${requestedSite ? `${requestedSite} ` : ""}${latestYear > 0 ? `${latestYear} 年` : "最新年度"}台電帳單 baseline 的電費 / 用電排行。`,
+    "",
+    ...normalizedRows.map(
+      (row) =>
+        `${row.rank}. ${row.site_name}：年度電費 ${formatMoney(row.baseline_bill)}，年度用電 ${formatNumber(row.baseline_kwh)} kWh，涵蓋 ${formatNumber(row.billed_accounts)} 個電號 / ${formatNumber(row.bill_count)} 期帳單。`,
+    ),
+    "",
+    "查詢依據：TaipowerBills.BillingMonth、UsageAmount、TotalAmount，並透過 PowerAccounts.SiteId 對應 sites.site_id。此回答只使用本地 EnMS DB，不使用外部網路資料。",
+    "",
+    "```report-json",
+    JSON.stringify(
+      {
+        version: 1,
+        title: `${latestYear > 0 ? `${latestYear} 年` : "最新年度"} EnMS 場域電費 / 用電排行`,
+        description: "以本地 EnMS DB 的最新可用台電帳單年度 baseline 產出場域電費與用電排行。",
+        panels: [
+          {
+            id: "enms-site-bill-ranking",
+            title: "場域年度電費排行",
+            type: "bar",
+            rows: normalizedRows,
+            mapping: {
+              xAxis: "site_name",
+              yAxis: ["baseline_bill"],
+            },
+            size: "full",
+          },
+          {
+            id: "enms-site-kwh-ranking",
+            title: "場域年度用電排行",
+            type: "bar",
+            rows: normalizedRows,
+            mapping: {
+              xAxis: "site_name",
+              yAxis: ["baseline_kwh"],
+            },
+            size: "full",
+          },
+        ],
+      },
+      null,
+      2,
+    ),
+    "```",
+  ];
+
+  return lines.join("\n");
+}
+
+function buildBillTrendReport(target: BillTrendTarget, rows: BillTrendRow[]) {
+  const normalizedRows = rows.map((row) => ({
+    period: row.period?.trim() || "UNKNOWN",
+    bill_count: toNumber(row.bill_count),
+    account_count: toNumber(row.account_count),
+    total_kwh: round(toNumber(row.total_kwh), 2),
+    total_bill: round(toNumber(row.total_bill), 0),
+    avg_rate: round(toNumber(row.avg_rate), 4),
+  }));
+
+  if (normalizedRows.length === 0) {
+    return [
+      `我判斷這是 EnMS ${target.label}查詢，已優先查本地 EnMS DB。`,
+      `目前在 ${target.scopeLabel} 的指定台電帳單範圍內找不到可用資料，因此不能用 DB 產出帳單趨勢圖。`,
+      "我不會改用外部網路資料或假資料補齊；請先確認 TaipowerBills、PowerAccounts 與 sites 是否已有該範圍帳單資料。",
+    ].join("\n");
+  }
+
+  const latest = normalizedRows.at(-1);
+  const totalKwh = normalizedRows.reduce((sum, row) => sum + row.total_kwh, 0);
+  const totalBill = normalizedRows.reduce((sum, row) => sum + row.total_bill, 0);
+  const weightedAvgRate = totalKwh > 0 ? totalBill / totalKwh : 0;
+
+  return [
+    `根據本地 EnMS DB 的 TaipowerBills、PowerAccounts 與 sites 查詢，${target.label}已整理完成。`,
+    "",
+    `資料期數：${formatNumber(normalizedRows.length)} 期；累計用電 ${formatKwh(totalKwh)}；累計電費 ${formatMoney(totalBill)}；整體平均電價 ${round(weightedAvgRate, 4).toFixed(4)} 元/kWh。`,
+    latest
+      ? `最新期 ${latest.period}：用電 ${formatKwh(latest.total_kwh)}，電費 ${formatMoney(latest.total_bill)}，平均電價 ${latest.avg_rate.toFixed(4)} 元/kWh，涵蓋 ${formatNumber(latest.account_count)} 個電號 / ${formatNumber(latest.bill_count)} 期帳單。`
+      : "最新期資料不足。",
+    "",
+    "查詢依據：TaipowerBills.BillingMonth、UsageAmount、TotalAmount，並透過 PowerAccounts.SiteId 對應 sites.site_id。此回答只使用本地 EnMS DB，不使用外部網路資料。",
+    "",
+    "```report-json",
+    JSON.stringify(
+      {
+        version: 1,
+        title: `EnMS ${target.label}`,
+        description: "以本地 EnMS DB 的台電帳單資料呈現用電、電費與平均電價趨勢。",
+        panels: [
+          {
+            id: "enms-bill-trend-amount",
+            title: "台電帳單電費趨勢",
+            type: "line",
+            rows: normalizedRows,
+            mapping: {
+              xAxis: "period",
+              yAxis: ["total_bill"],
+            },
+            size: "full",
+          },
+          {
+            id: "enms-bill-trend-kwh",
+            title: "台電帳單用電趨勢",
+            type: "line",
+            rows: normalizedRows,
+            mapping: {
+              xAxis: "period",
+              yAxis: ["total_kwh"],
+            },
+            size: "full",
+          },
+          {
+            id: "enms-bill-trend-rate",
+            title: "平均電價趨勢",
+            type: "line",
+            rows: normalizedRows,
+            mapping: {
+              xAxis: "period",
+              yAxis: ["avg_rate"],
+            },
+            size: "full",
+          },
+        ],
+      },
+      null,
+      2,
+    ),
+    "```",
+  ].join("\n");
+}
+
+function buildEnergyTrendReport(target: EnergyTrendTarget, rows: EnergyTrendRow[]) {
+  const normalizedRows = rows.map((row) => ({
+    period: row.period?.trim() || "UNKNOWN",
+    total_kwh: round(toNumber(row.total_kwh), 2),
+    peak_kw: round(toNumber(row.peak_kw), 2),
+    avg_pf: round(toNumber(row.avg_pf), 4),
+  }));
+
+  if (normalizedRows.length === 0) {
+    return [
+      `我判斷這是 EnMS ${target.label}查詢，已優先查本地 EnMS DB。`,
+      `目前在 ${target.scopeLabel} 的指定時間範圍內找不到可用的 DeviceDataSummaryView 趨勢資料，因此不能用 DB 產出趨勢圖。`,
+      "我不會改用外部網路資料或假資料補齊；請先確認 summary layer 是否已有該時段資料。",
+    ].join("\n");
+  }
+
+  const latest = normalizedRows.at(-1);
+  const totalKwh = normalizedRows.reduce((sum, row) => sum + row.total_kwh, 0);
+  const peakRow = normalizedRows.reduce(
+    (current, row) => (row.peak_kw > current.peak_kw ? row : current),
+    normalizedRows[0],
+  );
+
+  return [
+    `根據本地 EnMS DB 的 DeviceDataSummaryView、ElectricityMeter、PowerAccounts 與 sites 查詢，${target.scopeLabel}的能源趨勢已整理完成。`,
+    "",
+    `時間粒度：${target.grain === "month" ? "月" : "日"}；資料點數 ${formatNumber(normalizedRows.length)}。`,
+    `累計用電：${formatKwh(totalKwh)}。`,
+    `最高需量區間：${peakRow.period}，最大需量 ${formatKw(peakRow.peak_kw)}。`,
+    latest
+      ? `最新區間 ${latest.period}：用電 ${formatKwh(latest.total_kwh)}，最大需量 ${formatKw(latest.peak_kw)}，平均功率因數 ${round(latest.avg_pf, 4)}。`
+      : "最新區間資料不足。",
+    "",
+    `查詢依據：sum(DeviceDataSummaryView.TotalConsumption)、max(DeviceDataSummaryView.MaxDemand)、avg(DeviceDataSummaryView.AvgPowerFactor)，並透過 ElectricityMeter / PowerAccounts / sites 對應場域。此回答只使用本地 EnMS DB，不使用外部網路資料。`,
+    "",
+    "```report-json",
+    JSON.stringify(
+      {
+        version: 1,
+        title: `EnMS ${target.scopeLabel}能源趨勢`,
+        description: "以本地 EnMS summary layer 產生用電、需量與功率因數 time-series。",
+        panels: [
+          {
+            id: "enms-energy-trend-kwh",
+            title: "總用電趨勢",
+            type: "line",
+            rows: normalizedRows,
+            mapping: {
+              xAxis: "period",
+              yAxis: ["total_kwh"],
+            },
+            size: "full",
+          },
+          {
+            id: "enms-energy-trend-demand",
+            title: "最大需量趨勢",
+            type: "line",
+            rows: normalizedRows,
+            mapping: {
+              xAxis: "period",
+              yAxis: ["peak_kw"],
+            },
+            size: "full",
+          },
+          {
+            id: "enms-energy-trend-pf",
+            title: "平均功率因數趨勢",
+            type: "line",
+            rows: normalizedRows,
+            mapping: {
+              xAxis: "period",
+              yAxis: ["avg_pf"],
+            },
+            size: "full",
+          },
+        ],
+      },
+      null,
+      2,
+    ),
+    "```",
+  ].join("\n");
 }
 
 function buildPriorityConsumptionIssueReport(
@@ -941,8 +1760,20 @@ async function querySiteAccountsRows() {
   );
 }
 
-async function queryTopLoadRows(siteName: string | null) {
-  const siteFilter = siteName ? `AND s.site_name LIKE '%${siteName}%'` : "";
+function buildTopLoadSiteFilter(siteName: string | null) {
+  if (!siteName) {
+    return "";
+  }
+  const escapedSiteName = siteName.replace(/'/g, "''");
+  return `AND s.site_name LIKE '%${escapedSiteName}%'`;
+}
+
+async function queryTopLoadRows(
+  siteName: string | null,
+  startSql: string = "NOW() - INTERVAL '7 days'",
+  endSql: string = "NOW()",
+) {
+  const siteFilter = buildTopLoadSiteFilter(siteName);
   return duckdbQueryExternalPgAsyncDetailed<TopLoadRow>(
     ENMS_CONNECTION_STRING,
     `
@@ -970,7 +1801,130 @@ async function queryTopLoadRows(siteName: string | null) {
         ON pa."AccountId" = mm.power_account_id
       LEFT JOIN enms.public.sites s
         ON s.site_id = pa."SiteId"
-      WHERE v."RecordTime" >= NOW() - INTERVAL '7 days'
+      WHERE v."RecordTime" >= ${startSql}
+        AND v."RecordTime" < ${endSql}
+        ${siteFilter}
+      GROUP BY 1, 2, 3
+      HAVING SUM(v."TotalConsumption") > 0
+      ORDER BY total_kwh DESC
+      LIMIT 5
+    `,
+    "enms",
+  );
+}
+
+async function queryTopLoadAvailabilityRow(target: TopLoadTarget) {
+  const siteFilter = buildTopLoadSiteFilter(target.siteName);
+  if (!target.siteName) {
+    return duckdbQueryExternalPgAsyncDetailed<TopLoadAvailabilityRow>(
+      ENMS_CONNECTION_STRING,
+      `
+        SELECT
+          CAST(${target.startSql} AS VARCHAR) AS requested_window_start,
+          CAST(${target.endSql} AS VARCHAR) AS requested_window_end,
+          CAST(MIN("RecordTime") AS VARCHAR) AS earliest_summary_time,
+          CAST(MAX("RecordTime") AS VARCHAR) AS latest_summary_time,
+          CAST(MAX("RecordTime") - INTERVAL '7 days' AS VARCHAR) AS fallback_window_start,
+          CAST(MAX("RecordTime") AS VARCHAR) AS fallback_window_end,
+          COUNT(*) FILTER (
+            WHERE "RecordTime" >= ${target.startSql}
+              AND "RecordTime" < ${target.endSql}
+          ) AS summary_rows_requested_window
+        FROM enms.public."DeviceDataSummaryView"
+      `,
+      "enms",
+    );
+  }
+
+  return duckdbQueryExternalPgAsyncDetailed<TopLoadAvailabilityRow>(
+    ENMS_CONNECTION_STRING,
+    `
+      WITH meter_meta AS (
+        SELECT
+          "DeviceAddress",
+          TRY_CAST("CircuitSeq" AS INTEGER) AS circuit_seq,
+          MAX("PowerAccountId") AS power_account_id
+        FROM enms.public."ElectricityMeter"
+        GROUP BY "DeviceAddress", TRY_CAST("CircuitSeq" AS INTEGER)
+      ),
+      scoped_summary AS (
+        SELECT
+          v."RecordTime" AS record_time
+        FROM enms.public."DeviceDataSummaryView" v
+        LEFT JOIN meter_meta mm
+          ON mm."DeviceAddress" = v."MacAddress"
+         AND mm.circuit_seq = v."CircuitSeq"
+        LEFT JOIN enms.public."PowerAccounts" pa
+          ON pa."AccountId" = mm.power_account_id
+        LEFT JOIN enms.public.sites s
+          ON s.site_id = pa."SiteId"
+        WHERE 1 = 1
+          ${siteFilter}
+      )
+      SELECT
+        CAST(${target.startSql} AS VARCHAR) AS requested_window_start,
+        CAST(${target.endSql} AS VARCHAR) AS requested_window_end,
+        CAST(MIN(record_time) AS VARCHAR) AS earliest_summary_time,
+        CAST(MAX(record_time) AS VARCHAR) AS latest_summary_time,
+        CAST(MAX(record_time) - INTERVAL '7 days' AS VARCHAR) AS fallback_window_start,
+        CAST(MAX(record_time) AS VARCHAR) AS fallback_window_end,
+        COUNT(*) FILTER (
+          WHERE record_time >= ${target.startSql}
+            AND record_time < ${target.endSql}
+        ) AS summary_rows_requested_window
+      FROM scoped_summary
+    `,
+    "enms",
+  );
+}
+
+async function queryLatestAvailableTopLoadRows(siteName: string | null) {
+  const siteFilter = buildTopLoadSiteFilter(siteName);
+  return duckdbQueryExternalPgAsyncDetailed<TopLoadRow>(
+    ENMS_CONNECTION_STRING,
+    `
+      WITH meter_meta AS (
+        SELECT
+          "DeviceAddress",
+          TRY_CAST("CircuitSeq" AS INTEGER) AS circuit_seq,
+          MAX(COALESCE(NULLIF("DeviceAlias", ''), "DeviceName", "DeviceAddress")) AS meter_name,
+          MAX("PowerAccountId") AS power_account_id
+        FROM enms.public."ElectricityMeter"
+        GROUP BY "DeviceAddress", TRY_CAST("CircuitSeq" AS INTEGER)
+      ),
+      latest_summary AS (
+        SELECT
+          MAX(v."RecordTime") AS latest_time
+        FROM enms.public."DeviceDataSummaryView" v
+        LEFT JOIN meter_meta mm
+          ON mm."DeviceAddress" = v."MacAddress"
+         AND mm.circuit_seq = v."CircuitSeq"
+        LEFT JOIN enms.public."PowerAccounts" pa
+          ON pa."AccountId" = mm.power_account_id
+        LEFT JOIN enms.public.sites s
+          ON s.site_id = pa."SiteId"
+        WHERE 1 = 1
+          ${siteFilter}
+      )
+      SELECT
+        COALESCE(s.site_name, '(未對應場域)') AS site_name,
+        COALESCE(mm.meter_name, v."MacAddress") AS meter_name,
+        v."CircuitSeq" AS circuit_seq,
+        SUM(v."TotalConsumption") AS total_kwh,
+        MAX(v."MaxDemand") AS peak_kw,
+        AVG(v."AvgPowerFactor") AS avg_pf
+      FROM enms.public."DeviceDataSummaryView" v
+      CROSS JOIN latest_summary ls
+      LEFT JOIN meter_meta mm
+        ON mm."DeviceAddress" = v."MacAddress"
+       AND mm.circuit_seq = v."CircuitSeq"
+      LEFT JOIN enms.public."PowerAccounts" pa
+        ON pa."AccountId" = mm.power_account_id
+      LEFT JOIN enms.public.sites s
+        ON s.site_id = pa."SiteId"
+      WHERE ls.latest_time IS NOT NULL
+        AND v."RecordTime" >= ls.latest_time - INTERVAL '7 days'
+        AND v."RecordTime" <= ls.latest_time
         ${siteFilter}
       GROUP BY 1, 2, 3
       HAVING SUM(v."TotalConsumption") > 0
@@ -1211,6 +2165,110 @@ async function querySavingsScenarioRows(siteName: string | null) {
   );
 }
 
+async function queryBillTrendRows(target: BillTrendTarget) {
+  const accountFilter = target.accountNumber
+    ? `AND pa."AccountNumber" = '${target.accountNumber}'`
+    : "";
+  const siteFilter = target.siteName ? `AND s.site_name LIKE '%${target.siteName}%'` : "";
+  const yearFilter =
+    target.year != null
+      ? `AND TRY_CAST(tb."BillingMonth" AS INTEGER) BETWEEN ${(target.year - 1911) * 100 + 1} AND ${(target.year - 1911) * 100 + 12}`
+      : "";
+  const periodLimiter = target.year != null ? "" : `LIMIT ${Math.max(1, target.periodLimit)}`;
+
+  return duckdbQueryExternalPgAsyncDetailed<BillTrendRow>(
+    ENMS_CONNECTION_STRING,
+    `
+      WITH target_accounts AS (
+        SELECT DISTINCT
+          pa."AccountNumber"
+        FROM enms.public."PowerAccounts" pa
+        LEFT JOIN enms.public.sites s
+          ON s.site_id = pa."SiteId"
+        WHERE pa."AccountNumber" IS NOT NULL
+          ${accountFilter}
+          ${siteFilter}
+      ),
+      bill_rows AS (
+        SELECT
+          TRY_CAST(tb."BillingMonth" AS INTEGER) AS billing_month_roc,
+          tb."AccountNumber" AS account_number,
+          COALESCE(TRY_CAST(tb."UsageAmount" AS DOUBLE), 0) AS usage_kwh,
+          COALESCE(TRY_CAST(tb."TotalAmount" AS DOUBLE), 0) AS total_bill
+        FROM enms.public."TaipowerBills" tb
+        JOIN target_accounts ta
+          ON ta."AccountNumber" = tb."AccountNumber"
+        WHERE TRY_CAST(tb."BillingMonth" AS INTEGER) IS NOT NULL
+          ${yearFilter}
+      ),
+      selected_periods AS (
+        SELECT billing_month_roc
+        FROM (
+          SELECT DISTINCT billing_month_roc
+          FROM bill_rows
+        ) periods
+        ORDER BY billing_month_roc DESC
+        ${periodLimiter}
+      )
+      SELECT
+        printf(
+          '%04d-%02d',
+          CAST(FLOOR(CAST(br.billing_month_roc AS DOUBLE) / 100) + 1911 AS INTEGER),
+          CAST(MOD(br.billing_month_roc, 100) AS INTEGER)
+        ) AS period,
+        COUNT(*) AS bill_count,
+        COUNT(DISTINCT br.account_number) AS account_count,
+        SUM(br.usage_kwh) AS total_kwh,
+        SUM(br.total_bill) AS total_bill,
+        SUM(br.total_bill) / NULLIF(SUM(br.usage_kwh), 0) AS avg_rate
+      FROM bill_rows br
+      JOIN selected_periods sp
+        ON sp.billing_month_roc = br.billing_month_roc
+      GROUP BY br.billing_month_roc
+      ORDER BY br.billing_month_roc ASC
+    `,
+    "enms",
+  );
+}
+
+async function queryEnergyTrendRows(target: EnergyTrendTarget) {
+  const siteFilter = target.siteName ? `AND s.site_name LIKE '%${target.siteName}%'` : "";
+  const periodFormat = target.grain === "month" ? "%Y-%m" : "%Y-%m-%d";
+  return duckdbQueryExternalPgAsyncDetailed<EnergyTrendRow>(
+    ENMS_CONNECTION_STRING,
+    `
+      WITH meter_meta AS (
+        SELECT
+          "DeviceAddress",
+          TRY_CAST("CircuitSeq" AS INTEGER) AS circuit_seq,
+          MAX("PowerAccountId") AS power_account_id
+        FROM enms.public."ElectricityMeter"
+        GROUP BY "DeviceAddress", TRY_CAST("CircuitSeq" AS INTEGER)
+      )
+      SELECT
+        strftime(date_trunc('${target.grain}', v."RecordTime"), '${periodFormat}') AS period,
+        SUM(COALESCE(v."TotalConsumption", 0)) AS total_kwh,
+        MAX(COALESCE(v."MaxDemand", 0)) AS peak_kw,
+        AVG(NULLIF(v."AvgPowerFactor", 0)) AS avg_pf
+      FROM enms.public."DeviceDataSummaryView" v
+      LEFT JOIN meter_meta mm
+        ON mm."DeviceAddress" = v."MacAddress"
+       AND mm.circuit_seq = v."CircuitSeq"
+      LEFT JOIN enms.public."PowerAccounts" pa
+        ON pa."AccountId" = mm.power_account_id
+      LEFT JOIN enms.public.sites s
+        ON s.site_id = pa."SiteId"
+      WHERE v."RecordTime" >= ${target.startSql}
+        AND v."RecordTime" < ${target.endSql}
+        ${siteFilter}
+      GROUP BY 1
+      HAVING SUM(COALESCE(v."TotalConsumption", 0)) > 0
+      ORDER BY period ASC
+    `,
+    "enms",
+  );
+}
+
 function buildDemandAlertCountReport(
   accountNumber: string,
   totalCount: number,
@@ -1342,6 +2400,34 @@ export async function buildEnmsVerifiedDirectQueryAnswer(
   input: EnmsVerifiedDirectQueryInput,
 ): Promise<string | null> {
   const { userMessage } = input;
+  if (isAssetCountRequest(userMessage)) {
+    const target = detectAssetCountTarget(userMessage);
+    if (!target) {
+      return null;
+    }
+    try {
+      const result = await duckdbQueryExternalPgAsyncDetailed<AssetCountRow>(
+        ENMS_CONNECTION_STRING,
+        `
+          SELECT COUNT(*) AS total_count
+          FROM enms.public."${target.tableName}"
+        `,
+        "enms",
+      );
+      if (result.error) {
+        throw new Error(result.error);
+      }
+      return buildAssetCountReport(target, result.rows[0]);
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "unknown EnMS DB query error";
+      return [
+        `我判斷這是 EnMS ${target.label}總數查詢，已優先查本地 EnMS DB，但查詢時發生錯誤：${message}`,
+        `因此我不會改用外部網路資料或推測答案。請先確認 ${target.tableName} 表是否可讀。`,
+      ].join("\n");
+    }
+  }
+
   if (isAlertTypeSummaryRequest(userMessage)) {
     try {
       const alertTypeResult =
@@ -1453,23 +2539,6 @@ export async function buildEnmsVerifiedDirectQueryAnswer(
     }
   }
 
-  if (isSiteBenchmarkRequest(userMessage)) {
-    try {
-      const result = await querySiteKpiRows();
-      if (result.error) {
-        throw new Error(result.error);
-      }
-      return buildSiteBenchmarkReport(result.rows, userMessage);
-    } catch (error) {
-      const message =
-        error instanceof Error ? error.message : "unknown EnMS DB query error";
-      return [
-        `我判斷這是 EnMS 最近 30 天場域 KPI / benchmarking 查詢，已優先查本地 EnMS DB，但查詢時發生錯誤：${message}`,
-        "因此我不會改用外部網路資料或推測答案。請先確認 DeviceDataSummaryView 與主資料 join 是否可讀。",
-      ].join("\n");
-    }
-  }
-
   if (isPeakDemandRankingRequest(userMessage)) {
     try {
       const result = await queryPeakDemandRankingRows();
@@ -1482,6 +2551,23 @@ export async function buildEnmsVerifiedDirectQueryAnswer(
         error instanceof Error ? error.message : "unknown EnMS DB query error";
       return [
         `我判斷這是 EnMS 最近 30 天場域最大需量排行，已優先查本地 EnMS DB，但查詢時發生錯誤：${message}`,
+        "因此我不會改用外部網路資料或推測答案。請先確認 DeviceDataSummaryView 與主資料 join 是否可讀。",
+      ].join("\n");
+    }
+  }
+
+  if (isSiteBenchmarkRequest(userMessage)) {
+    try {
+      const result = await querySiteKpiRows();
+      if (result.error) {
+        throw new Error(result.error);
+      }
+      return buildSiteBenchmarkReport(result.rows, userMessage);
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "unknown EnMS DB query error";
+      return [
+        `我判斷這是 EnMS 最近 30 天場域 KPI / benchmarking 查詢，已優先查本地 EnMS DB，但查詢時發生錯誤：${message}`,
         "因此我不會改用外部網路資料或推測答案。請先確認 DeviceDataSummaryView 與主資料 join 是否可讀。",
       ].join("\n");
     }
@@ -1501,6 +2587,60 @@ export async function buildEnmsVerifiedDirectQueryAnswer(
       return [
         `我判斷這是 EnMS 節電 5% / 10% 帳單估算，已優先查本地 EnMS DB，但查詢時發生錯誤：${message}`,
         "因此我不會改用外部網路資料或推測答案。請先確認 TaipowerBills、PowerAccounts 與 sites 表是否可讀。",
+      ].join("\n");
+    }
+  }
+
+  const billTrendTarget = detectBillTrendTarget(userMessage);
+  if (billTrendTarget) {
+    try {
+      const result = await queryBillTrendRows(billTrendTarget);
+      if (result.error) {
+        throw new Error(result.error);
+      }
+      return buildBillTrendReport(billTrendTarget, result.rows);
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "unknown EnMS DB query error";
+      return [
+        `我判斷這是 EnMS ${billTrendTarget.label}查詢，已優先查本地 EnMS DB，但查詢時發生錯誤：${message}`,
+        "因此我不會改用外部網路資料或推測答案。請先確認 TaipowerBills、PowerAccounts 與 sites 表是否可讀。",
+      ].join("\n");
+    }
+  }
+
+  if (isSiteBillRankingRequest(userMessage)) {
+    try {
+      const requestedSite = detectKnownSiteName(userMessage);
+      const result = await querySavingsScenarioRows(requestedSite);
+      if (result.error) {
+        throw new Error(result.error);
+      }
+      return buildSiteBillRankingReport(result.rows, requestedSite);
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "unknown EnMS DB query error";
+      return [
+        `我判斷這是 EnMS 最新年度電費 / 用電排行，已優先查本地 EnMS DB，但查詢時發生錯誤：${message}`,
+        "因此我不會改用外部網路資料或推測答案。請先確認 TaipowerBills、PowerAccounts 與 sites 表是否可讀。",
+      ].join("\n");
+    }
+  }
+
+  const energyTrendTarget = detectEnergyTrendTarget(userMessage);
+  if (energyTrendTarget) {
+    try {
+      const result = await queryEnergyTrendRows(energyTrendTarget);
+      if (result.error) {
+        throw new Error(result.error);
+      }
+      return buildEnergyTrendReport(energyTrendTarget, result.rows);
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "unknown EnMS DB query error";
+      return [
+        `我判斷這是 EnMS ${energyTrendTarget.label}查詢，已優先查本地 EnMS DB，但查詢時發生錯誤：${message}`,
+        "因此我不會改用外部網路資料或推測答案。請先確認 DeviceDataSummaryView、ElectricityMeter、PowerAccounts 與 sites 表是否可讀。",
       ].join("\n");
     }
   }
@@ -1529,14 +2669,42 @@ export async function buildEnmsVerifiedDirectQueryAnswer(
     }
   }
 
-  if (isTopLoadRankingRequest(userMessage)) {
+  const topLoadTarget = detectTopLoadTarget(userMessage);
+  if (topLoadTarget) {
     try {
-      const requestedSite = detectKnownSiteName(userMessage);
-      const result = await queryTopLoadRows(requestedSite);
+      const result = await queryTopLoadRows(
+        topLoadTarget.siteName,
+        topLoadTarget.startSql,
+        topLoadTarget.endSql,
+      );
       if (result.error) {
         throw new Error(result.error);
       }
-      return buildTopLoadReport(result.rows, requestedSite);
+      if (result.rows.length > 0) {
+        return buildTopLoadReport(
+          result.rows,
+          topLoadTarget.siteName,
+          topLoadTarget.windowLabel,
+        );
+      }
+
+      const availabilityResult = await queryTopLoadAvailabilityRow(topLoadTarget);
+      if (availabilityResult.error) {
+        throw new Error(availabilityResult.error);
+      }
+
+      const latestAvailableResult = await queryLatestAvailableTopLoadRows(
+        topLoadTarget.siteName,
+      );
+      if (latestAvailableResult.error) {
+        throw new Error(latestAvailableResult.error);
+      }
+
+      return buildTopLoadNoRecentDataReport(
+        topLoadTarget,
+        availabilityResult.rows[0],
+        latestAvailableResult.rows,
+      );
     } catch (error) {
       const message =
         error instanceof Error ? error.message : "unknown EnMS DB query error";

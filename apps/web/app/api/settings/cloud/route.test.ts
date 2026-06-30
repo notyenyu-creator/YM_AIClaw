@@ -27,6 +27,7 @@ const validState = {
   primaryModel: "dench-cloud/anthropic.claude-opus-4-6-v1",
   isDenchPrimary: true,
   selectedDenchModel: "anthropic.claude-opus-4-6-v1",
+  chatModels: [],
   selectedVoiceId: "voice_123",
   elevenLabsEnabled: true,
   models: [

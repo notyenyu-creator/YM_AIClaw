@@ -27,6 +27,11 @@ import { triggerAutoEnmsLearningDraftIfEligible } from "./enms-learning-auto-tri
 import { triggerAutoLearningDraftIfEligible } from "./ycrm-learning-auto-trigger";
 import { triggerAutoErpLearningDraftIfEligible } from "./erp-learning-auto-trigger";
 import {
+	buildSessionExecutionTrace,
+	type SessionAnswerMode,
+	type SessionExecutionTrace,
+} from "./chat-execution-trace";
+import {
 	type AgentProcessHandle,
 	type AgentEvent,
 	type ImageAttachment,
@@ -74,6 +79,13 @@ type AccumulatedMessage = {
 	parts: AccumulatedPart[];
 };
 
+type SessionExecutionTraceSeed = {
+	answerMode: SessionAnswerMode;
+	requestedModelId?: string | null;
+	domainId?: SessionExecutionTrace["domainId"];
+	executionStrategy?: SessionExecutionTrace["executionStrategy"];
+};
+
 export type ActiveRun = {
 	sessionId: string;
 	childProcess: AgentProcessHandle;
@@ -116,6 +128,10 @@ export type ActiveRun = {
 	pinnedAgentId?: string;
 	/** Full gateway session key captured at run creation time. */
 	pinnedSessionKey?: string;
+	/** Deferred answer-source metadata written only after the assistant reply is persisted. */
+	pendingCompletionTrace?: SessionExecutionTraceSeed | null;
+	/** Prevent duplicate sidebar metadata writes across multiple completion flushes. */
+	completionTracePersisted?: boolean;
 };
 
 // ── Constants ──
@@ -623,6 +639,7 @@ export function startRun(params: {
 	/** Use a specific agent ID instead of the workspace default. */
 	overrideAgentId?: string;
 	modelOverride?: string;
+	completionTrace?: SessionExecutionTraceSeed;
 	imageAttachments?: ImageAttachment[];
 }): ActiveRun {
 	const {
@@ -631,6 +648,7 @@ export function startRun(params: {
 		agentSessionId,
 		overrideAgentId,
 		modelOverride,
+		completionTrace,
 		imageAttachments,
 	} = params;
 
@@ -676,6 +694,8 @@ export function startRun(params: {
 		_waitingFinalizeTimer: null,
 		pinnedAgentId: agentId,
 		pinnedSessionKey: sessionKey,
+		pendingCompletionTrace: completionTrace ?? null,
+		completionTracePersisted: false,
 	};
 
 	activeRuns.set(sessionId, run);
@@ -718,8 +738,9 @@ function createNoopProcessHandle(): AgentProcessHandle {
 export async function createSyntheticCompletedRun(params: {
 	sessionId: string;
 	text: string;
+	completionTrace?: SessionExecutionTraceSeed;
 }): Promise<ActiveRun> {
-	const { sessionId, text } = params;
+	const { sessionId, text, completionTrace } = params;
 	const existing = activeRuns.get(sessionId);
 	if (existing) {cleanupRun(sessionId);}
 
@@ -748,6 +769,8 @@ export async function createSyntheticCompletedRun(params: {
 		_subscribeRetryTimer: null,
 		_subscribeRetryAttempt: 0,
 		_waitingFinalizeTimer: null,
+		pendingCompletionTrace: completionTrace ?? null,
+		completionTracePersisted: false,
 	};
 
 	activeRuns.set(sessionId, run);
@@ -822,6 +845,8 @@ export function startSubscribeRun(params: {
 		_subscribeRetryTimer: null,
 		_subscribeRetryAttempt: 0,
 		_waitingFinalizeTimer: null,
+		pendingCompletionTrace: null,
+		completionTracePersisted: false,
 	};
 
 	activeRuns.set(sessionKey, run);
@@ -1586,9 +1611,35 @@ async function ensureDir() {
 	await mkdir(webChatDir(), { recursive: true });
 }
 
+function shouldReplaceLastAnswerMeta(
+	currentValue: unknown,
+	nextValue: SessionExecutionTrace,
+): boolean {
+	if (!currentValue || typeof currentValue !== "object") {
+		return true;
+	}
+	const currentTrace = currentValue as Partial<SessionExecutionTrace>;
+	const currentTurnStartedAt =
+		typeof currentTrace.turnStartedAt === "number"
+			? currentTrace.turnStartedAt
+			: null;
+	const nextTurnStartedAt =
+		typeof nextValue.turnStartedAt === "number"
+			? nextValue.turnStartedAt
+			: null;
+	if (currentTurnStartedAt == null || nextTurnStartedAt == null) {
+		return true;
+	}
+	return nextTurnStartedAt >= currentTurnStartedAt;
+}
+
 async function updateIndex(
 	sessionId: string,
-	opts: { incrementCount?: number; title?: string },
+	opts: {
+		incrementCount?: number;
+		title?: string;
+		lastAnswerMeta?: SessionExecutionTrace;
+	},
 ) {
 	try {
 		const idxPath = indexFile();
@@ -1604,6 +1655,7 @@ async function updateIndex(
 					createdAt: Date.now(),
 					updatedAt: Date.now(),
 					messageCount: opts.incrementCount || 0,
+					...(opts.lastAnswerMeta ? { lastAnswerMeta: opts.lastAnswerMeta } : {}),
 				}];
 				await writeFile(idxPath, JSON.stringify(index, null, 2));
 				return;
@@ -1620,6 +1672,7 @@ async function updateIndex(
 					createdAt: Date.now(),
 					updatedAt: Date.now(),
 					messageCount: 0,
+					...(opts.lastAnswerMeta ? { lastAnswerMeta: opts.lastAnswerMeta } : {}),
 				};
 				index.unshift(session);
 			}
@@ -1629,6 +1682,12 @@ async function updateIndex(
 					((session.messageCount as number) || 0) + opts.incrementCount;
 			}
 			if (opts.title) {session.title = opts.title;}
+			if (
+				opts.lastAnswerMeta &&
+				shouldReplaceLastAnswerMeta(session.lastAnswerMeta, opts.lastAnswerMeta)
+			) {
+				session.lastAnswerMeta = opts.lastAnswerMeta;
+			}
 			await writeFile(idxPath, JSON.stringify(index, null, 2));
 		});
 	} catch {
@@ -2617,6 +2676,21 @@ async function flushPersistence(run: ActiveRun) {
 
 	try {
 		await upsertMessage(run.sessionId, message);
+		if (
+			!isStillStreaming &&
+			run.status === "completed" &&
+			run.pendingCompletionTrace &&
+			!run.completionTracePersisted &&
+			!run.sessionId.includes(":subagent:")
+			) {
+				await updateIndex(run.sessionId, {
+					lastAnswerMeta: buildSessionExecutionTrace({
+						...run.pendingCompletionTrace,
+						turnStartedAt: run.startedAt,
+					}),
+				});
+				run.completionTracePersisted = true;
+			}
 	} catch (err) {
 		console.error("[active-runs] Persistence error:", err);
 	}

@@ -138,6 +138,89 @@ describe("splitReportBlocks", () => {
     }
   });
 
+  it("normalizes scalar yAxis to an array", () => {
+    const report = JSON.stringify({
+      version: 1,
+      title: "Meter Count",
+      panels: [{
+        id: "meter_count",
+        title: "Meter Count",
+        type: "bar",
+        sql: "SELECT 'total' AS category, COUNT(*) AS count FROM ElectricityMeter",
+        mapping: { xAxis: "category", yAxis: "count" },
+      }],
+    });
+    const text = `\`\`\`report-json\n${report}\n\`\`\``;
+    const result = splitReportBlocks(text);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].type).toBe("report-artifact");
+    if (result[0].type === "report-artifact") {
+      expect(result[0].config.panels[0].mapping.yAxis).toEqual(["count"]);
+    }
+  });
+
+  it("ignores invalid colors and non-array data when sql is available", () => {
+    const report = JSON.stringify({
+      version: 1,
+      title: "Safe Colors",
+      panels: [{
+        id: "p1",
+        title: "P1",
+        type: "line",
+        sql: "SELECT 'a' AS label, 1 AS count",
+        data: { label: "a", count: 1 },
+        mapping: { xAxis: "label", yAxis: ["count"], colors: "#2563eb" },
+      }],
+    });
+    const text = `\`\`\`report-json\n${report}\n\`\`\``;
+    const result = splitReportBlocks(text);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].type).toBe("report-artifact");
+    if (result[0].type === "report-artifact") {
+      const panel = result[0].config.panels[0];
+      expect(panel.data).toBeUndefined();
+      expect(panel.mapping.colors).toBeUndefined();
+    }
+  });
+
+  it("falls back to text for panels missing required fields", () => {
+    const report = JSON.stringify({
+      version: 1,
+      title: "Bad Panel",
+      panels: [{
+        id: "p1",
+        title: "P1",
+        type: "bar",
+        sql: "SELECT 1",
+      }],
+    });
+    const text = `\`\`\`report-json\n${report}\n\`\`\``;
+    const result = splitReportBlocks(text);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].type).toBe("text");
+  });
+
+  it("falls back to text for panels without sql rows or data", () => {
+    const report = JSON.stringify({
+      version: 1,
+      title: "No Data Source",
+      panels: [{
+        id: "p1",
+        title: "P1",
+        type: "bar",
+        mapping: { xAxis: "label", yAxis: "count" },
+      }],
+    });
+    const text = `\`\`\`report-json\n${report}\n\`\`\``;
+    const result = splitReportBlocks(text);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].type).toBe("text");
+  });
+
   it("preserves report config fields (description, filters)", () => {
     const fullReport = JSON.stringify({
       version: 1,

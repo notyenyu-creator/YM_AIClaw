@@ -105,6 +105,7 @@ vi.mock("node:fs", () => ({
 
 vi.mock("@/lib/workspace", () => ({
 	duckdbQueryExternalPgAsync: vi.fn(async () => []),
+	duckdbQueryExternalPgAsyncDetailed: vi.fn(async () => ({ rows: [], error: null })),
 	resolveActiveAgentId: vi.fn(() => "main"),
 	resolveAgentWorkspacePrefix: vi.fn(() => null),
 	resolveOpenClawStateDir: vi.fn(() => OPENCLAW_DIR),
@@ -117,6 +118,7 @@ vi.mock("@/lib/active-runs", () => ({
 	startSubscribeRun: vi.fn(),
 	hasActiveRun: vi.fn(() => false),
 	getActiveRun: vi.fn(() => null),
+	createSyntheticCompletedRun: vi.fn(async () => {}),
 	subscribeToRun: vi.fn(() => () => {}),
 	persistUserMessage: vi.fn(async (sessionId: string, payload: { id?: string; content?: string }) => {
 		const filePath = normalizePath(`${WEB_CHAT_DIR}/${sessionId}.jsonl`);
@@ -160,6 +162,7 @@ describe("Chat session planner persistence integration", () => {
 		dirStore.clear();
 		dirStore.add("/");
 		vi.resetModules();
+		vi.clearAllMocks();
 	});
 
 	afterEach(() => {
@@ -393,6 +396,86 @@ describe("Chat session planner persistence integration", () => {
 		expect(sessionJson.session?.plannerLearningDraft ?? null).toBeNull();
 	});
 
+	it("decorates ERP read-only requests with the unified execution plan", async () => {
+		seedSession("s-erp-unified");
+
+		const { POST } = await import("./route.js");
+		const { startRun } = await import("@/lib/active-runs");
+		const { duckdbQueryExternalPgAsync } = await import("@/lib/workspace");
+
+		vi.mocked(duckdbQueryExternalPgAsync).mockImplementation(async (_conn, sql) => {
+			if (String(sql).includes("information_schema.columns")) {
+				return [{ table_name: "INVENTORY", column_name: "available_qty" }];
+			}
+			if (String(sql).includes("company_count")) {
+				return [{
+					company_count: 1,
+					site_count: 1,
+					customer_count: 2,
+					so_count: 3,
+					inventory_count: 4,
+				}];
+			}
+			return [];
+		});
+
+		await POST(new Request("http://localhost/api/chat", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				sessionId: "s-erp-unified",
+				messages: [
+					{
+						id: "m1",
+						role: "user",
+						parts: [
+							{
+								type: "text",
+								text: "請幫我查 ERP 庫存狀態，並用圖表呈現。",
+							},
+						],
+					},
+				],
+			}),
+		}));
+
+		expect(startRun).toHaveBeenCalledTimes(1);
+		const payload = vi.mocked(startRun).mock.calls[0]?.[0];
+		expect(payload?.message).toContain("[Unified Read-Only Execution Plan]");
+		expect(payload?.message).toContain("pipeline.domain=erp");
+	});
+
+	it("keeps ERP write-like requests out of the unified read-only path", async () => {
+		seedSession("s-erp-write");
+
+		const { POST } = await import("./route.js");
+		const { startRun } = await import("@/lib/active-runs");
+
+		await POST(new Request("http://localhost/api/chat", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				sessionId: "s-erp-write",
+				messages: [
+					{
+						id: "m1",
+						role: "user",
+						parts: [
+							{
+								type: "text",
+								text: "請幫我更新 ERP 庫存數量，並建立一筆調整紀錄。",
+							},
+						],
+					},
+				],
+			}),
+		}));
+
+		expect(startRun).toHaveBeenCalledTimes(1);
+		const payload = vi.mocked(startRun).mock.calls[0]?.[0];
+		expect(payload?.message).not.toContain("[Unified Read-Only Execution Plan]");
+	});
+
 	it("persists EnMS planner metadata when the request belongs to the energy domain", async () => {
 		seedSession("s-enms");
 
@@ -428,10 +511,1787 @@ describe("Chat session planner persistence integration", () => {
 		expect(sessionJson.session?.plannerPreflight?.shouldRouteToYcrm ?? false).toBe(false);
 		expect(sessionJson.session?.erpPlannerPreflight ?? null).toBeNull();
 		expect(sessionJson.session?.enmsPlannerPreflight?.system).toBe("enms");
-		expect(sessionJson.session?.enmsPlannerPreflight?.intent).toBe("demand_forecast");
+		expect(sessionJson.session?.enmsPlannerPreflight?.intent).toBe("site_benchmarking");
 		expect(sessionJson.session?.enmsPlannerPreflight?.shouldRouteToEnms).toBe(true);
-		expect(sessionJson.session?.enmsPlannerContextPack?.planner?.intent).toBe("demand_forecast");
+		expect(sessionJson.session?.enmsPlannerContextPack?.planner?.intent).toBe("site_benchmarking");
 		expect(sessionJson.session?.enmsPlannerContextPack?.read_first).toContain("skills/enms/SKILL.md");
-		expect(sessionJson.session?.enmsPlannerContextPack?.live_query_steps).toContain("join_power_account_scope");
+		expect(sessionJson.session?.enmsPlannerContextPack?.live_query_steps).toContain("join_site_gateway_company_scope");
+	});
+
+	it("decorates Y-CRM read-only requests with the unified execution plan but leaves write intents out", async () => {
+		seedSession("s-ycrm-unified");
+		fileStore.set(
+			normalizePath("/virtual/workspace/skills/ycrm/reference/auto-schema-workspace_3joxkr9ofo5hlxjan164egffx.md"),
+			[
+				"- 掃描時間: 2026-06-16 09:00:00",
+				"- 標準表: person, company, opportunity, workspaceMember",
+				"### company",
+				"| 欄位 | 型別 |",
+				"| companyName | TEXT |",
+				"| ownerId | TEXT |",
+				"### person",
+				"| 欄位 | 型別 |",
+				"| fullName | TEXT |",
+				"| companyId | TEXT |",
+			].join("\n"),
+		);
+
+		const { POST } = await import("./route.js");
+		const { startRun } = await import("@/lib/active-runs");
+
+		await POST(new Request("http://localhost/api/chat", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				sessionId: "s-ycrm-unified",
+				messages: [
+					{
+						id: "m1",
+						role: "user",
+						parts: [
+							{
+								type: "text",
+								text: "請幫我整理 Y-CRM 客戶背景，並用圖表呈現。",
+							},
+						],
+					},
+				],
+			}),
+		}));
+
+		const firstPayload = vi.mocked(startRun).mock.calls.at(-1)?.[0];
+		expect(firstPayload?.message).toContain("[Unified Read-Only Execution Plan]");
+		expect(firstPayload?.message).toContain("pipeline.domain=ycrm");
+
+		vi.mocked(startRun).mockClear();
+
+		await POST(new Request("http://localhost/api/chat", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				sessionId: "s-ycrm-unified",
+				messages: [
+					{
+						id: "m2",
+						role: "user",
+						parts: [
+							{
+								type: "text",
+								text: "請幫我在 Y-CRM 新增一筆跟進備註。",
+							},
+						],
+					},
+				],
+			}),
+		}));
+
+		const secondPayload = vi.mocked(startRun).mock.calls.at(-1)?.[0];
+		expect(secondPayload?.message).not.toContain("[Unified Read-Only Execution Plan]");
+	});
+
+	it("keeps Y-CRM product help on the original help/reference path", async () => {
+		seedSession("s-ycrm-help");
+
+		const { POST } = await import("./route.js");
+		const { startRun } = await import("@/lib/active-runs");
+
+		await POST(new Request("http://localhost/api/chat", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				sessionId: "s-ycrm-help",
+				messages: [
+					{
+						id: "m1",
+						role: "user",
+						parts: [
+							{
+								type: "text",
+								text: "Y-CRM 的 LINE 自動回覆要怎麼設定？",
+							},
+						],
+					},
+				],
+			}),
+		}));
+
+		const payload = vi.mocked(startRun).mock.calls.at(-1)?.[0];
+		expect(payload?.message).not.toContain("[Unified Read-Only Execution Plan]");
+	});
+
+	it("keeps Y-CRM cross-system requests out of the unified read-only path", async () => {
+		seedSession("s-ycrm-cross");
+
+		const { POST } = await import("./route.js");
+		const { startRun } = await import("@/lib/active-runs");
+
+		await POST(new Request("http://localhost/api/chat", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				sessionId: "s-ycrm-cross",
+				messages: [
+					{
+						id: "m1",
+						role: "user",
+						parts: [
+							{
+								type: "text",
+								text: "這個客戶在 Y-CRM 裡商機很熱，但我想知道他的訂單現在到哪、庫存夠不夠、還有工單有沒有卡住。",
+							},
+						],
+					},
+				],
+			}),
+		}));
+
+		const payload = vi.mocked(startRun).mock.calls.at(-1)?.[0];
+		expect(payload?.message).not.toContain("[Unified Read-Only Execution Plan]");
+	});
+
+	it("returns a blocked ERP reply without starting the generic run when source-of-truth is unavailable", async () => {
+		seedSession("s-erp-blocked");
+
+		const { POST } = await import("./route.js");
+		const { startRun, createSyntheticCompletedRun } = await import("@/lib/active-runs");
+		const { duckdbQueryExternalPgAsync } = await import("@/lib/workspace");
+
+		vi.mocked(duckdbQueryExternalPgAsync).mockResolvedValue([]);
+
+		await POST(new Request("http://localhost/api/chat", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				sessionId: "s-erp-blocked",
+				messages: [
+					{
+						id: "m1",
+						role: "user",
+						parts: [
+							{
+								type: "text",
+								text: "請幫我查 ERP 庫存狀態，並用圖表呈現。",
+							},
+						],
+					},
+				],
+			}),
+		}));
+
+		expect(startRun).not.toHaveBeenCalled();
+		expect(createSyntheticCompletedRun).toHaveBeenCalledTimes(1);
+		expect(
+			vi.mocked(createSyntheticCompletedRun).mock.calls[0]?.[0]?.text,
+		).toContain("source-of-truth 無法使用");
+	});
+
+	it("handles ERP company-count chart questions as direct DB-first replies", async () => {
+		seedSession("s-erp-count");
+
+		const { POST } = await import("./route.js");
+		const { startRun, createSyntheticCompletedRun } = await import("@/lib/active-runs");
+		const { duckdbQueryExternalPgAsyncDetailed, duckdbQueryExternalPgAsync } = await import("@/lib/workspace");
+
+		vi.mocked(duckdbQueryExternalPgAsync).mockImplementation(async (_conn, sql) => {
+			if (String(sql).includes("information_schema.columns")) {
+				return [{ table_name: "B_CUSTOMER", column_name: "customer_id" }];
+			}
+			if (String(sql).includes("company_count")) {
+				return [{
+					company_count: 1,
+					site_count: 1,
+					customer_count: 42,
+					so_count: 3,
+					inventory_count: 4,
+				}];
+			}
+			return [];
+		});
+		vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockReset();
+		vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockResolvedValueOnce({
+			rows: [{ total_count: 7 }],
+			error: null,
+		});
+
+		await POST(new Request("http://localhost/api/chat", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				sessionId: "s-erp-count",
+				currentSystemHint: "erp",
+				messages: [
+					{
+						id: "m1",
+						role: "user",
+						parts: [
+							{
+								type: "text",
+								text: "請用 ERP 資料幫我用圖表呈現一下目前有多少公司，不要看 Y-CRM。",
+							},
+						],
+					},
+				],
+			}),
+		}));
+
+		expect(startRun).not.toHaveBeenCalled();
+		expect(createSyntheticCompletedRun).toHaveBeenCalledTimes(1);
+		expect(
+			vi.mocked(createSyntheticCompletedRun).mock.calls[0]?.[0]?.text,
+		).toContain("目前共有 7 家公司");
+	});
+
+	it("keeps explicit ERP mixed-signal prompts inside ERP and does not persist EnMS planner state", async () => {
+		seedSession("s-erp-mixed-signal");
+
+		const { POST } = await import("./route.js");
+		const { GET } = await import("../web-sessions/[id]/route.js");
+		const { startRun, createSyntheticCompletedRun } = await import("@/lib/active-runs");
+		const { duckdbQueryExternalPgAsyncDetailed, duckdbQueryExternalPgAsync } = await import("@/lib/workspace");
+
+		vi.mocked(duckdbQueryExternalPgAsync).mockImplementation(async (_conn, sql) => {
+			if (String(sql).includes("information_schema.columns")) {
+				return [{ table_name: "B_CUSTOMER", column_name: "customer_id" }];
+			}
+			if (String(sql).includes("company_count")) {
+				return [{
+					company_count: 1,
+					site_count: 1,
+					customer_count: 42,
+					so_count: 3,
+					inventory_count: 4,
+				}];
+			}
+			return [];
+		});
+		vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockReset();
+		vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockResolvedValueOnce({
+			rows: [{ total_count: 7 }],
+			error: null,
+		});
+
+		await POST(new Request("http://localhost/api/chat", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				sessionId: "s-erp-mixed-signal",
+				currentSystemHint: "erp",
+				messages: [
+					{
+						id: "m1",
+						role: "user",
+						parts: [
+							{
+								type: "text",
+								text: "請只看 ERP，不要看 EnMS。ERP 目前有多少公司？先不要分析耗電異常或場域電表。",
+							},
+						],
+					},
+				],
+			}),
+		}));
+
+		expect(startRun).not.toHaveBeenCalled();
+		expect(createSyntheticCompletedRun).toHaveBeenCalledTimes(1);
+		expect(
+			vi.mocked(createSyntheticCompletedRun).mock.calls[0]?.[0]?.text,
+		).toContain("目前共有 7 家公司");
+
+		const sessionResponse = await GET(
+			new Request("http://localhost/api/web-sessions/s-erp-mixed-signal"),
+			{ params: Promise.resolve({ id: "s-erp-mixed-signal" }) },
+		);
+		const sessionJson = await sessionResponse.json();
+
+		expect(sessionJson.session?.erpPlannerPreflight?.system).toBe("erp");
+		expect(sessionJson.session?.erpPlannerPreflight?.shouldRouteToErp).toBe(true);
+		expect(sessionJson.session?.enmsPlannerPreflight ?? null).toBeNull();
+		expect(sessionJson.session?.plannerPreflight ?? null).toBeNull();
+		expect(sessionJson.session?.plannerContextPack ?? null).toBeNull();
+	});
+
+	it("lets an explicit ERP tab switch override prior Y-CRM follow-up scope reuse", async () => {
+		seedSession("s-followup-override");
+
+		const { POST } = await import("./route.js");
+		const { GET } = await import("../web-sessions/[id]/route.js");
+		const { startRun, createSyntheticCompletedRun } = await import("@/lib/active-runs");
+		const { duckdbQueryExternalPgAsyncDetailed, duckdbQueryExternalPgAsync } = await import("@/lib/workspace");
+
+		await POST(new Request("http://localhost/api/chat", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				sessionId: "s-followup-override",
+				messages: [
+					{
+						id: "m1",
+						role: "user",
+						parts: [
+							{
+								type: "text",
+								text: "請幫我整理 Y-CRM 工作區裡面的 Calleen Hong 目前負責的客戶背景。",
+							},
+						],
+					},
+				],
+			}),
+		}));
+
+		vi.mocked(duckdbQueryExternalPgAsync).mockImplementation(async (_conn, sql) => {
+			if (String(sql).includes("information_schema.columns")) {
+				return [{ table_name: "B_CUSTOMER", column_name: "customer_id" }];
+			}
+			if (String(sql).includes("company_count")) {
+				return [{
+					company_count: 1,
+					site_count: 1,
+					customer_count: 42,
+					so_count: 3,
+					inventory_count: 4,
+				}];
+			}
+			return [];
+		});
+		vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockReset();
+		vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockResolvedValueOnce({
+			rows: [{ total_count: 7 }],
+			error: null,
+		});
+		vi.mocked(startRun).mockClear();
+		vi.mocked(createSyntheticCompletedRun).mockClear();
+
+		await POST(new Request("http://localhost/api/chat", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				sessionId: "s-followup-override",
+				currentSystemHint: "erp",
+				messages: [
+					{
+						id: "m1",
+						role: "user",
+						parts: [
+							{
+								type: "text",
+								text: "請幫我整理 Y-CRM 工作區裡面的 Calleen Hong 目前負責的客戶背景。",
+							},
+						],
+					},
+					{
+						id: "m2",
+						role: "assistant",
+						parts: [
+							{
+								type: "text",
+								text: "以下是初步摘要。",
+							},
+						],
+					},
+					{
+						id: "m3",
+						role: "user",
+						parts: [
+							{
+								type: "text",
+								text: "目前有多少公司？請用圖表呈現，只看 ERP。",
+							},
+						],
+					},
+				],
+			}),
+		}));
+
+		expect(startRun).not.toHaveBeenCalled();
+		expect(createSyntheticCompletedRun).toHaveBeenCalledTimes(1);
+		expect(
+			vi.mocked(createSyntheticCompletedRun).mock.calls[0]?.[0]?.text,
+		).toContain("目前共有 7 家公司");
+
+		const sessionResponse = await GET(
+			new Request("http://localhost/api/web-sessions/s-followup-override"),
+			{ params: Promise.resolve({ id: "s-followup-override" }) },
+		);
+		const sessionJson = await sessionResponse.json();
+
+		expect(sessionJson.session?.erpPlannerPreflight?.system).toBe("erp");
+		expect(sessionJson.session?.erpPlannerPreflight?.shouldRouteToErp).toBe(true);
+		expect(sessionJson.session?.plannerPreflight ?? null).toBeNull();
+		expect(sessionJson.session?.plannerContextPack ?? null).toBeNull();
+	});
+
+	it("keeps explicit EnMS mixed-signal prompts inside EnMS and does not persist Y-CRM planner state", async () => {
+		seedSession("s-enms-mixed-signal");
+
+		const { POST } = await import("./route.js");
+		const { GET } = await import("../web-sessions/[id]/route.js");
+		const { startRun, createSyntheticCompletedRun } = await import("@/lib/active-runs");
+		const { duckdbQueryExternalPgAsyncDetailed } = await import("@/lib/workspace");
+
+		vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockReset();
+		vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockResolvedValueOnce({
+			rows: [{ total_count: 128 }],
+			error: null,
+		});
+
+		await POST(new Request("http://localhost/api/chat", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				sessionId: "s-enms-mixed-signal",
+				currentSystemHint: "enms",
+				messages: [
+					{
+						id: "m1",
+						role: "user",
+						parts: [
+							{
+								type: "text",
+								text: "請只看 EnMS，不要看 ERP 或 Y-CRM。請用圖表呈現目前有多少電表，先不要整理客戶或公司背景。",
+							},
+						],
+					},
+				],
+			}),
+		}));
+
+		expect(startRun).not.toHaveBeenCalled();
+		expect(createSyntheticCompletedRun).toHaveBeenCalledTimes(1);
+		expect(
+			vi.mocked(createSyntheticCompletedRun).mock.calls[0]?.[0]?.text,
+		).toContain("目前共有 128 個電表");
+
+		const sessionResponse = await GET(
+			new Request("http://localhost/api/web-sessions/s-enms-mixed-signal"),
+			{ params: Promise.resolve({ id: "s-enms-mixed-signal" }) },
+		);
+		const sessionJson = await sessionResponse.json();
+
+		expect(sessionJson.session?.enmsPlannerPreflight?.system).toBe("enms");
+		expect(sessionJson.session?.enmsPlannerPreflight?.shouldRouteToEnms).toBe(true);
+		expect(sessionJson.session?.plannerPreflight ?? null).toBeNull();
+		expect(sessionJson.session?.plannerContextPack ?? null).toBeNull();
+	});
+
+	it("handles ERP single sales-order summary questions as direct DB-first replies", async () => {
+		seedSession("s-erp-so-summary");
+
+		const { POST } = await import("./route.js");
+		const { startRun, createSyntheticCompletedRun } = await import("@/lib/active-runs");
+		const { duckdbQueryExternalPgAsyncDetailed, duckdbQueryExternalPgAsync } = await import("@/lib/workspace");
+
+		vi.mocked(duckdbQueryExternalPgAsync).mockImplementation(async (_conn, sql) => {
+			if (String(sql).includes("information_schema.columns")) {
+				return [{ table_name: "SO", column_name: "so_id" }];
+			}
+			if (String(sql).includes("so_count")) {
+				return [{
+					company_count: 1,
+					site_count: 1,
+					customer_count: 42,
+					so_count: 13,
+					inventory_count: 4,
+				}];
+			}
+			return [];
+		});
+		vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockReset();
+		vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockResolvedValueOnce({
+			rows: [
+				{
+					company_id: "C01",
+					site_id: "S01",
+					so_id: "SO20260101",
+					customer_id: "CU001",
+					customer_name: "OOCHAIN",
+					so_date: "2026-01-01",
+					so_delivery_date: "2026-01-15",
+					subtotal_amt: 1000,
+					tax_amt: 50,
+					freight_amt: 20,
+					total_amt: 1070,
+					order_status: "10",
+					picking_status: "READY",
+					shipping_status: "PARTIAL",
+					invoice_status: "PENDING",
+					line_count: 3,
+					ordered_qty: 120,
+					picked_qty: 80,
+					shipped_qty: 60,
+					returned_qty: 0,
+					remaining_qty: 60,
+					shipment_progress_bucket: "PARTIALLY_SHIPPED",
+				},
+			],
+			error: null,
+		});
+
+		await POST(new Request("http://localhost/api/chat", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				sessionId: "s-erp-so-summary",
+				currentSystemHint: "erp",
+				messages: [
+					{
+						id: "m1",
+						role: "user",
+						parts: [
+							{
+								type: "text",
+								text: "請摘要 SO20260101 的訂單狀態、總金額、訂購/已揀/已出/未出數量。",
+							},
+						],
+					},
+				],
+			}),
+		}));
+
+		expect(startRun).not.toHaveBeenCalled();
+		expect(createSyntheticCompletedRun).toHaveBeenCalledTimes(1);
+		expect(
+			vi.mocked(createSyntheticCompletedRun).mock.calls[0]?.[0]?.text,
+		).toContain("訂單 SO20260101 的摘要如下");
+	});
+
+	it("handles ERP available-inventory ranking questions as direct DB-first replies", async () => {
+		seedSession("s-erp-inventory-ranking");
+
+		const { POST } = await import("./route.js");
+		const { startRun, createSyntheticCompletedRun } = await import("@/lib/active-runs");
+		const { duckdbQueryExternalPgAsyncDetailed, duckdbQueryExternalPgAsync } = await import("@/lib/workspace");
+
+		vi.mocked(duckdbQueryExternalPgAsync).mockImplementation(async (_conn, sql) => {
+			if (String(sql).includes("information_schema.columns")) {
+				return [{ table_name: "INVENTORY", column_name: "available_qty" }];
+			}
+			if (String(sql).includes("inventory_count")) {
+				return [{
+					company_count: 1,
+					site_count: 1,
+					customer_count: 42,
+					so_count: 3,
+					inventory_count: 4,
+				}];
+			}
+			return [];
+		});
+		vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockReset();
+		vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockResolvedValueOnce({
+			rows: [
+				{
+					item_name: "A100 測試品",
+					available_qty: 150,
+					on_hand_qty: 160,
+					reserved_qty: 10,
+				},
+				{
+					item_name: "B200 第二品",
+					available_qty: 90,
+					on_hand_qty: 95,
+					reserved_qty: 5,
+				},
+			],
+			error: null,
+		});
+
+		await POST(new Request("http://localhost/api/chat", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				sessionId: "s-erp-inventory-ranking",
+				currentSystemHint: "erp",
+				messages: [
+					{
+						id: "m1",
+						role: "user",
+						parts: [
+							{
+								type: "text",
+								text: "ERP 目前可用庫存最多的前 10 個商品是哪些？請用圖表呈現。",
+							},
+						],
+					},
+				],
+			}),
+		}));
+
+		expect(startRun).not.toHaveBeenCalled();
+		expect(createSyntheticCompletedRun).toHaveBeenCalledTimes(1);
+		expect(
+			vi.mocked(createSyntheticCompletedRun).mock.calls[0]?.[0]?.text,
+		).toContain("可用庫存最高的前 10 個商品");
+	});
+
+	it("handles ERP customer-order ranking questions as direct DB-first replies", async () => {
+		seedSession("s-erp-customer-ranking");
+
+		const { POST } = await import("./route.js");
+		const { startRun, createSyntheticCompletedRun } = await import("@/lib/active-runs");
+		const { duckdbQueryExternalPgAsyncDetailed, duckdbQueryExternalPgAsync } = await import("@/lib/workspace");
+
+		vi.mocked(duckdbQueryExternalPgAsync).mockImplementation(async (_conn, sql) => {
+			if (String(sql).includes("information_schema.columns")) {
+				return [{ table_name: "B_CUSTOMER", column_name: "customer_name" }];
+			}
+			if (String(sql).includes("so_count")) {
+				return [{
+					company_count: 1,
+					site_count: 1,
+					customer_count: 42,
+					so_count: 13,
+					inventory_count: 4,
+				}];
+			}
+			return [];
+		});
+		vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockReset();
+		vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockResolvedValueOnce({
+			rows: [
+				{ customer_name: "OOCHAIN", order_count: 8, total_amt: 15230 },
+				{ customer_name: "MAODING", order_count: 5, total_amt: 9200 },
+			],
+			error: null,
+		});
+
+		await POST(new Request("http://localhost/api/chat", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				sessionId: "s-erp-customer-ranking",
+				currentSystemHint: "erp",
+				messages: [
+					{
+						id: "m1",
+						role: "user",
+						parts: [
+							{
+								type: "text",
+								text: "請只看 ERP，不要看 Y-CRM。ERP 訂單最多的前 10 個客戶是哪些？請用圖表呈現。",
+							},
+						],
+					},
+				],
+			}),
+		}));
+
+		expect(startRun).not.toHaveBeenCalled();
+		expect(createSyntheticCompletedRun).toHaveBeenCalledTimes(1);
+		expect(
+			vi.mocked(createSyntheticCompletedRun).mock.calls[0]?.[0]?.text,
+		).toContain("OOCHAIN：8 筆訂單");
+	});
+
+	it("handles ERP order-status distribution questions as direct DB-first replies", async () => {
+		seedSession("s-erp-order-status");
+
+		const { POST } = await import("./route.js");
+		const { startRun, createSyntheticCompletedRun } = await import("@/lib/active-runs");
+		const { duckdbQueryExternalPgAsyncDetailed, duckdbQueryExternalPgAsync } = await import("@/lib/workspace");
+
+		vi.mocked(duckdbQueryExternalPgAsync).mockImplementation(async (_conn, sql) => {
+			if (String(sql).includes("information_schema.columns")) {
+				return [{ table_name: "SO", column_name: "order_status" }];
+			}
+			if (String(sql).includes("so_count")) {
+				return [{
+					company_count: 1,
+					site_count: 1,
+					customer_count: 42,
+					so_count: 13,
+					inventory_count: 4,
+				}];
+			}
+			return [];
+		});
+		vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockReset();
+		vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockResolvedValueOnce({
+			rows: [
+				{ status_code: "10", total_count: 8 },
+				{ status_code: "20", total_count: 5 },
+			],
+			error: null,
+		});
+
+		await POST(new Request("http://localhost/api/chat", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				sessionId: "s-erp-order-status",
+				currentSystemHint: "erp",
+				messages: [
+					{
+						id: "m1",
+						role: "user",
+						parts: [
+							{
+								type: "text",
+								text: "請幫我用圖表呈現 ERP 訂單狀態分布。",
+							},
+						],
+					},
+				],
+			}),
+		}));
+
+		expect(startRun).not.toHaveBeenCalled();
+		expect(createSyntheticCompletedRun).toHaveBeenCalledTimes(1);
+		expect(
+			vi.mocked(createSyntheticCompletedRun).mock.calls[0]?.[0]?.text,
+		).toContain("10：8 筆");
+	});
+
+	it("handles ERP overdue-summary questions as direct DB-first replies", async () => {
+		seedSession("s-erp-overdue");
+
+		const { POST } = await import("./route.js");
+		const { startRun, createSyntheticCompletedRun } = await import("@/lib/active-runs");
+		const { duckdbQueryExternalPgAsyncDetailed, duckdbQueryExternalPgAsync } = await import("@/lib/workspace");
+
+		vi.mocked(duckdbQueryExternalPgAsync).mockImplementation(async (_conn, sql) => {
+			if (String(sql).includes("information_schema.columns")) {
+				return [{ table_name: "SO", column_name: "delivery_date" }];
+			}
+			if (String(sql).includes("so_count")) {
+				return [{
+					company_count: 1,
+					site_count: 1,
+					customer_count: 42,
+					so_count: 13,
+					inventory_count: 4,
+				}];
+			}
+			return [];
+		});
+		vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockReset();
+		vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockResolvedValueOnce({
+			rows: [
+				{ due_status: "已逾期", total_count: 6 },
+				{ due_status: "未逾期", total_count: 9 },
+			],
+			error: null,
+		});
+
+		await POST(new Request("http://localhost/api/chat", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				sessionId: "s-erp-overdue",
+				currentSystemHint: "erp",
+				messages: [
+					{
+						id: "m1",
+						role: "user",
+						parts: [
+							{
+								type: "text",
+								text: "請幫我用圖表呈現 ERP 訂單交期逾期概況。",
+							},
+						],
+					},
+				],
+			}),
+		}));
+
+		expect(startRun).not.toHaveBeenCalled();
+		expect(createSyntheticCompletedRun).toHaveBeenCalledTimes(1);
+		expect(
+			vi.mocked(createSyntheticCompletedRun).mock.calls[0]?.[0]?.text,
+		).toContain("已逾期：6 筆");
+	});
+
+	it("handles ERP overdue-unshipped exception questions as direct DB-first replies", async () => {
+		seedSession("s-erp-overdue-list");
+
+		const { POST } = await import("./route.js");
+		const { startRun, createSyntheticCompletedRun } = await import("@/lib/active-runs");
+		const { duckdbQueryExternalPgAsyncDetailed, duckdbQueryExternalPgAsync } = await import("@/lib/workspace");
+
+		vi.mocked(duckdbQueryExternalPgAsync).mockImplementation(async (_conn, sql) => {
+			if (String(sql).includes("information_schema.columns")) {
+				return [{ table_name: "SO", column_name: "delivery_date" }];
+			}
+			if (String(sql).includes("so_count")) {
+				return [{
+					company_count: 1,
+					site_count: 1,
+					customer_count: 42,
+					so_count: 13,
+					inventory_count: 4,
+				}];
+			}
+			return [];
+		});
+		vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockReset();
+		vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockResolvedValueOnce({
+			rows: [
+				{
+					company_id: "C01",
+					site_id: "S01",
+					so_id: "SO20260109",
+					customer_name: "OOCHAIN",
+					delivery_date: "2026-01-15",
+					shipping_status: "PARTIAL",
+					order_status: "20",
+					total_amt: 1200,
+					ordered_qty: 100,
+					shipped_qty: 40,
+					remaining_qty: 60,
+					days_overdue: 7,
+				},
+			],
+			error: null,
+		});
+
+		await POST(new Request("http://localhost/api/chat", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				sessionId: "s-erp-overdue-list",
+				currentSystemHint: "erp",
+				messages: [
+					{
+						id: "m1",
+						role: "user",
+						parts: [
+							{
+								type: "text",
+								text: "ERP 現在有哪些訂單已過交期還沒出貨？請列前 10 筆。",
+							},
+						],
+					},
+				],
+			}),
+		}));
+
+		expect(startRun).not.toHaveBeenCalled();
+		expect(createSyntheticCompletedRun).toHaveBeenCalledTimes(1);
+		expect(
+			vi.mocked(createSyntheticCompletedRun).mock.calls[0]?.[0]?.text,
+		).toContain("SO20260109 / OOCHAIN：逾期 7 天，待出 60");
+	});
+
+	it("handles ERP picking-status distribution questions as direct DB-first replies", async () => {
+		seedSession("s-erp-picking-status");
+
+		const { POST } = await import("./route.js");
+		const { startRun, createSyntheticCompletedRun } = await import("@/lib/active-runs");
+		const { duckdbQueryExternalPgAsyncDetailed, duckdbQueryExternalPgAsync } = await import("@/lib/workspace");
+
+		vi.mocked(duckdbQueryExternalPgAsync).mockImplementation(async (_conn, sql) => {
+			if (String(sql).includes("information_schema.columns")) {
+				return [{ table_name: "SO", column_name: "picking_status" }];
+			}
+			if (String(sql).includes("so_count")) {
+				return [{
+					company_count: 1,
+					site_count: 1,
+					customer_count: 42,
+					so_count: 13,
+					inventory_count: 4,
+				}];
+			}
+			return [];
+		});
+		vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockReset();
+		vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockResolvedValueOnce({
+			rows: [
+				{ status_code: "READY", total_count: 5 },
+				{ status_code: "PICKED", total_count: 3 },
+			],
+			error: null,
+		});
+
+		await POST(new Request("http://localhost/api/chat", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				sessionId: "s-erp-picking-status",
+				currentSystemHint: "erp",
+				messages: [
+					{
+						id: "m1",
+						role: "user",
+						parts: [
+							{
+								type: "text",
+								text: "請幫我用圖表呈現 ERP 揀貨狀態分布。",
+							},
+						],
+					},
+				],
+			}),
+		}));
+
+		expect(startRun).not.toHaveBeenCalled();
+		expect(createSyntheticCompletedRun).toHaveBeenCalledTimes(1);
+		expect(
+			vi.mocked(createSyntheticCompletedRun).mock.calls[0]?.[0]?.text,
+		).toContain("READY：5 筆");
+	});
+
+	it("handles ERP invoice-status distribution questions as direct DB-first replies", async () => {
+		seedSession("s-erp-invoice-status");
+
+		const { POST } = await import("./route.js");
+		const { startRun, createSyntheticCompletedRun } = await import("@/lib/active-runs");
+		const { duckdbQueryExternalPgAsyncDetailed, duckdbQueryExternalPgAsync } = await import("@/lib/workspace");
+
+		vi.mocked(duckdbQueryExternalPgAsync).mockImplementation(async (_conn, sql) => {
+			if (String(sql).includes("information_schema.columns")) {
+				return [{ table_name: "SO", column_name: "invoice_status" }];
+			}
+			if (String(sql).includes("so_count")) {
+				return [{
+					company_count: 1,
+					site_count: 1,
+					customer_count: 42,
+					so_count: 13,
+					inventory_count: 4,
+				}];
+			}
+			return [];
+		});
+		vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockReset();
+		vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockResolvedValueOnce({
+			rows: [
+				{ status_code: "PENDING", total_count: 4 },
+				{ status_code: "ISSUED", total_count: 2 },
+			],
+			error: null,
+		});
+
+		await POST(new Request("http://localhost/api/chat", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				sessionId: "s-erp-invoice-status",
+				currentSystemHint: "erp",
+				messages: [
+					{
+						id: "m1",
+						role: "user",
+						parts: [
+							{
+								type: "text",
+								text: "請幫我用圖表呈現 ERP 開票狀態分布。",
+							},
+						],
+					},
+				],
+			}),
+		}));
+
+		expect(startRun).not.toHaveBeenCalled();
+		expect(createSyntheticCompletedRun).toHaveBeenCalledTimes(1);
+		expect(
+			vi.mocked(createSyntheticCompletedRun).mock.calls[0]?.[0]?.text,
+		).toContain("PENDING：4 筆");
+	});
+
+	it("returns a blocked Y-CRM reply without starting the generic run when auto-schema is missing", async () => {
+		seedSession("s-ycrm-blocked");
+
+		const { POST } = await import("./route.js");
+		const { startRun, createSyntheticCompletedRun } = await import("@/lib/active-runs");
+
+		await POST(new Request("http://localhost/api/chat", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				sessionId: "s-ycrm-blocked",
+				messages: [
+					{
+						id: "m1",
+						role: "user",
+						parts: [
+							{
+								type: "text",
+								text: "幫我整理 HOPET 工作區裡最近一週的新商機。",
+							},
+						],
+					},
+				],
+			}),
+		}));
+
+		expect(startRun).not.toHaveBeenCalled();
+		expect(createSyntheticCompletedRun).toHaveBeenCalledTimes(1);
+		expect(
+			vi.mocked(createSyntheticCompletedRun).mock.calls[0]?.[0]?.text,
+		).toMatch(/auto-schema|source-of-truth/);
+	});
+
+	it("handles Y-CRM customer-count chart questions as direct DB-first replies", async () => {
+		seedSession("s-ycrm-count");
+		fileStore.set(
+			normalizePath("/virtual/workspace/skills/ycrm/reference/auto-schema-workspace_3joxkr9ofo5hlxjan164egffx.md"),
+			[
+				"- 掃描時間: 2026-06-16 09:00:00",
+				"- 標準表: person, company, opportunity, workspaceMember",
+				"### company",
+				"| 欄位 | 型別 |",
+				"| name | TEXT |",
+				"| deletedAt | TIMESTAMP |",
+			].join("\n"),
+		);
+
+		const { POST } = await import("./route.js");
+		const { startRun, createSyntheticCompletedRun } = await import("@/lib/active-runs");
+		const { duckdbQueryExternalPgAsyncDetailed } = await import("@/lib/workspace");
+
+		vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockReset();
+		vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockResolvedValueOnce({
+			rows: [{ total_count: 23 }],
+			error: null,
+		});
+
+		await POST(new Request("http://localhost/api/chat", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				sessionId: "s-ycrm-count",
+				currentSystemHint: "ycrm",
+				messages: [
+					{
+						id: "m1",
+						role: "user",
+						parts: [
+							{
+								type: "text",
+								text: "請用 Y-CRM 資料幫我用圖表呈現一下目前有多少客戶，不要看 ERP。",
+							},
+						],
+					},
+				],
+			}),
+		}));
+
+		expect(startRun).not.toHaveBeenCalled();
+		expect(createSyntheticCompletedRun).toHaveBeenCalledTimes(1);
+		expect(
+			vi.mocked(createSyntheticCompletedRun).mock.calls[0]?.[0]?.text,
+		).toContain("目前共有 23 家客戶公司");
+	});
+
+	it("handles Y-CRM opportunity-amount trend questions as direct DB-first replies", async () => {
+		seedSession("s-ycrm-opp-amount");
+		fileStore.set(
+			normalizePath("/virtual/workspace/skills/ycrm/reference/auto-schema-workspace_3joxkr9ofo5hlxjan164egffx.md"),
+			[
+				"- 掃描時間: 2026-06-16 09:00:00",
+				"- 標準表: person, company, opportunity, workspaceMember, task",
+				"### opportunity",
+				"| 欄位 | 型別 |",
+				"| createdAt | TIMESTAMP |",
+				"| amountAmountMicros | NUMERIC |",
+				"| deletedAt | TIMESTAMP |",
+			].join("\n"),
+		);
+
+		const { POST } = await import("./route.js");
+		const { startRun, createSyntheticCompletedRun } = await import("@/lib/active-runs");
+		const { duckdbQueryExternalPgAsyncDetailed } = await import("@/lib/workspace");
+
+		vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockReset();
+		vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockResolvedValueOnce({
+			rows: [
+				{ month: "2026-01", currency: "TWD", total_amount: 120.5 },
+				{ month: "2026-02", currency: "TWD", total_amount: 88 },
+				{ month: "2026-02", currency: "USD", total_amount: 25 },
+			],
+			error: null,
+		});
+
+		await POST(new Request("http://localhost/api/chat", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				sessionId: "s-ycrm-opp-amount",
+				currentSystemHint: "ycrm",
+				messages: [
+					{
+						id: "m1",
+						role: "user",
+						parts: [
+							{
+								type: "text",
+								text: "請用 Y-CRM 工作區資料幫我做最近 12 個月的商機金額趨勢圖表。",
+							},
+						],
+					},
+				],
+			}),
+		}));
+
+		expect(startRun).not.toHaveBeenCalled();
+		expect(createSyntheticCompletedRun).toHaveBeenCalledTimes(1);
+		expect(
+			vi.mocked(createSyntheticCompletedRun).mock.calls[0]?.[0]?.text,
+		).toContain("TWD：最近一個月份 2026-02 的新增商機總金額為 88 TWD");
+	});
+
+	it("handles Y-CRM explicit date-range opportunity-amount trend questions as direct DB-first replies", async () => {
+		seedSession("s-ycrm-opp-amount-range");
+		fileStore.set(
+			normalizePath("/virtual/workspace/skills/ycrm/reference/auto-schema-workspace_3joxkr9ofo5hlxjan164egffx.md"),
+			[
+				"- 掃描時間: 2026-06-16 09:00:00",
+				"- 標準表: person, company, opportunity, workspaceMember, task",
+				"### opportunity",
+				"| 欄位 | 型別 |",
+				"| createdAt | TIMESTAMP |",
+				"| amountAmountMicros | NUMERIC |",
+				"| amountCurrencyCode | TEXT |",
+				"| deletedAt | TIMESTAMP |",
+			].join("\n"),
+		);
+
+		const { POST } = await import("./route.js");
+		const { startRun, createSyntheticCompletedRun } = await import("@/lib/active-runs");
+		const { duckdbQueryExternalPgAsyncDetailed } = await import("@/lib/workspace");
+
+		vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockReset();
+		vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockResolvedValueOnce({
+			rows: [
+				{ month: "2026-01-01", currency: "TWD", total_amount: 120.5 },
+				{ month: "2026-01-02", currency: "TWD", total_amount: 88 },
+			],
+			error: null,
+		});
+
+		await POST(new Request("http://localhost/api/chat", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				sessionId: "s-ycrm-opp-amount-range",
+				currentSystemHint: "ycrm",
+				messages: [
+					{
+						id: "m1",
+						role: "user",
+						parts: [
+							{
+								type: "text",
+								text: "請用 Y-CRM 工作區資料幫我做 2026-01-01 到 2026-01-02 的商機金額趨勢圖表。",
+							},
+						],
+					},
+				],
+			}),
+		}));
+
+		expect(startRun).not.toHaveBeenCalled();
+		expect(createSyntheticCompletedRun).toHaveBeenCalledTimes(1);
+		expect(
+			vi.mocked(createSyntheticCompletedRun).mock.calls[0]?.[0]?.text,
+		).toContain("2026-01-01 到 2026-01-02 商機金額趨勢已整理完成");
+	});
+
+	it("handles Y-CRM no-data opportunity-amount trend questions as direct DB-first replies with explicit fallback guidance", async () => {
+		seedSession("s-ycrm-opp-amount-no-data");
+		fileStore.set(
+			normalizePath("/virtual/workspace/skills/ycrm/reference/auto-schema-workspace_3joxkr9ofo5hlxjan164egffx.md"),
+			[
+				"- 掃描時間: 2026-06-16 09:00:00",
+				"- 標準表: person, company, opportunity, workspaceMember, task",
+				"### opportunity",
+				"| 欄位 | 型別 |",
+				"| createdAt | TIMESTAMP |",
+				"| amountAmountMicros | NUMERIC |",
+				"| amountCurrencyCode | TEXT |",
+				"| deletedAt | TIMESTAMP |",
+			].join("\n"),
+		);
+
+		const { POST } = await import("./route.js");
+		const { startRun, createSyntheticCompletedRun } = await import("@/lib/active-runs");
+		const { duckdbQueryExternalPgAsyncDetailed } = await import("@/lib/workspace");
+
+		vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockReset();
+		vi.mocked(duckdbQueryExternalPgAsyncDetailed)
+			.mockResolvedValueOnce({
+				rows: [],
+				error: null,
+			})
+			.mockResolvedValueOnce({
+				rows: [
+					{
+						requested_window_start: "2026-06-16",
+						requested_window_end: "2026-06-23",
+						earliest_created_at: "2026-05-01 09:00:00+08",
+						latest_created_at: "2026-06-15 18:30:00+08",
+						fallback_window_start: "2026-06-08",
+						fallback_window_end: "2026-06-15",
+						rows_in_requested_window: 0,
+					},
+				],
+				error: null,
+			});
+
+		await POST(new Request("http://localhost/api/chat", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				sessionId: "s-ycrm-opp-amount-no-data",
+				currentSystemHint: "ycrm",
+				messages: [
+					{
+						id: "m1",
+						role: "user",
+						parts: [
+							{
+								type: "text",
+								text: "請用 Y-CRM 工作區資料幫我做最近 7 天的商機金額趨勢圖表。",
+							},
+						],
+					},
+				],
+			}),
+		}));
+
+		expect(startRun).not.toHaveBeenCalled();
+		expect(createSyntheticCompletedRun).toHaveBeenCalledTimes(1);
+		const text = vi.mocked(createSyntheticCompletedRun).mock.calls[0]?.[0]?.text ?? "";
+		expect(text).toContain("最近 7 天商機金額趨勢查詢");
+		expect(text).toContain("實際查詢區間：2026-06-16 至 2026-06-23");
+		expect(text).toContain("目前工作區 workspace_3joxkr9ofo5hlxjan164egffx 的 opportunity.createdAt 可見資料時間帶為 2026-05-01 09:00:00+08 至 2026-06-15 18:30:00+08");
+		expect(text).toContain("因此我不會輸出空圖表，也不會直接把答案改成其他區間");
+		expect(text).toContain("請查 2026-06-08 到 2026-06-15 的商機金額趨勢圖表");
+		expect(text).not.toContain("```report-json");
+	});
+
+	it("handles Y-CRM opportunity stage-amount chart questions as direct DB-first replies", async () => {
+		seedSession("s-ycrm-stage-amount");
+		fileStore.set(
+			normalizePath("/virtual/workspace/skills/ycrm/reference/auto-schema-workspace_3joxkr9ofo5hlxjan164egffx.md"),
+			[
+				"- 掃描時間: 2026-06-16 09:00:00",
+				"- 標準表: person, company, opportunity, workspaceMember, task",
+				"### opportunity",
+				"| 欄位 | 型別 |",
+				"| stage | TEXT |",
+				"| amountAmountMicros | NUMERIC |",
+				"| amountCurrencyCode | TEXT |",
+				"| deletedAt | TIMESTAMP |",
+			].join("\n"),
+		);
+
+		const { POST } = await import("./route.js");
+		const { startRun, createSyntheticCompletedRun } = await import("@/lib/active-runs");
+		const { duckdbQueryExternalPgAsyncDetailed } = await import("@/lib/workspace");
+
+		vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockReset();
+		vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockResolvedValueOnce({
+			rows: [
+				{ stage: "OPT0_XU_QIU_QUE_REN", currency: "TWD", total_amount: 250.5 },
+				{ stage: "OPT2_YI_BAO_JIA", currency: "USD", total_amount: 88 },
+			],
+			error: null,
+		});
+
+		await POST(new Request("http://localhost/api/chat", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				sessionId: "s-ycrm-stage-amount",
+				currentSystemHint: "ycrm",
+				messages: [
+					{
+						id: "m1",
+						role: "user",
+						parts: [
+							{
+								type: "text",
+								text: "請用 Y-CRM 工作區資料幫我做各階段商機金額分布圖表。",
+							},
+						],
+					},
+				],
+			}),
+		}));
+
+		expect(startRun).not.toHaveBeenCalled();
+		expect(createSyntheticCompletedRun).toHaveBeenCalledTimes(1);
+		expect(
+			vi.mocked(createSyntheticCompletedRun).mock.calls[0]?.[0]?.text,
+		).toContain("需求確認（TWD）：250.5 TWD");
+	});
+
+	it("handles Y-CRM overview chart questions as direct DB-first replies", async () => {
+		seedSession("s-ycrm-overview");
+		fileStore.set(
+			normalizePath("/virtual/workspace/skills/ycrm/reference/auto-schema-workspace_3joxkr9ofo5hlxjan164egffx.md"),
+			[
+				"- 掃描時間: 2026-06-16 09:00:00",
+				"- 標準表: person, company, opportunity, workspaceMember, task",
+				"### company",
+				"| 欄位 | 型別 |",
+				"| name | TEXT |",
+				"| deletedAt | TIMESTAMP |",
+			].join("\n"),
+		);
+
+		const { POST } = await import("./route.js");
+		const { startRun, createSyntheticCompletedRun } = await import("@/lib/active-runs");
+		const { duckdbQueryExternalPgAsyncDetailed } = await import("@/lib/workspace");
+
+		vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockReset();
+		vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockResolvedValueOnce({
+			rows: [
+				{ category: "聯絡人", count: 120 },
+				{ category: "公司", count: 23 },
+				{ category: "商機", count: 14 },
+				{ category: "任務", count: 31 },
+			],
+			error: null,
+		});
+
+		await POST(new Request("http://localhost/api/chat", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				sessionId: "s-ycrm-overview",
+				currentSystemHint: "ycrm",
+				messages: [
+					{
+						id: "m1",
+						role: "user",
+						parts: [
+							{
+								type: "text",
+								text: "請用 Y-CRM 工作區資料幫我做一個聯絡人、客戶公司、商機、任務的總覽圖表。",
+							},
+						],
+					},
+				],
+			}),
+		}));
+
+		expect(startRun).not.toHaveBeenCalled();
+		expect(createSyntheticCompletedRun).toHaveBeenCalledTimes(1);
+		expect(
+			vi.mocked(createSyntheticCompletedRun).mock.calls[0]?.[0]?.text,
+		).toContain("聯絡人 120 位");
+	});
+
+	it("handles Y-CRM opportunity-stage chart questions as direct DB-first replies", async () => {
+		seedSession("s-ycrm-stage");
+		fileStore.set(
+			normalizePath("/virtual/workspace/skills/ycrm/reference/auto-schema-workspace_3joxkr9ofo5hlxjan164egffx.md"),
+			[
+				"- 掃描時間: 2026-06-16 09:00:00",
+				"- 標準表: person, company, opportunity, workspaceMember, task",
+				"### opportunity",
+				"| 欄位 | 型別 |",
+				"| stage | TEXT |",
+				"| deletedAt | TIMESTAMP |",
+			].join("\n"),
+		);
+
+		const { POST } = await import("./route.js");
+		const { startRun, createSyntheticCompletedRun } = await import("@/lib/active-runs");
+		const { duckdbQueryExternalPgAsyncDetailed } = await import("@/lib/workspace");
+
+		vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockReset();
+		vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockResolvedValueOnce({
+			rows: [
+				{ stage: "OPT0_XU_QIU_QUE_REN", total_count: 9 },
+				{ stage: "OPT2_YI_BAO_JIA", total_count: 4 },
+			],
+			error: null,
+		});
+
+		await POST(new Request("http://localhost/api/chat", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				sessionId: "s-ycrm-stage",
+				currentSystemHint: "ycrm",
+				messages: [
+					{
+						id: "m1",
+						role: "user",
+						parts: [
+							{
+								type: "text",
+								text: "請用 Y-CRM 工作區資料幫我做商機階段分布圖表。",
+							},
+						],
+					},
+				],
+			}),
+		}));
+
+		expect(startRun).not.toHaveBeenCalled();
+		expect(createSyntheticCompletedRun).toHaveBeenCalledTimes(1);
+		expect(
+			vi.mocked(createSyntheticCompletedRun).mock.calls[0]?.[0]?.text,
+		).toContain("需求確認：9 筆");
+	});
+
+	it("handles Y-CRM task-status chart questions as direct DB-first replies", async () => {
+		seedSession("s-ycrm-task-status");
+		fileStore.set(
+			normalizePath("/virtual/workspace/skills/ycrm/reference/auto-schema-workspace_3joxkr9ofo5hlxjan164egffx.md"),
+			[
+				"- 掃描時間: 2026-06-16 09:00:00",
+				"- 標準表: person, company, opportunity, workspaceMember, task",
+				"### task",
+				"| 欄位 | 型別 |",
+				"| status | TEXT |",
+				"| deletedAt | TIMESTAMP |",
+			].join("\n"),
+		);
+
+		const { POST } = await import("./route.js");
+		const { startRun, createSyntheticCompletedRun } = await import("@/lib/active-runs");
+		const { duckdbQueryExternalPgAsyncDetailed } = await import("@/lib/workspace");
+
+		vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockReset();
+		vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockResolvedValueOnce({
+			rows: [
+				{ status: "TODO", total_count: 12 },
+				{ status: "YI_WAN_CHENG", total_count: 7 },
+			],
+			error: null,
+		});
+
+		await POST(new Request("http://localhost/api/chat", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				sessionId: "s-ycrm-task-status",
+				currentSystemHint: "ycrm",
+				messages: [
+					{
+						id: "m1",
+						role: "user",
+						parts: [
+							{
+								type: "text",
+								text: "請用 Y-CRM 工作區資料幫我做任務狀態分布圖表。",
+							},
+						],
+					},
+				],
+			}),
+		}));
+
+		expect(startRun).not.toHaveBeenCalled();
+		expect(createSyntheticCompletedRun).toHaveBeenCalledTimes(1);
+		expect(
+			vi.mocked(createSyntheticCompletedRun).mock.calls[0]?.[0]?.text,
+		).toContain("待辦：12 筆");
+	});
+
+	it("handles Y-CRM task-due chart questions as direct DB-first replies", async () => {
+		seedSession("s-ycrm-task-due");
+		fileStore.set(
+			normalizePath("/virtual/workspace/skills/ycrm/reference/auto-schema-workspace_3joxkr9ofo5hlxjan164egffx.md"),
+			[
+				"- 掃描時間: 2026-06-16 09:00:00",
+				"- 標準表: person, company, opportunity, workspaceMember, task",
+				"### task",
+				"| 欄位 | 型別 |",
+				"| dueAt | TIMESTAMP |",
+				"| status | TEXT |",
+				"| deletedAt | TIMESTAMP |",
+			].join("\n"),
+		);
+
+		const { POST } = await import("./route.js");
+		const { startRun, createSyntheticCompletedRun } = await import("@/lib/active-runs");
+		const { duckdbQueryExternalPgAsyncDetailed } = await import("@/lib/workspace");
+
+		vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockReset();
+		vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockResolvedValueOnce({
+			rows: [
+				{ due_status: "已逾期", total_count: 4 },
+				{ due_status: "正常", total_count: 11 },
+			],
+			error: null,
+		});
+
+		await POST(new Request("http://localhost/api/chat", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				sessionId: "s-ycrm-task-due",
+				currentSystemHint: "ycrm",
+				messages: [
+					{
+						id: "m1",
+						role: "user",
+						parts: [
+							{
+								type: "text",
+								text: "請用 Y-CRM 工作區資料幫我做任務到期概況圖表。",
+							},
+						],
+					},
+				],
+			}),
+		}));
+
+		expect(startRun).not.toHaveBeenCalled();
+		expect(createSyntheticCompletedRun).toHaveBeenCalledTimes(1);
+		expect(
+			vi.mocked(createSyntheticCompletedRun).mock.calls[0]?.[0]?.text,
+		).toContain("已逾期：4 筆");
+	});
+
+	it("handles EnMS meter-count chart questions as direct DB-first replies", async () => {
+		seedSession("s-enms-meter-count");
+
+		const { POST } = await import("./route.js");
+		const { startRun, createSyntheticCompletedRun } = await import("@/lib/active-runs");
+		const { duckdbQueryExternalPgAsyncDetailed } = await import("@/lib/workspace");
+
+		vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockReset();
+		vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockResolvedValueOnce({
+			rows: [{ total_count: 128 }],
+			error: null,
+		});
+
+		await POST(new Request("http://localhost/api/chat", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				sessionId: "s-enms-meter-count",
+				currentSystemHint: "enms",
+				messages: [
+					{
+						id: "m1",
+						role: "user",
+						parts: [
+							{
+								type: "text",
+								text: "可以幫我用圖表呈現一下目前有多少電表嗎？",
+							},
+						],
+					},
+				],
+			}),
+		}));
+
+		expect(startRun).not.toHaveBeenCalled();
+		expect(createSyntheticCompletedRun).toHaveBeenCalledTimes(1);
+		expect(
+			vi.mocked(createSyntheticCompletedRun).mock.calls[0]?.[0]?.text,
+		).toContain("目前共有 128 個電表");
+	});
+
+	it("handles EnMS site-bill ranking questions as direct DB-first replies", async () => {
+		seedSession("s-enms-bill-ranking");
+
+		const { POST } = await import("./route.js");
+		const { startRun, createSyntheticCompletedRun } = await import("@/lib/active-runs");
+		const { duckdbQueryExternalPgAsyncDetailed } = await import("@/lib/workspace");
+
+		vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockReset();
+		vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockResolvedValueOnce({
+			rows: [
+				{
+					site_name: "阿里山",
+					gregorian_year: 2025,
+					billed_accounts: 1,
+					bill_count: 12,
+					baseline_kwh: 1006863,
+					baseline_bill: 3592971,
+					savings_5pct_kwh: 50343.15,
+					savings_10pct_kwh: 100686.3,
+					savings_5pct_ntd: 179648.55,
+					savings_10pct_ntd: 359297.1,
+				},
+				{
+					site_name: "洋銘資訊",
+					gregorian_year: 2025,
+					billed_accounts: 2,
+					bill_count: 12,
+					baseline_kwh: 17177,
+					baseline_bill: 57638,
+					savings_5pct_kwh: 858.85,
+					savings_10pct_kwh: 1717.7,
+					savings_5pct_ntd: 2881.9,
+					savings_10pct_ntd: 5763.8,
+				},
+			],
+			error: null,
+		});
+
+		await POST(new Request("http://localhost/api/chat", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				sessionId: "s-enms-bill-ranking",
+				currentSystemHint: "enms",
+				messages: [
+					{
+						id: "m1",
+						role: "user",
+						parts: [
+							{
+								type: "text",
+								text: "哪個場域最新年度電費最高？請用圖表呈現各場域電費排行。",
+							},
+						],
+					},
+				],
+			}),
+		}));
+
+		expect(startRun).not.toHaveBeenCalled();
+		expect(createSyntheticCompletedRun).toHaveBeenCalledTimes(1);
+		expect(
+			vi.mocked(createSyntheticCompletedRun).mock.calls[0]?.[0]?.text,
+		).toContain("2025 年台電帳單 baseline 的電費 / 用電排行");
+	});
+
+	it("handles EnMS bill-trend questions as direct DB-first replies", async () => {
+		seedSession("s-enms-bill-trend");
+
+		const { POST } = await import("./route.js");
+		const { startRun, createSyntheticCompletedRun } = await import("@/lib/active-runs");
+		const { duckdbQueryExternalPgAsyncDetailed } = await import("@/lib/workspace");
+
+		vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockReset();
+		vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockResolvedValueOnce({
+			rows: [
+				{
+					period: "2026-01",
+					bill_count: 1,
+					account_count: 1,
+					total_kwh: 1200.5,
+					total_bill: 4200,
+					avg_rate: 3.4985,
+				},
+				{
+					period: "2026-02",
+					bill_count: 1,
+					account_count: 1,
+					total_kwh: 1188.2,
+					total_bill: 4310,
+					avg_rate: 3.6273,
+				},
+			],
+			error: null,
+		});
+
+		await POST(new Request("http://localhost/api/chat", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				sessionId: "s-enms-bill-trend",
+				currentSystemHint: "enms",
+				messages: [
+					{
+						id: "m1",
+						role: "user",
+						parts: [
+							{
+								type: "text",
+								text: "電號 8888888888 最近 6 期台電帳單趨勢如何？請用圖表呈現。",
+							},
+						],
+					},
+				],
+			}),
+		}));
+
+		expect(startRun).not.toHaveBeenCalled();
+		expect(createSyntheticCompletedRun).toHaveBeenCalledTimes(1);
+		expect(
+			vi.mocked(createSyntheticCompletedRun).mock.calls[0]?.[0]?.text,
+		).toContain("最近 6 期台電帳單趨勢已整理完成");
+	});
+
+	it("handles EnMS energy-trend questions as direct DB-first replies", async () => {
+		seedSession("s-enms-energy-trend");
+
+		const { POST } = await import("./route.js");
+		const { startRun, createSyntheticCompletedRun } = await import("@/lib/active-runs");
+		const { duckdbQueryExternalPgAsyncDetailed } = await import("@/lib/workspace");
+
+		vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockReset();
+		vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockResolvedValueOnce({
+			rows: [
+				{ period: "2026-01", total_kwh: 5707.52, peak_kw: 57, avg_pf: 0.9821 },
+				{ period: "2026-02", total_kwh: 5696.46, peak_kw: 55, avg_pf: 0.9784 },
+				{ period: "2026-03", total_kwh: 6033.12, peak_kw: 58, avg_pf: 0.9812 },
+			],
+			error: null,
+		});
+
+		await POST(new Request("http://localhost/api/chat", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				sessionId: "s-enms-energy-trend",
+				currentSystemHint: "enms",
+				messages: [
+					{
+						id: "m1",
+						role: "user",
+						parts: [
+							{
+								type: "text",
+								text: "請問我在2026年1月到今天的能源趨勢分析可以提供給我嗎？也可以幫我用圖表呈現出來。",
+							},
+						],
+					},
+				],
+			}),
+		}));
+
+		expect(startRun).not.toHaveBeenCalled();
+		expect(createSyntheticCompletedRun).toHaveBeenCalledTimes(1);
+		expect(
+			vi.mocked(createSyntheticCompletedRun).mock.calls[0]?.[0]?.text,
+		).toContain("能源趨勢已整理完成");
+	});
+
+	it("handles EnMS explicit date-range trend questions as direct DB-first replies", async () => {
+		seedSession("s-enms-energy-trend-range");
+
+		const { POST } = await import("./route.js");
+		const { startRun, createSyntheticCompletedRun } = await import("@/lib/active-runs");
+		const { duckdbQueryExternalPgAsyncDetailed } = await import("@/lib/workspace");
+
+		vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockReset();
+		vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockResolvedValueOnce({
+			rows: [
+				{ period: "2026-01-01", total_kwh: 5707.52, peak_kw: 57, avg_pf: 0.9821 },
+				{ period: "2026-01-02", total_kwh: 5696.46, peak_kw: 55, avg_pf: 0.9784 },
+			],
+			error: null,
+		});
+
+		await POST(new Request("http://localhost/api/chat", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				sessionId: "s-enms-energy-trend-range",
+				currentSystemHint: "enms",
+				messages: [
+					{
+						id: "m1",
+						role: "user",
+						parts: [
+							{
+								type: "text",
+								text: "請用 EnMS 資料分析 2026-01-01 到 2026-01-02 的能源趨勢，並用圖表呈現。",
+							},
+						],
+					},
+				],
+			}),
+		}));
+
+		expect(startRun).not.toHaveBeenCalled();
+		expect(createSyntheticCompletedRun).toHaveBeenCalledTimes(1);
+		expect(
+			vi.mocked(createSyntheticCompletedRun).mock.calls[0]?.[0]?.text,
+		).toContain("能源趨勢已整理完成");
 	});
 });

@@ -1,6 +1,12 @@
 "use client";
 
 import { useCallback, useMemo, useState } from "react";
+import {
+	buildSessionExecutionBadge,
+	buildSessionExecutionDomainBadge,
+	buildSessionExecutionTooltip,
+	type SessionExecutionTrace,
+} from "@/lib/chat-execution-trace";
 import { UnicodeSpinner } from "../unicode-spinner";
 import {
 	DropdownMenu,
@@ -66,6 +72,7 @@ export type WebSession = {
 			reviewer_actor?: string | null;
 		};
 	};
+	lastAnswerMeta?: SessionExecutionTrace;
 };
 
 export type SidebarSubagentInfo = {
@@ -510,6 +517,10 @@ function WebSessionRow({
 			: ycrmPlanner;
 	const workspaceLabel = formatPlannerWorkspaceLabel(ycrmPlanner?.workspaceId);
 	const plannerTooltip = buildPlannerTooltip(session);
+	const executionBadge = buildSessionExecutionBadge(session.lastAnswerMeta);
+	const executionDomainBadge = buildSessionExecutionDomainBadge(session.lastAnswerMeta);
+	const executionTooltip = buildSessionExecutionTooltip(session.lastAnswerMeta);
+	const showExecutionSource = Boolean(executionBadge);
 	const reviewBadge = getReviewQueueBadge(session);
 	const reviewerActor =
 		(reviewBadge?.system === "erp"
@@ -517,14 +528,7 @@ function WebSessionRow({
 			: reviewBadge?.system === "enms"
 				? session.enmsPlannerLearningDraft?.writeback?.reviewer_actor
 				: session.plannerLearningDraft?.writeback?.reviewer_actor)?.trim() || null;
-	const reviewSystem = reviewBadge?.system
-		?? (enmsPlanner?.shouldRouteToEnms
-			? "enms"
-			: erpPlanner?.shouldRouteToErp
-				? "erp"
-				: ycrmPlanner?.shouldRouteToYcrm
-					? "ycrm"
-					: null);
+	const reviewSystem = reviewBadge?.system ?? null;
 	const reviewHref = reviewSystem
 		? `/review/${reviewSystem}?sessionId=${encodeURIComponent(session.id)}`
 		: null;
@@ -540,15 +544,13 @@ function WebSessionRow({
 			: "Go to review";
 	const reviewTitle = reviewBadge
 		? `Open the formal ${reviewSystemLabel} review workspace for this session`
-		: reviewSystem
-			? `Open the formal ${reviewSystemLabel} review workspace for this session`
-			: "Open the formal review workspace for this session";
+		: "Open the formal review workspace for this session";
 	const showPlannerStatus = Boolean(
-		(ycrmPlanner && (ycrmPlanner.shouldRouteToYcrm || ycrmPlanner.crossSystem || workspaceLabel))
-		|| erpPlanner?.shouldRouteToErp
-		|| enmsPlanner?.shouldRouteToEnms
-		|| reviewBadge
-		|| reviewerActor,
+		(ycrmPlanner && (ycrmPlanner.shouldRouteToYcrm || ycrmPlanner.crossSystem || workspaceLabel)) ||
+		erpPlanner?.shouldRouteToErp ||
+		enmsPlanner?.shouldRouteToEnms ||
+		reviewBadge ||
+		reviewerActor,
 	);
 	return (
 		<div
@@ -596,18 +598,45 @@ function WebSessionRow({
 								{session.filePath}
 							</div>
 						)}
+						{showExecutionSource && executionBadge && (
+							<div
+								className="mt-1 flex items-center gap-1.5"
+								aria-label={`Latest answer source for ${session.title || "Untitled chat"}`}
+							>
+								<span
+									className="text-[9px] font-medium uppercase tracking-[0.14em]"
+									style={{ color: "var(--color-text-muted)" }}
+								>
+									來源
+								</span>
+								<span title={executionTooltip || undefined}>
+									<PlannerStatusChip
+										label={executionBadge.label}
+										tone={executionBadge.tone}
+									/>
+								</span>
+								{executionDomainBadge && (
+									<span title={executionTooltip || undefined}>
+										<PlannerStatusChip
+											label={executionDomainBadge.label}
+											tone={executionDomainBadge.tone}
+										/>
+									</span>
+								)}
+							</div>
+						)}
 						{showPlannerStatus && (
 							<div
 								className="mt-1 flex flex-wrap gap-1"
-								title={plannerTooltip ?? undefined}
-								aria-label={`Planner preflight for ${session.title || "Untitled chat"}`}
+								title={plannerTooltip || undefined}
+								aria-label={`Planner status for ${session.title || "Untitled chat"}`}
 							>
-								{ycrmPlanner?.shouldRouteToYcrm && (
-									<PlannerStatusChip label="Y-CRM" tone="accent" />
-								)}
-								{erpPlanner?.shouldRouteToErp && (
-									<PlannerStatusChip label="ERP" tone="accent" />
-								)}
+									{ycrmPlanner?.shouldRouteToYcrm && (
+										<PlannerStatusChip label="Y-CRM" tone="accent" />
+									)}
+									{erpPlanner?.shouldRouteToErp && (
+										<PlannerStatusChip label="ERP" tone="accent" />
+									)}
 								{enmsPlanner?.shouldRouteToEnms && (
 									<PlannerStatusChip label="EnMS" tone="accent" />
 								)}
@@ -620,18 +649,18 @@ function WebSessionRow({
 										}
 									/>
 								)}
-								{ycrmPlanner?.crossSystem && (
-									<PlannerStatusChip label="Cross-system" tone="warning" />
-								)}
-								{workspaceLabel && (
-									<PlannerStatusChip label={`ws:${workspaceLabel}`} />
-								)}
-								{reviewBadge && (
-									<PlannerStatusChip label={reviewBadge.label} tone={reviewBadge.tone} />
-								)}
-								{reviewerActor && (
-									<PlannerStatusChip label={`by:${reviewerActor}`} />
-								)}
+									{ycrmPlanner?.crossSystem && (
+										<PlannerStatusChip label="Cross-system" tone="warning" />
+									)}
+									{workspaceLabel && (
+										<PlannerStatusChip label={`ws:${workspaceLabel}`} />
+									)}
+									{reviewBadge && (
+										<PlannerStatusChip label={reviewBadge.label} tone={reviewBadge.tone} />
+									)}
+									{reviewerActor && (
+										<PlannerStatusChip label={`by:${reviewerActor}`} />
+									)}
 							</div>
 						)}
 					</button>

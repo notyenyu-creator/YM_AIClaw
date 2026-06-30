@@ -38,9 +38,11 @@ import {
 import { getAgentSession } from "@/app/api/sessions/shared";
 import {
   classifyOpenAiModelSwitch,
+  isGx10HermesModelId,
   isLikelyOpenAiModelId,
   needsOpenAiSwitchAcknowledgement,
 } from "@/lib/chat-models";
+import { rewriteWorkspaceFileContextPaths } from "@/lib/workspace-file-context";
 import {
   buildYcrmContext,
   createDefaultYcrmContextInput,
@@ -52,6 +54,7 @@ import {
   buildYcrmContextPack,
   decorateMessageWithYcrmContextPack,
 } from "@/lib/ycrm-context-pack";
+import { buildYcrmVerifiedDirectQueryAnswer } from "@/lib/ycrm-verified-direct-query";
 import {
   buildEnmsContext,
   shouldPersistEnmsPlannerPreflight,
@@ -71,14 +74,22 @@ import {
   buildErpContextPack,
   decorateMessageWithErpContextPack,
 } from "@/lib/erp-context-pack";
+import { buildErpVerifiedDirectQueryAnswer } from "@/lib/erp-verified-direct-query";
 import {
   buildRollingChatContext,
+  compactRollingChatContext,
   decorateMessageWithRollingContext,
+  type RollingChatContext,
 } from "@/lib/chat-rolling-context";
 import {
   buildDomainBootstrapSnapshot,
   decorateMessageWithDomainBootstrapSnapshot,
 } from "@/lib/domain-bootstrap";
+import {
+  buildDomainReadOnlyExecutionPlan,
+  buildReadOnlyExecutionBlockedReply,
+  decorateMessageWithReadOnlyExecutionPlan,
+} from "@/lib/domain-read-only-pipeline";
 
 export const runtime = "nodejs";
 
@@ -231,17 +242,34 @@ function isLikelyChartRequest(userText: string): boolean {
   ].some((keyword) => current.includes(keyword.toLowerCase()));
 }
 
-function decorateMessageWithGenericChartGuardrail(userMessage: string): string {
-  const lines = [
-    "[Generic Chart Guardrail]",
-    "If you render a report-json block, each panel must contain either a valid sql string or inline rows/data.",
-    "If this is only a chart-render test, prefer inline rows/data or a VALUES-based sql block with 2-5 sample rows.",
-    "Do not emit a report-json panel with missing sql and missing rows/data.",
-    "If you cannot form a valid chart payload, explain the limitation in plain text instead of emitting a broken chart.",
-    "[/Generic Chart Guardrail]",
-  ];
+function decorateMessageWithGenericChartGuardrail(
+  userMessage: string,
+  options?: { compact?: boolean },
+): string {
+  const compact = options?.compact ?? false;
+  const lines = compact
+    ? [
+        "[Generic Chart Guardrail]",
+        "If you emit report-json, every panel must include valid sql or inline rows/data.",
+        "If you cannot form a valid chart payload, answer in plain text instead of emitting a broken chart.",
+        "[/Generic Chart Guardrail]",
+      ]
+    : [
+        "[Generic Chart Guardrail]",
+        "If you render a report-json block, each panel must contain either a valid sql string or inline rows/data.",
+        "If this is only a chart-render test, prefer inline rows/data or a VALUES-based sql block with 2-5 sample rows.",
+        "Do not emit a report-json panel with missing sql and missing rows/data.",
+        "If you cannot form a valid chart payload, explain the limitation in plain text instead of emitting a broken chart.",
+        "[/Generic Chart Guardrail]",
+      ];
 
   return `${userMessage}\n\n${lines.join("\n")}`;
+}
+
+function compactRollingContextForLocalModel(
+  context: RollingChatContext,
+): RollingChatContext {
+  return compactRollingChatContext(context);
 }
 
 function coercePriorYcrmIntent(value: string): YcrmIntent | null {
@@ -265,11 +293,23 @@ function buildPlannerInputFromSession(
   agentMessage: string,
   messages: UIMessage[],
   sessionMeta: ReturnType<typeof getSessionMeta>,
+  explicitCurrentSystemHint?: "enms" | "erp" | "ycrm" | "none" | null,
 ): YcrmContextBuilderInput {
   const input = createDefaultYcrmContextInput(agentMessage);
   const priorPreflight = sessionMeta?.plannerPreflight;
 
   if (priorPreflight?.system !== "ycrm" || !priorPreflight.shouldRouteToYcrm) {
+    return input;
+  }
+
+  // Respect an explicit tab/system switch from the current request.
+  // We only reuse prior Y-CRM follow-up scope when the user did not
+  // explicitly anchor this turn to ERP / EnMS / generic none.
+  if (
+    explicitCurrentSystemHint === "erp" ||
+    explicitCurrentSystemHint === "enms" ||
+    explicitCurrentSystemHint === "none"
+  ) {
     return input;
   }
 
@@ -424,6 +464,9 @@ export async function POST(req: Request) {
     typeof modelOverride === "string" && modelOverride.trim()
       ? modelOverride.trim()
       : undefined;
+  const useCompactLocalModelContext = isGx10HermesModelId(
+    normalizedModelOverride,
+  );
 
   if (
     sessionId &&
@@ -472,12 +515,7 @@ export async function POST(req: Request) {
 
   let agentMessage = userText;
   const wsPrefix = resolveAgentWorkspacePrefix();
-  if (wsPrefix) {
-    agentMessage = userText.replace(
-      /\[Context: workspace file '([^']+)'\]/,
-      `[Context: workspace file '${wsPrefix}/$1']`,
-    );
-  }
+  agentMessage = rewriteWorkspaceFileContextPaths(userText, wsPrefix);
 
   const runKey =
     isSubagentSession && sessionKey ? sessionKey : (sessionId as string);
@@ -516,13 +554,19 @@ export async function POST(req: Request) {
       agentMessage,
       messages,
       sessionMeta,
+      currentSystemHint,
     );
     if (
-      currentSystemHint === "ycrm" &&
-      ycrmPlannerInput.request.current_system_hint == null
+      (currentSystemHint === "ycrm" ||
+        currentSystemHint === "erp" ||
+        currentSystemHint === "enms" ||
+        currentSystemHint === "none")
     ) {
-      ycrmPlannerInput.request.current_system_hint = "ycrm";
+      ycrmPlannerInput.request.current_system_hint = currentSystemHint;
     }
+    let directAssistantReply: string | null = null;
+    let directAnswerMode: "verified_direct" | "system_direct" | null = null;
+
     const ycrmPlannerPlan = buildYcrmContext(ycrmPlannerInput);
     const ycrmPlannerSummary = summarizeYcrmContextPlan(ycrmPlannerPlan);
     const ycrmContextPack = buildYcrmContextPack(ycrmPlannerPlan);
@@ -534,7 +578,7 @@ export async function POST(req: Request) {
         currentSystemHint !== "ycrm"
       );
 
-    if (ycrmClaimed || ycrmPlannerSummary.intent !== "unknown") {
+    if (ycrmClaimed || ycrmPlannerSummary.intent === "cross_system_request") {
       updateSessionPlannerPreflight(sessionId, ycrmPlannerSummary);
       updateSessionPlannerContextPack(sessionId, ycrmContextPack);
       invalidateSessionErpPlannerArtifacts(sessionId, {
@@ -559,9 +603,42 @@ export async function POST(req: Request) {
         userMessage: userText,
         pack: ycrmContextPack,
       });
+      const ycrmReadOnlyPlan = buildDomainReadOnlyExecutionPlan({
+        system: "ycrm",
+        userMessage: userText,
+        preflight: ycrmPlannerSummary,
+        pack: ycrmContextPack,
+        snapshot: ycrmBootstrapSnapshot,
+      });
+      const ycrmVerifiedDirectReply = await buildYcrmVerifiedDirectQueryAnswer({
+        userMessage: userText,
+        planner: ycrmPlannerSummary,
+      });
+      if (ycrmReadOnlyPlan.eligible) {
+        agentMessage = decorateMessageWithReadOnlyExecutionPlan(
+          agentMessage,
+          ycrmReadOnlyPlan,
+        );
+        if (ycrmVerifiedDirectReply) {
+          directAssistantReply = ycrmVerifiedDirectReply;
+          directAnswerMode = "verified_direct";
+        } else {
+          directAssistantReply =
+            buildReadOnlyExecutionBlockedReply(ycrmReadOnlyPlan);
+          if (directAssistantReply) {
+            directAnswerMode = "system_direct";
+          }
+        }
+      } else {
+        directAssistantReply = ycrmVerifiedDirectReply;
+        if (directAssistantReply) {
+          directAnswerMode = "verified_direct";
+        }
+      }
       agentMessage = decorateMessageWithDomainBootstrapSnapshot(
         agentMessage,
         ycrmBootstrapSnapshot,
+        useCompactLocalModelContext ? { compact: true } : undefined,
       );
     }
 
@@ -571,8 +648,6 @@ export async function POST(req: Request) {
     // source-of-truth systems in explicitly.
     let routedToErp = false;
     let routedToEnms = false;
-
-    let directAssistantReply: string | null = null;
 
     if (!ycrmClaimed) {
       const erpPreflight = buildErpContext({
@@ -616,9 +691,41 @@ export async function POST(req: Request) {
           userMessage: userText,
           pack: erpContextPack,
         });
+        const erpReadOnlyPlan = buildDomainReadOnlyExecutionPlan({
+          system: "erp",
+          userMessage: userText,
+          preflight: erpPreflight,
+          pack: erpContextPack,
+          snapshot: erpBootstrapSnapshot,
+        });
+        const erpVerifiedDirectReply = await buildErpVerifiedDirectQueryAnswer({
+          userMessage: userText,
+        });
+        if (erpReadOnlyPlan.eligible) {
+          agentMessage = decorateMessageWithReadOnlyExecutionPlan(
+            agentMessage,
+            erpReadOnlyPlan,
+          );
+          if (erpVerifiedDirectReply) {
+            directAssistantReply = erpVerifiedDirectReply;
+            directAnswerMode = "verified_direct";
+          } else {
+            directAssistantReply =
+              buildReadOnlyExecutionBlockedReply(erpReadOnlyPlan);
+            if (directAssistantReply) {
+              directAnswerMode = "system_direct";
+            }
+          }
+        } else {
+          directAssistantReply = erpVerifiedDirectReply;
+          if (directAssistantReply) {
+            directAnswerMode = "verified_direct";
+          }
+        }
         agentMessage = decorateMessageWithDomainBootstrapSnapshot(
           agentMessage,
           erpBootstrapSnapshot,
+          useCompactLocalModelContext ? { compact: true } : undefined,
         );
       } else if (
         operationalRoute.domain === "enms" &&
@@ -640,18 +747,58 @@ export async function POST(req: Request) {
           userMessage: userText,
           pack: enmsContextPack,
         });
-        directAssistantReply =
-          (await buildEnmsVerifiedDirectQueryAnswer({
+        const enmsReadOnlyPlan = buildDomainReadOnlyExecutionPlan({
+          system: "enms",
+          userMessage: userText,
+          preflight: enmsPreflight,
+          pack: enmsContextPack,
+          snapshot: enmsBootstrapSnapshot,
+        });
+        if (enmsReadOnlyPlan.eligible) {
+          agentMessage = decorateMessageWithReadOnlyExecutionPlan(
+            agentMessage,
+            enmsReadOnlyPlan,
+          );
+          const verifiedDirectReply = await buildEnmsVerifiedDirectQueryAnswer({
             userMessage: userText,
-          })) ??
-          buildEnmsDirectAnswer({
-            userMessage: userText,
-            preflight: enmsPreflight,
-            snapshot: enmsBootstrapSnapshot,
           });
+          if (verifiedDirectReply) {
+            directAssistantReply = verifiedDirectReply;
+            directAnswerMode = "verified_direct";
+          } else {
+            directAssistantReply =
+              buildReadOnlyExecutionBlockedReply(enmsReadOnlyPlan) ??
+              buildEnmsDirectAnswer({
+                userMessage: userText,
+                preflight: enmsPreflight,
+                snapshot: enmsBootstrapSnapshot,
+              });
+            if (directAssistantReply) {
+              directAnswerMode = "system_direct";
+            }
+          }
+        } else {
+          const verifiedDirectReply = await buildEnmsVerifiedDirectQueryAnswer({
+            userMessage: userText,
+          });
+          if (verifiedDirectReply) {
+            directAssistantReply = verifiedDirectReply;
+            directAnswerMode = "verified_direct";
+          } else {
+            directAssistantReply = buildEnmsDirectAnswer({
+              userMessage: userText,
+              preflight: enmsPreflight,
+              snapshot: enmsBootstrapSnapshot,
+            });
+            if (directAssistantReply) {
+              directAnswerMode = "system_direct";
+            }
+          }
+        }
         agentMessage = decorateMessageWithDomainBootstrapSnapshot(
           agentMessage,
           enmsBootstrapSnapshot,
+          useCompactLocalModelContext ? { compact: true } : undefined,
         );
       } else {
         invalidateSessionErpPlannerArtifacts(sessionId, {
@@ -669,16 +816,35 @@ export async function POST(req: Request) {
       !routedToErp &&
       !routedToEnms
     ) {
-      agentMessage = decorateMessageWithGenericChartGuardrail(agentMessage);
+      agentMessage = decorateMessageWithGenericChartGuardrail(agentMessage, {
+        compact: useCompactLocalModelContext,
+      });
     }
+
+    const routedDomainId = routedToEnms
+      ? "enms"
+      : routedToErp
+        ? "erp"
+        : ycrmClaimed
+          ? "ycrm"
+          : null;
 
     if (directAssistantReply) {
       await createSyntheticCompletedRun({
         sessionId,
         text: directAssistantReply,
+        completionTrace: {
+          answerMode: directAnswerMode ?? "system_direct",
+          requestedModelId: normalizedModelOverride ?? null,
+          domainId: routedDomainId,
+        },
       });
     } else {
-      const rollingContext = buildRollingChatContext(messages, userText);
+      const rollingContext = useCompactLocalModelContext
+        ? compactRollingContextForLocalModel(
+            buildRollingChatContext(messages, userText),
+          )
+        : buildRollingChatContext(messages, userText);
       agentMessage = decorateMessageWithRollingContext(
         agentMessage,
         rollingContext,
@@ -693,6 +859,11 @@ export async function POST(req: Request) {
           agentSessionId: gatewayThreadId,
           overrideAgentId: effectiveAgentId,
           modelOverride: normalizedModelOverride,
+          completionTrace: {
+            answerMode: "model_run",
+            requestedModelId: normalizedModelOverride ?? null,
+            domainId: routedDomainId,
+          },
           imageAttachments:
             imageAttachments.length > 0 ? imageAttachments : undefined,
         });

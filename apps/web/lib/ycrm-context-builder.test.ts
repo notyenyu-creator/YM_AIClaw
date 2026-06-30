@@ -209,6 +209,28 @@ describe("buildYcrmContext", () => {
     expect(result.decision.confidence).toBe("low");
   });
 
+  it("does not auto-claim generic company prompts when ERP scope is explicit and Y-CRM is not mentioned", () => {
+    const result = buildYcrmContext(makeInput(
+      "請只看 ERP，不要看 EnMS。ERP 目前有多少公司？先不要分析耗電異常或場域電表。",
+      {
+        request: { current_system_hint: "erp" },
+      },
+    ));
+
+    expect(result.decision.should_route_to_ycrm).toBe(false);
+  });
+
+  it("lets an explicit 'do not use Y-CRM' instruction override a Y-CRM tab hint", () => {
+    const result = buildYcrmContext(makeInput(
+      "不要看 Y-CRM，改看 ERP 庫存與出貨狀態。",
+      {
+        request: { current_system_hint: "ycrm" },
+      },
+    ));
+
+    expect(result.decision.should_route_to_ycrm).toBe(false);
+  });
+
   it("falls back cleanly when wiki pages are unavailable", () => {
     const result = buildYcrmContext(makeInput(
       "幫我看一下這個客戶最近的 LINE 對話重點。",

@@ -269,11 +269,18 @@ function shouldRouteToYcrm(message: string, hint: string | null, intent: YcrmInt
   const mentionsYcrm = lowerIncludes(message, "y-crm") || message.includes("Y-CRM");
   const negativeYcrmMention = /(不要|別|勿|不用|不看|排除|不要查|不要用).{0,16}(Y-CRM|y-crm)|(Y-CRM|y-crm).{0,16}(不要|別|勿|不用|不看|排除)/i.test(message);
 
+  if (negativeYcrmMention) {
+    return false;
+  }
+
   if (hint === "ycrm") {
     return true;
   }
 
-  if (negativeYcrmMention) {
+  // Respect explicit non-Y-CRM scopes unless the user clearly mentions Y-CRM.
+  // This prevents generic nouns like 「公司」or「客戶」from stealing turns
+  // that the user explicitly anchored to ERP / EnMS.
+  if ((hint === "erp" || hint === "enms") && !mentionsYcrm) {
     return false;
   }
 

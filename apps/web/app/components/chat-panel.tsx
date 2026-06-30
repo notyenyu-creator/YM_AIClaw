@@ -11,6 +11,7 @@ import {
 	useRef,
 	useState,
 } from "react";
+import { ChatModelSelector } from "./chat-model-selector";
 import {
 	HeroSuggestions,
 	type HeroSuggestionSystemHint,
@@ -44,7 +45,13 @@ import {
 	normalizeTransportErrorMessage,
 } from "./chat-stream-status";
 import type { ComposioChatAction } from "@/lib/composio-chat-actions";
-import type { ChatModelOption } from "@/lib/chat-models";
+import {
+	filterPublicChatModels,
+	findChatModelByStableOrCatalogId,
+	isLikelyOpenAiModelId,
+	normalizeDenchModelId,
+	type ChatModelOption,
+} from "@/lib/chat-models";
 
 
 // ── Attachment types & helpers ──
@@ -64,8 +71,12 @@ type ChatCloudState = {
 	isDenchPrimary: boolean;
 	elevenLabsEnabled: boolean;
 	selectedDenchModel: string | null;
+	primaryModel: string | null;
+	chatModels: ChatModelOption[];
 	models: ChatModelOption[];
 };
+
+const CHAT_MODEL_STORAGE_KEY = "denchclaw.chat.selected-model";
 
 function plainTextToHtml(text: string): string {
 	if (!text.trim()) {
@@ -145,6 +156,15 @@ function normalizeChatCloudState(value: unknown): ChatCloudState | null {
 			record.selectedDenchModel.trim()
 				? record.selectedDenchModel.trim()
 				: null,
+		primaryModel:
+			typeof record.primaryModel === "string" && record.primaryModel.trim()
+				? record.primaryModel.trim()
+				: null,
+		chatModels: Array.isArray(record.chatModels)
+			? record.chatModels
+					.map(normalizeChatModelOption)
+					.filter((model): model is ChatModelOption => model !== null)
+			: [],
 		models,
 	};
 }
@@ -950,6 +970,8 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 		const [queuedMessages, setQueuedMessages] = useState<QueuedMessage[]>([]);
 		const [rawView, _setRawView] = useState(false);
 		const [cloudState, setCloudState] = useState<ChatCloudState | null>(null);
+		const [selectedChatModel, setSelectedChatModel] = useState<string | null>(null);
+		const selectedChatModelRef = useRef<string | null>(null);
 		const pendingSystemHintRef = useRef<HeroSuggestionSystemHint | null>(null);
 		const [heroPendingPrompt, setHeroPendingPrompt] = useState<string | null>(null);
 		// ── Hero state (new chat screen) ──
@@ -1012,12 +1034,74 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 		}, []);
 
 		const filePath = fileContext?.path ?? null;
+		const availableChatModels = useMemo(
+			() => filterPublicChatModels(cloudState?.chatModels ?? []),
+			[cloudState?.chatModels],
+		);
+		const primaryChatModel = useMemo(
+			() => normalizeDenchModelId(cloudState?.primaryModel ?? null),
+			[cloudState?.primaryModel],
+		);
+		const activeChatModelId = useMemo(() => {
+			const current = selectedChatModel?.trim() ?? "";
+			if (
+				current &&
+				findChatModelByStableOrCatalogId(availableChatModels, current)
+			) {
+				return current;
+			}
+			if (
+				primaryChatModel &&
+				findChatModelByStableOrCatalogId(availableChatModels, primaryChatModel)
+			) {
+				return primaryChatModel;
+			}
+			return availableChatModels[0]?.stableId ?? null;
+		}, [availableChatModels, primaryChatModel, selectedChatModel]);
 
 		// ── Ref-based session ID for transport ──
 		const sessionIdRef = useRef<string | null>(null);
 		useEffect(() => {
 			sessionIdRef.current = currentSessionId;
 		}, [currentSessionId]);
+		useEffect(() => {
+			selectedChatModelRef.current = activeChatModelId;
+		}, [activeChatModelId]);
+
+		useEffect(() => {
+			if (availableChatModels.length === 0) {
+				setSelectedChatModel(null);
+				return;
+			}
+			const stored =
+				typeof window !== "undefined"
+					? window.localStorage.getItem(CHAT_MODEL_STORAGE_KEY)
+					: null;
+			setSelectedChatModel((previous) => {
+				const candidates = [
+					previous,
+					stored,
+					primaryChatModel,
+					availableChatModels[0]?.stableId ?? null,
+				];
+				for (const candidate of candidates) {
+					if (
+						candidate &&
+						findChatModelByStableOrCatalogId(availableChatModels, candidate)
+					) {
+						return candidate;
+					}
+				}
+				return null;
+			});
+		}, [availableChatModels, primaryChatModel]);
+
+		useEffect(() => {
+			if (typeof window === "undefined" || !activeChatModelId) {
+				return;
+			}
+			window.localStorage.setItem(CHAT_MODEL_STORAGE_KEY, activeChatModelId);
+		}, [activeChatModelId]);
 
 		const refreshPlannerPreflight = useCallback(
 			async (sessionId: string) => {
@@ -1074,6 +1158,13 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 						if (pendingSystemHintRef.current) {
 							extra.currentSystemHint = pendingSystemHintRef.current;
 							pendingSystemHintRef.current = null;
+						}
+						const modelId = selectedChatModelRef.current;
+						if (modelId) {
+							extra.modelOverride = modelId;
+							if (isLikelyOpenAiModelId(modelId)) {
+								extra.acknowledgeUnsafeOpenAiSwitch = true;
+							}
 						}
 					return extra;
 				},
@@ -2423,6 +2514,43 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 								))}
 							</div>
 						</div>
+					</div>
+				)}
+
+				{!isSubagentMode && availableChatModels.length > 0 && activeChatModelId && (
+					<div
+						className={`${compact ? "px-2 pt-2.5" : "px-3 pt-3"} flex items-center justify-between gap-3`}
+					>
+						<div className="min-w-0">
+							<p
+								className="text-[10px] font-semibold uppercase tracking-[0.16em]"
+								style={{ color: "var(--color-text-muted)" }}
+							>
+								Language Model
+							</p>
+							<p
+								className="mt-1 text-[11px] leading-5"
+								style={{ color: "var(--color-text-secondary)" }}
+							>
+								只切換回答模型，skills、wiki、tools 與流程維持不變。
+							</p>
+						</div>
+						<ChatModelSelector
+							models={availableChatModels}
+							selectedModel={activeChatModelId}
+							onSelect={setSelectedChatModel}
+							disabled={loadingSession || isStreaming}
+							loading={loadingSession}
+							disabledHint={
+								isStreaming
+									? "Wait for the current reply to finish before switching models."
+									: undefined
+							}
+							fallbackToFirst={false}
+							placeholder="Choose a model..."
+							ariaLabel="Select chat model"
+							triggerClassName="max-w-[220px] shrink-0 justify-end"
+						/>
 					</div>
 				)}
 

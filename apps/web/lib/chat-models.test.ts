@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
 	classifyOpenAiModelSwitch,
+	filterPublicChatModels,
 	findChatModelByStableOrCatalogId,
+	isGx10HermesModelId,
 	isLikelyOpenAiModelId,
+	isPublicChatModel,
 	needsOpenAiSwitchAcknowledgement,
 	normalizeDenchModelId,
 	resolveActiveChatModelId,
@@ -115,6 +118,57 @@ describe("chat-models", () => {
 		expect(isLikelyOpenAiModelId("gpt-5.4")).toBe(true);
 		expect(isLikelyOpenAiModelId("dench-cloud/openai.gpt-5.4")).toBe(true);
 		expect(isLikelyOpenAiModelId("anthropic.claude-sonnet-4-6")).toBe(false);
+	});
+
+	it("detects gx10 hermes model ids", () => {
+		expect(isGx10HermesModelId("gx10_hermes/hermes-agent")).toBe(true);
+		expect(isGx10HermesModelId("gx10_hermes/qwen3-coder:30b")).toBe(true);
+		expect(isGx10HermesModelId("gpt-4.1-mini")).toBe(false);
+	});
+
+	it("keeps only public gx10 models in the regular selector", () => {
+		const models = [
+			{
+				stableId: "openai/gpt-4.1-mini",
+				displayName: "GPT",
+				provider: "openai",
+				reasoning: true,
+			},
+			{
+				stableId: "gx10_hermes/hermes-agent",
+				displayName: "GX10-Router",
+				provider: "hermes",
+				reasoning: true,
+			},
+			{
+				stableId: "gx10_hermes/qwen3-coder:30b",
+				displayName: "GX10-Coder",
+				provider: "hermes",
+				reasoning: true,
+			},
+			{
+				stableId: "gx10_hermes/qwen3:30b",
+				displayName: "GX10-Hermes",
+				provider: "hermes",
+				reasoning: true,
+			},
+			{
+				stableId: "gx10_hermes/mistral-small3.2:24b",
+				displayName: "GX10-Mistral",
+				provider: "mistral",
+				reasoning: true,
+			},
+		];
+
+		expect(isPublicChatModel(models[0]!)).toBe(true);
+		expect(isPublicChatModel(models[1]!)).toBe(true);
+		expect(isPublicChatModel(models[2]!)).toBe(false);
+		expect(isPublicChatModel(models[3]!)).toBe(false);
+		expect(isPublicChatModel(models[4]!)).toBe(false);
+		expect(filterPublicChatModels(models).map((model) => model.displayName)).toEqual([
+			"GPT",
+			"GX10-Router",
+		]);
 	});
 
 	it("classifies cross-provider switches into OpenAI", () => {

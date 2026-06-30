@@ -75,6 +75,35 @@ describe("ChatSessionsSidebar", () => {
     expect(screen.queryByText("Cross-system")).not.toBeInTheDocument();
   });
 
+  it("does not render review CTA for Y-CRM-routed sessions without review state", () => {
+    renderSidebar([
+      {
+        id: "s-ycrm-route-only",
+        title: "Y-CRM Route Only Chat",
+        createdAt: Date.now() - 1_000,
+        updatedAt: Date.now(),
+        messageCount: 2,
+        plannerPreflight: {
+          system: "ycrm",
+          updatedAt: Date.now(),
+          validationState: "heuristic",
+          intent: "entity_summary",
+          confidence: "high",
+          shouldRouteToYcrm: true,
+          workspaceId: null,
+          needsWorkspaceValidation: false,
+          warnings: [],
+          blockers: [],
+          crossSystem: false,
+          targetSystems: [],
+        },
+      },
+    ]);
+
+    expect(screen.getByText("Y-CRM")).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Go to Y-CRM review for Y-CRM Route Only Chat" })).not.toBeInTheDocument();
+  });
+
   it("renders ERP planner badges when the session routes into ERP", () => {
     renderSidebar([
       {
@@ -113,10 +142,7 @@ describe("ChatSessionsSidebar", () => {
     expect(screen.getByText("Advisory")).toBeInTheDocument();
     expect(screen.getByText("Cross-system")).toBeInTheDocument();
     expect(screen.queryByText("Y-CRM")).not.toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Go to ERP review for ERP Planner Chat" })).toHaveAttribute(
-      "href",
-      "/review/erp?sessionId=s-erp",
-    );
+    expect(screen.queryByRole("link", { name: "Go to ERP review for ERP Planner Chat" })).not.toBeInTheDocument();
   });
 
   it("renders EnMS planner badges when the session routes into EnMS", () => {
@@ -168,6 +194,134 @@ describe("ChatSessionsSidebar", () => {
       "href",
       "/review/enms?sessionId=s-enms",
     );
+  });
+
+  it("renders a direct-data tag when the latest answer did not use a model", () => {
+    renderSidebar([
+      {
+        id: "s-direct",
+        title: "Direct Data Chat",
+        createdAt: Date.now() - 1_000,
+        updatedAt: Date.now(),
+        messageCount: 2,
+        lastAnswerMeta: {
+          updatedAt: Date.now(),
+          answerMode: "verified_direct",
+          requestedModelId: "gx10_hermes/hermes-agent",
+          modelClass: "none",
+          domainId: "ycrm",
+        },
+      },
+    ]);
+
+    expect(screen.getByLabelText("Latest answer source for Direct Data Chat")).toBeInTheDocument();
+    const directBadge = screen.getByText("直接查資料");
+    expect(directBadge).toBeInTheDocument();
+    expect(directBadge.parentElement?.getAttribute("title")).toContain("這次沒有實際呼叫 AI 模型");
+    expect(screen.getByText("資料:Y-CRM")).toBeInTheDocument();
+  });
+
+  it("renders a local-model tag when the latest answer used a local model", () => {
+    renderSidebar([
+      {
+        id: "s-local",
+        title: "Local Model Chat",
+        createdAt: Date.now() - 1_000,
+        updatedAt: Date.now(),
+        messageCount: 2,
+        lastAnswerMeta: {
+          updatedAt: Date.now(),
+          answerMode: "model_run",
+          requestedModelId: "gx10_hermes/hermes-agent",
+          modelClass: "local",
+        },
+      },
+    ]);
+
+    expect(screen.getByText("本地模型")).toBeInTheDocument();
+  });
+
+  it("renders a cloud-model tag for dench cloud providers", () => {
+    renderSidebar([
+      {
+        id: "s-cloud",
+        title: "Cloud Model Chat",
+        createdAt: Date.now() - 1_000,
+        updatedAt: Date.now(),
+        messageCount: 2,
+        lastAnswerMeta: {
+          updatedAt: Date.now(),
+          answerMode: "model_run",
+          requestedModelId: "anthropic.claude-opus-4-6-v1",
+          modelClass: "cloud",
+          domainId: "erp",
+        },
+      },
+    ]);
+
+    expect(screen.getByText("雲端模型")).toBeInTheDocument();
+    expect(screen.getByText("資料:ERP")).toBeInTheDocument();
+  });
+
+  it("renders a system-answer tag when the latest answer came from guardrails", () => {
+    renderSidebar([
+      {
+        id: "s-system",
+        title: "System Answer Chat",
+        createdAt: Date.now() - 1_000,
+        updatedAt: Date.now(),
+        messageCount: 2,
+        lastAnswerMeta: {
+          updatedAt: Date.now(),
+          answerMode: "system_direct",
+          requestedModelId: "gpt-4.1-mini",
+          modelClass: "none",
+          domainId: "enms",
+        },
+      },
+    ]);
+
+    expect(screen.getByText("系統回答")).toBeInTheDocument();
+    const systemBadge = screen.getByText("系統回答");
+    expect(systemBadge.parentElement?.getAttribute("title")).toContain("Session 預設模型（本次未使用）：gpt-4.1-mini");
+    expect(screen.getByText("資料:EnMS")).toBeInTheDocument();
+  });
+
+  it("renders distinct source-domain and planner-domain chips on the same row", () => {
+    renderSidebar([
+      {
+        id: "s-both-ycrm",
+        title: "Y-CRM Source And Planner Chat",
+        createdAt: Date.now() - 1_000,
+        updatedAt: Date.now(),
+        messageCount: 3,
+        plannerPreflight: {
+          system: "ycrm",
+          updatedAt: Date.now(),
+          validationState: "heuristic",
+          intent: "entity_summary",
+          confidence: "high",
+          shouldRouteToYcrm: true,
+          workspaceId: "workspace_3jox",
+          needsWorkspaceValidation: false,
+          warnings: [],
+          blockers: [],
+          crossSystem: false,
+          targetSystems: [],
+        },
+        lastAnswerMeta: {
+          updatedAt: Date.now(),
+          turnStartedAt: Date.now(),
+          answerMode: "verified_direct",
+          requestedModelId: "gx10_hermes/hermes-agent",
+          modelClass: "none",
+          domainId: "ycrm",
+        },
+      },
+    ]);
+
+    expect(screen.getByText("資料:Y-CRM")).toBeInTheDocument();
+    expect(screen.getByText("Y-CRM")).toBeInTheDocument();
   });
 
   it("renders reviewed badge for sessions that were manually resolved", () => {

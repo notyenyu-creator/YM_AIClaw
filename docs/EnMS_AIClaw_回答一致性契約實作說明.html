@@ -1,0 +1,814 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>EnMS x EnClaw 回答一致性契約實作說明</title>
+    <style>
+      :root {
+        --bg: #f5f7f8;
+        --surface: #ffffff;
+        --surface-soft: #f8fafb;
+        --ink: #102333;
+        --muted: #4a5d6d;
+        --faint: #6d7f8d;
+        --line: rgba(16, 35, 51, 0.14);
+        --green: #0f766e;
+        --blue: #145da0;
+        --amber: #b36b00;
+        --red: #9c2f26;
+        --shadow: 0 12px 30px rgba(16, 35, 51, 0.08);
+        --max: 1160px;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html {
+        scroll-behavior: smooth;
+      }
+
+      body {
+        margin: 0;
+        font-family: "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", sans-serif;
+        color: var(--ink);
+        line-height: 1.72;
+        background: linear-gradient(180deg, #fbfcfd 0%, var(--bg) 48%, #edf2f3 100%);
+      }
+
+      a {
+        color: var(--blue);
+        font-weight: 700;
+        text-decoration: none;
+      }
+
+      .shell {
+        max-width: var(--max);
+        margin: 0 auto;
+        padding: 28px 20px 72px;
+      }
+
+      .hero {
+        padding: 30px;
+        color: #eef7f8;
+        background: linear-gradient(135deg, #071d2a 0%, #104b50 52%, #155d8f 100%);
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        border-radius: 12px;
+        box-shadow: var(--shadow);
+      }
+
+      .eyebrow,
+      .chip,
+      .tag {
+        display: inline-flex;
+        align-items: center;
+        border-radius: 999px;
+        font-weight: 800;
+      }
+
+      .eyebrow {
+        padding: 7px 12px;
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        border: 1px solid rgba(255, 255, 255, 0.2);
+        background: rgba(255, 255, 255, 0.08);
+      }
+
+      .chip {
+        padding: 7px 12px;
+        font-size: 13px;
+        color: var(--blue);
+        background: rgba(20, 93, 160, 0.1);
+      }
+
+      .tag {
+        padding: 5px 9px;
+        font-size: 12px;
+        color: #fff;
+        background: var(--green);
+      }
+
+      h1,
+      h2,
+      h3,
+      h4 {
+        margin: 0;
+        letter-spacing: 0;
+      }
+
+      h1 {
+        max-width: 900px;
+        margin-top: 14px;
+        font-size: clamp(30px, 4vw, 42px);
+        line-height: 1.18;
+      }
+
+      h2 {
+        font-size: clamp(24px, 3vw, 30px);
+        line-height: 1.22;
+      }
+
+      h3 {
+        font-size: 20px;
+        line-height: 1.28;
+      }
+
+      h4 {
+        font-size: 17px;
+        line-height: 1.3;
+      }
+
+      p {
+        margin: 0;
+        color: var(--muted);
+        font-size: 16px;
+      }
+
+      .hero p {
+        color: rgba(238, 247, 248, 0.9);
+      }
+
+      .hero-lead {
+        max-width: 860px;
+        margin-top: 14px;
+      }
+
+      .nav {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 16px;
+      }
+
+      .nav a {
+        padding: 8px 11px;
+        color: #eef7f8;
+        font-size: 13px;
+        border-radius: 999px;
+        border: 1px solid rgba(255, 255, 255, 0.18);
+        background: rgba(255, 255, 255, 0.08);
+      }
+
+      .section {
+        margin-top: 22px;
+        padding: 26px;
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        box-shadow: 0 8px 22px rgba(16, 35, 51, 0.05);
+      }
+
+      .section-head {
+        display: grid;
+        grid-template-columns: minmax(0, 1.1fr) minmax(280px, 0.7fr);
+        gap: 18px;
+        align-items: end;
+        margin-bottom: 18px;
+      }
+
+      .note {
+        padding: 16px;
+        border-radius: 8px;
+        border: 1px solid rgba(15, 118, 110, 0.18);
+        background: rgba(15, 118, 110, 0.06);
+      }
+
+      .note strong,
+      .card strong,
+      .metric strong {
+        display: block;
+        color: var(--ink);
+      }
+
+      .note p,
+      .card p,
+      .metric p {
+        margin-top: 8px;
+      }
+
+      .grid-2,
+      .grid-3,
+      .metric-grid,
+      .flow {
+        display: grid;
+        gap: 14px;
+      }
+
+      .grid-2 {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .grid-3,
+      .metric-grid {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+
+      .card,
+      .metric,
+      .flow-step {
+        padding: 18px;
+        background: var(--surface-soft);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+      }
+
+      .metric strong {
+        font-size: 26px;
+      }
+
+      .flow {
+        grid-template-columns: repeat(5, minmax(0, 1fr));
+      }
+
+      .flow-step .idx {
+        display: inline-flex;
+        width: 30px;
+        height: 30px;
+        align-items: center;
+        justify-content: center;
+        margin-bottom: 10px;
+        color: #fff;
+        font-weight: 800;
+        border-radius: 999px;
+        background: var(--blue);
+      }
+
+      .matrix {
+        overflow-x: auto;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+      }
+
+      table {
+        width: 100%;
+        min-width: 860px;
+        border-collapse: collapse;
+        background: #fff;
+      }
+
+      th,
+      td {
+        padding: 14px 16px;
+        text-align: left;
+        vertical-align: top;
+        border-bottom: 1px solid rgba(16, 35, 51, 0.08);
+      }
+
+      th {
+        color: var(--faint);
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        background: #f4f7f8;
+      }
+
+      td {
+        color: var(--muted);
+        font-size: 15px;
+      }
+
+      td strong {
+        color: var(--ink);
+      }
+
+      pre {
+        overflow-x: auto;
+        margin: 16px 0 0;
+        padding: 16px;
+        color: #ecf8f8;
+        font-size: 13px;
+        line-height: 1.55;
+        background: #0b1f2c;
+        border-radius: 8px;
+      }
+
+      code {
+        font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+      }
+
+      .callout {
+        margin-top: 16px;
+        padding: 18px;
+        border-radius: 8px;
+        color: #102333;
+        background: linear-gradient(135deg, rgba(20, 93, 160, 0.08), rgba(179, 107, 0, 0.08));
+        border: 1px solid rgba(20, 93, 160, 0.16);
+      }
+
+      .callout p {
+        margin-top: 8px;
+      }
+
+      .warn {
+        border-color: rgba(156, 47, 38, 0.18);
+        background: rgba(156, 47, 38, 0.06);
+      }
+
+      ul {
+        margin: 12px 0 0;
+        padding-left: 20px;
+        color: var(--muted);
+      }
+
+      li + li {
+        margin-top: 7px;
+      }
+
+      .source-list {
+        display: grid;
+        gap: 10px;
+      }
+
+      .source-list a {
+        display: block;
+        padding: 12px 14px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--surface-soft);
+      }
+
+      @media (max-width: 980px) {
+        .section-head,
+        .grid-2,
+        .grid-3,
+        .metric-grid,
+        .flow {
+          grid-template-columns: 1fr;
+        }
+      }
+
+      @media (max-width: 640px) {
+        .shell {
+          padding: 18px 14px 56px;
+        }
+
+        .hero,
+        .section {
+          padding: 20px;
+        }
+
+        p,
+        td {
+          font-size: 15px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="shell">
+      <header class="hero">
+        <span class="eyebrow">EnMS x EnClaw / 回答一致性契約</span>
+        <h1>把企業問答從「每次重新生成」升級成可重播、可驗證、可回歸的解題契約。</h1>
+        <p class="hero-lead">
+          這份文件定義 EnClaw 的中後期差異化能力：同一個問題在相同資料、規則與模型路由條件下，問 10 到 50 次時，核心答案、查詢依據、圖表資料與結論邊界都要保持一致。
+        </p>
+        <nav class="nav" aria-label="文件導覽">
+          <a href="#why">定位</a>
+          <a href="#terms">名詞定義</a>
+          <a href="#contract">Contract 結構</a>
+          <a href="#runtime">Runtime 流程</a>
+          <a href="#scoring">一致性評分</a>
+          <a href="#roadmap">導入 Roadmap</a>
+          <a href="#sources">參考來源</a>
+        </nav>
+      </header>
+
+      <section class="section" id="why">
+        <div class="section-head">
+          <div>
+            <span class="chip">產品定位</span>
+            <h2>這不是要求模型公開黑箱思考，而是讓產品掌握可審計的解題路徑。</h2>
+          </div>
+          <div class="note">
+            <strong>一句話</strong>
+            <p>模型可以是可替換元件；EnClaw 自己掌握 intent、context、data snapshot、query、evidence、template、review 與 replay。</p>
+          </div>
+        </div>
+
+        <div class="callout">
+          <strong>EnMS × EnClaw 的整合定位</strong>
+          <p>`EnClaw` 在這裡不是外掛式聊天工具，而是要整進 `EnMS` 的 AI operating layer（AI 運作層）。`/AIAssistant` 是 `EnMS` 內的產品入口，`EnClaw` 負責 intent、context、query、evidence、template、review 與 replay，`EnMS` 則提供資料來源、既有流程與執行介面。</p>
+        </div>
+
+        <div class="grid-3">
+          <article class="card">
+            <strong>通用 AI 的弱點</strong>
+            <p>同一問題多問幾次，文字、判斷順序、引用資料與風險邊界可能漂移；使用者很難知道差異來自資料、模型，還是提示語。</p>
+          </article>
+          <article class="card">
+            <strong>EnClaw 的產品機會</strong>
+            <p>把回答拆成固定契約：先定義問題類型，再鎖資料與查詢，再輸出可驗證答案。自然語句可以不同，但核心事實不可亂跳。</p>
+          </article>
+          <article class="card">
+            <strong>落地原則</strong>
+            <p>早期先求功能可用；中期把高價值題庫納入 contract；後期把 contract regression 納入模型切換與 release gate。</p>
+          </article>
+        </div>
+
+        <div class="callout warn">
+          <strong>邊界聲明</strong>
+          <p>Answer Stability Contract 不等於公開完整 chain-of-thought。企業真正需要的是可查證的 reasoning trace：用了哪個 intent、哪份資料、哪條 SQL、哪些證據、哪些規則與哪些 fallback。</p>
+        </div>
+      </section>
+
+      <section class="section" id="terms">
+        <div class="section-head">
+          <div>
+            <span class="chip">名詞定義</span>
+            <h2>正式採用 Answer Stability Contract；Reasoning Contract 只作為輔助說法。</h2>
+          </div>
+          <div class="note">
+            <strong>命名原則</strong>
+            <p>這裡的 contract 是產品與系統承諾遵守的約定，不是模型自由生成的說明文字。</p>
+          </div>
+        </div>
+
+        <div class="matrix">
+          <table>
+            <thead>
+              <tr>
+                <th scope="col">名詞</th>
+                <th scope="col">建議用法</th>
+                <th scope="col">定義</th>
+                <th scope="col">使用邊界</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><strong>Contract</strong></td>
+                <td>通用工程名詞</td>
+                <td>系統對輸入、流程、資料來源、輸出格式、錯誤處理與驗收條件的固定約定。</td>
+                <td>可類比 API contract、schema contract、data contract；重點是可驗證與可回歸。</td>
+              </tr>
+              <tr>
+                <td><strong>Answer Stability Contract</strong></td>
+                <td>正式推薦名詞</td>
+                <td>EnClaw 用來約束企業 AI 回答一致性、資料依據、查詢路徑、圖表輸出、fallback 行為與結論邊界的產品契約。</td>
+                <td>對外、對內都可使用；最能避免被誤解為公開模型內部思考。</td>
+              </tr>
+              <tr>
+                <td><strong>Reasoning Contract</strong></td>
+                <td>輔助說法</td>
+                <td>指可審計的解題路徑契約，例如 intent、context pack、query contract、evidence ledger、answer template 與 replay log。</td>
+                <td>不等於 chain-of-thought；文件中使用時要明確說明是產品可審計路徑，不是模型內部隱藏推理。</td>
+              </tr>
+              <tr>
+                <td><strong>Answer Contract</strong></td>
+                <td>單次回答實例</td>
+                <td>一次使用者問題產生的具體 contract instance，包含 contract id、資料快照、查詢、證據、圖表資料與回答模板。</td>
+                <td>適合用在 run log、review、debug 與 QA 報告中。</td>
+              </tr>
+              <tr>
+                <td><strong>Contract Regression</strong></td>
+                <td>測試與 release gate</td>
+                <td>每次更換模型、修改 prompt、更新 schema、調整 query builder 或改 playbook 時，用固定題庫重跑 contract，檢查答案是否穩定。</td>
+                <td>是模型切換與版本發布的必要 gate；不能只看單次回答看起來合理。</td>
+              </tr>
+              <tr>
+                <td><strong>Reasoning Trace</strong></td>
+                <td>稽核與 debug 名詞</td>
+                <td>企業可查證的解題紀錄，包含路由、資料、工具、查詢、證據、缺資料與模板選擇。</td>
+                <td>只保存產品可審計紀錄；不保存或展示模型完整 chain-of-thought。</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="callout">
+          <strong>後續文件統一寫法</strong>
+          <p>正式文件優先寫 <code>Answer Stability Contract</code>。需要描述解題路徑時，可以寫「Reasoning Contract / 可審計解題路徑」，但必須補充它不是模型內部 chain-of-thought。</p>
+        </div>
+      </section>
+
+      <section class="section" id="contract">
+        <div class="section-head">
+          <div>
+            <span class="chip">Contract 結構</span>
+            <h2>每次回答都產生一份可重播的 Answer Contract。</h2>
+          </div>
+          <div class="note">
+            <strong>設計重點</strong>
+            <p>Contract 要固定可驗證欄位，不把穩定性寄託在模型自由發揮上。</p>
+          </div>
+        </div>
+
+        <div class="matrix">
+          <table>
+            <thead>
+              <tr>
+                <th scope="col">欄位</th>
+                <th scope="col">用途</th>
+                <th scope="col">穩定性意義</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><strong>contract_id</strong></td>
+                <td>由 workspace、intent、normalized question、資料版本與 schema 版本產生。</td>
+                <td>辨識同題是否應該重用同一解題路徑。</td>
+              </tr>
+              <tr>
+                <td><strong>intent_contract</strong></td>
+                <td>固定問題類型、領域、允許工具、禁止跨系統回答規則。</td>
+                <td>避免 ERP 問題跑出 EnMS 回答，或 EnMS 查詢誤用 Y-CRM path。</td>
+              </tr>
+              <tr>
+                <td><strong>context_pack_fingerprint</strong></td>
+                <td>記錄 schema、wiki、playbook、資料時間窗與權限範圍。</td>
+                <td>回答改變時可以判斷是否因 context 改變。</td>
+              </tr>
+              <tr>
+                <td><strong>security_scope</strong></td>
+                <td>保存 tenant_id、actor_id、authz_policy_version、資料分類與可見範圍。</td>
+                <td>避免 replay 或 debug 時跨 tenant、跨 domain 或越權重跑資料。</td>
+              </tr>
+              <tr>
+                <td><strong>query_contract</strong></td>
+                <td>保存 SQL / tool call、參數、時間範圍、fallback 規則與資料來源優先序。</td>
+                <td>同題同資料應取得同一批 facts 與 chart data。</td>
+              </tr>
+              <tr>
+                <td><strong>snapshot_manifest</strong></td>
+                <td>保存 snapshot_ref、as_of、timezone、指標版本、結果 canonical hash 與 retention 規則。</td>
+                <td>讓 replay 不只靠 hash，而是能明確知道比較基準與資料時間點。</td>
+              </tr>
+              <tr>
+                <td><strong>evidence_ledger</strong></td>
+                <td>保存資料表、欄位、結果摘要、引用來源與缺資料說明。</td>
+                <td>答案不是模型說了算，而是 evidence ledger 說了算。</td>
+              </tr>
+              <tr>
+                <td><strong>answer_template_id</strong></td>
+                <td>固定回答段落順序、日期說法、單位格式、風險說明與下一步建議。</td>
+                <td>讓文字表達可以自然，但結構與關鍵內容穩定。</td>
+              </tr>
+              <tr>
+                <td><strong>consistency_score</strong></td>
+                <td>比較多次 run 的 facts、evidence、chart data、warning、recommendation。</td>
+                <td>把「感覺穩不穩」變成可量化 gate。</td>
+              </tr>
+              <tr>
+                <td><strong>version_manifest</strong></td>
+                <td>保存 source schema、query builder、prompt、model route、answer template、evaluator 版本。</td>
+                <td>讓回歸失敗時能定位到底是資料、查詢、模板還是模型版本造成差異。</td>
+              </tr>
+              <tr>
+                <td><strong>replay_log</strong></td>
+                <td>保存可重跑的輸入、資料快照 hash、模型路由、輸出摘要與 diff。</td>
+                <td>用於 QA regression、模型 A/B 與客戶爭議追查。</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <pre><code>{
+  "contract_id": "enms.energy_top_consumers.v1:workspace:question_hash:data_hash",
+  "domain": "EnMS",
+  "intent": "energy_consumption_ranking",
+  "contract_version": "1.0.0",
+  "question_normalized": "最近 7 天最耗電的設備或迴路",
+  "data_window": {
+    "requested": "latest_7_days",
+    "effective": "2026-06-08T01:45:00+08:00/2026-06-15T01:45:00+08:00",
+    "fallback_reason": "requested_window_empty"
+  },
+  "context_pack": {
+    "schema_hash": "sha256:...",
+    "wiki_hash": "sha256:...",
+    "playbook_hash": "sha256:..."
+  },
+  "security_scope": {
+    "tenant_id": "tenant_demo_factory",
+    "actor_id": "user_energy_manager",
+    "authz_policy_version": "authz.enms.v2",
+    "data_classification": "internal_operational",
+    "row_scope": ["site_a", "site_b"],
+    "replay_requires_reauth": true
+  },
+  "snapshot_manifest": {
+    "snapshot_ref": "snap_2026_06_15_enms_daily_001",
+    "as_of": "2026-06-15T01:45:00+08:00",
+    "timezone": "Asia/Taipei",
+    "metric_definition_version": "enms.metrics.v3",
+    "result_canonical_hash": "sha256:..."
+  },
+  "query_contract": {
+    "source_priority": ["DeviceDataSummaryView", "ElectricityMeter", "PowerAccounts", "sites"],
+    "sql_hash": "sha256:...",
+    "tool_trace_id": "trace_..."
+  },
+  "evidence_ledger": [
+    {
+      "metric": "kWh",
+      "source": "DeviceDataSummaryView",
+      "result_hash": "sha256:..."
+    }
+  ],
+  "answer_template_id": "enms_top_consumers_ranked_v1",
+  "version_manifest": {
+    "source_schema_version": "enms.schema.v12",
+    "query_builder_version": "query.builder.v5",
+    "prompt_version": "prompt.enms.analytics.v4",
+    "model_route_version": "router.v3",
+    "model_backend": "gpt-4.1-mini",
+    "answer_template_version": "answer.template.v2",
+    "evaluator_version": "contract.eval.v1"
+  },
+  "consistency_score": {
+    "facts": 1.0,
+    "evidence": 1.0,
+    "chart_data": 1.0,
+    "recommendation": 0.96
+  }
+}</code></pre>
+
+        <div class="callout">
+          <strong>最小安全與版本邊界</strong>
+          <p>正式上線時，每次 replay 都必須同時帶出 <code>security_scope</code>、<code>snapshot_manifest</code> 與 <code>version_manifest</code>。這樣才能區分「答案改變是資料改了、規則改了、模板改了，還是權限邊界不一樣」。</p>
+        </div>
+      </section>
+
+      <section class="section" id="runtime">
+        <div class="section-head">
+          <div>
+            <span class="chip">Runtime 流程</span>
+            <h2>同一問題要先進 contract，再進模型，而不是每次都讓模型重新決定流程。</h2>
+          </div>
+          <div class="note">
+            <strong>工程原則</strong>
+            <p>能由程式固定的部分就固定，讓模型只處理需要語言理解、摘要與表達的部分。</p>
+          </div>
+        </div>
+
+        <div class="flow">
+          <article class="flow-step">
+            <span class="idx">1</span>
+            <h4>Normalize</h4>
+            <p>正規化問題、日期、場域、單位、同義詞與系統 domain。</p>
+          </article>
+          <article class="flow-step">
+            <span class="idx">2</span>
+            <h4>Route</h4>
+            <p>鎖定 EnMS / ERP / Y-CRM 等 domain 與 intent contract。</p>
+          </article>
+          <article class="flow-step">
+            <span class="idx">3</span>
+            <h4>Pack</h4>
+            <p>組 context pack，產生 schema、wiki、playbook 與資料 fingerprint。</p>
+          </article>
+          <article class="flow-step">
+            <span class="idx">4</span>
+            <h4>Query</h4>
+            <p>執行 DB-first / tool-first 查詢，保存 query contract 與 evidence ledger。</p>
+          </article>
+          <article class="flow-step">
+            <span class="idx">5</span>
+            <h4>Render</h4>
+            <p>使用固定 answer template 輸出文字、圖表與缺資料說明。</p>
+          </article>
+        </div>
+
+        <div class="callout">
+          <strong>模型在這裡扮演什麼角色</strong>
+          <p>模型負責語意理解輔助、摘要、語氣與建議草稿；決定資料來源、時間窗、schema、query、fallback 與驗收分數的主體應該是 EnClaw runtime。</p>
+        </div>
+      </section>
+
+      <section class="section" id="scoring">
+        <div class="section-head">
+          <div>
+            <span class="chip">一致性評分</span>
+            <h2>同題 10 到 50 次，不要求逐字相同，但要求核心事實與依據一致。</h2>
+          </div>
+          <div class="note">
+            <strong>建議 Gate</strong>
+            <p>先從高價值 Top 30 題庫開始，跑 10 次；穩定後擴大到 50 次與跨模型 A/B。每次都要固定 <code>snapshot_manifest.snapshot_ref</code>、<code>security_scope</code>、<code>prompt_version</code>、<code>answer_template_version</code> 與 <code>model_route_version</code>。</p>
+          </div>
+        </div>
+
+        <div class="metric-grid">
+          <article class="metric">
+            <strong>100%</strong>
+            <p>在固定 data snapshot、prompt 版本與 answer template 下，資料來源、時間窗、canonical result hash、chart data hash 必須一致。</p>
+          </article>
+          <article class="metric">
+            <strong>>= 95%</strong>
+            <p>核心 facts、排名、金額、kWh、警示分類與引用依據需高度一致；允許格式與四捨五入有極小差異。</p>
+          </article>
+          <article class="metric">
+            <strong>>= 90%</strong>
+            <p>建議文字、下一步說明與摘要可有語氣差異，但不能改變結論方向或風險邊界。</p>
+          </article>
+        </div>
+
+        <div class="matrix" style="margin-top: 16px">
+          <table>
+            <thead>
+              <tr>
+                <th scope="col">檢查項</th>
+                <th scope="col">比較方式</th>
+                <th scope="col">失敗時處理</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><strong>Intent Stability</strong></td>
+                <td>同題多次是否落在同一 domain、intent、allowed tools。</td>
+                <td>調整 router prompt、intent classifier、domain guardrail。</td>
+              </tr>
+              <tr>
+                <td><strong>Data Stability</strong></td>
+                <td>資料時間窗、source priority、SQL hash、canonical result hash 是否一致。</td>
+                <td>鎖定 query builder、時間解析與 fallback 規則。</td>
+              </tr>
+              <tr>
+                <td><strong>Evidence Stability</strong></td>
+                <td>引用資料表、欄位、playbook、wiki 條目是否一致。</td>
+                <td>調整 context pack ranking 與 source-of-truth 優先序。</td>
+              </tr>
+              <tr>
+                <td><strong>Answer Stability</strong></td>
+                <td>核心事實、排名、風險分類、建議方向是否一致。</td>
+                <td>固定 answer template，降低自由生成範圍。</td>
+              </tr>
+              <tr>
+                <td><strong>Model Switch Stability</strong></td>
+                <td>gpt-4.1-mini 與 GX10 本地模型是否通過同一 contract regression；A/B 時固定 route、prompt、template 與資料快照，只允許 <code>model_backend</code> 變動。</td>
+                <td>保留 API fallback，將本地模型限制在已通過 intent。</td>
+              </tr>
+              <tr>
+                <td><strong>Authorization Stability</strong></td>
+                <td>同一題在相同 tenant、actor、authz policy 下，是否維持相同可見資料範圍。</td>
+                <td>若 scope 不一致，視為高風險失敗，必須先修正權限邊界再重跑。</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="callout">
+          <strong>Replay Protocol 與 Golden Dataset</strong>
+          <p>每次一致性驗收都要固定 <code>snapshot_manifest.snapshot_ref</code>、<code>security_scope</code>、<code>prompt_version</code>、<code>model_route_version</code>、<code>answer_template_version</code> 與題庫清單。若做跨模型 A/B，比較時唯一允許變動的是 <code>model_backend</code>。正式題庫至少分成正常案例、缺資料案例、空時間窗、跨場域比較、晚到資料、告警分類、越權拒答與控制邊界案例，避免只用 happy path 驗證。</p>
+        </div>
+      </section>
+
+      <section class="section" id="roadmap">
+        <div class="section-head">
+          <div>
+            <span class="chip">導入 Roadmap</span>
+            <h2>排在中後期：先求有，再求穩，再求可替代。</h2>
+          </div>
+          <div class="note">
+            <strong>節奏判斷</strong>
+            <p>一致性契約要建立在 query / governance 已經能運作的基礎上，太早做會變成空契約。</p>
+          </div>
+        </div>
+
+        <div class="grid-2">
+          <article class="card">
+            <strong>0-6 個月：埋 trace，固定最小契約</strong>
+            <p>先讓自然語言查詢、圖表、缺資料說明、alert governance 跑起來；同時固定 contract schema v0、query hash、evidence ledger、snapshot manifest 與 version manifest，為後續 regression 做資料準備。</p>
+          </article>
+          <article class="card">
+            <strong>7-9 個月：Answer Contract PoC</strong>
+            <p>挑選 Top 30 題庫與 3 條高價值分析主線，建立 contract schema、answer template、replay runner 與 consistency score；其中 Top 30 與 1 條分析主線列為必達，其餘 2 條列為 stretch。</p>
+          </article>
+          <article class="card">
+            <strong>10-12 個月：納入模型切換與 release gate</strong>
+            <p>將 contract regression 用在 gpt-4.1-mini / GX10 本地模型 A/B，依 `shadow -> canary -> partial -> default` 逐步驗證，只有通過 gate 的 intent 才提高本地模型使用比例。</p>
+          </article>
+          <article class="card">
+            <strong>12 個月後：擴展到跨系統</strong>
+            <p>把同一套 contract 模式擴到 ERP、Y-CRM、WMS、MES、RFID、EMS，但每個 domain 都保留自己的 source-of-truth、answer templates 與 authz 邊界。</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="section" id="sources">
+        <div class="section-head">
+          <div>
+            <span class="chip">參考來源</span>
+            <h2>外部成熟做法的對應關係</h2>
+          </div>
+          <div class="note">
+            <strong>取法</strong>
+            <p>這份設計不是照搬單一供應商，而是把 structured output、grounding、evaluation、risk management 四類成熟做法收斂成 EnClaw 自己的 runtime contract。</p>
+          </div>
+        </div>
+
+        <div class="source-list">
+          <a href="https://developers.openai.com/api/docs/guides/structured-outputs">OpenAI Structured Outputs：用 JSON Schema 與 evals 讓輸出格式更可控。</a>
+          <a href="https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/grounding/overview">Google Cloud Grounding：把模型輸出連到可驗證資料來源，降低幻覺並提供可稽核來源。</a>
+          <a href="https://learn.microsoft.com/en-us/azure/foundry/how-to/evaluate-generative-ai-app">Microsoft Foundry Evaluation：用 dataset、agent output 與 traces 做生成式 AI 評估。</a>
+          <a href="https://www.nist.gov/itl/ai-risk-management-framework">NIST AI RMF：以治理、風險管理與可信任 AI 作為企業 AI 落地的基礎 framing。</a>
+        </div>
+
+        <div class="callout">
+          <strong>回到 EnClaw 的差異化</strong>
+          <p>一般平台通常提供模型、grounding 或 eval 工具；EnClaw 要把這些方法產品化成能源管理領域可重播的 answer contract，讓客戶知道同一問題為什麼得到同一答案，以及答案改變時到底是哪個條件改了。</p>
+        </div>
+      </section>
+    </div>
+  </body>
+</html>

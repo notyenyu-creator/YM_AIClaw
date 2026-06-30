@@ -1440,12 +1440,17 @@ function selectRelevantBootstrapFacts(
 export function decorateMessageWithDomainBootstrapSnapshot(
   userMessage: string,
   snapshot: DomainBootstrapSnapshot | null,
+  options?: { compact?: boolean },
 ): string {
   if (!snapshot) {
     return userMessage;
   }
 
-  const visibleFacts = selectRelevantBootstrapFacts(snapshot.facts, userMessage);
+  const compact = options?.compact ?? false;
+  const visibleFacts = selectRelevantBootstrapFacts(snapshot.facts, userMessage).slice(
+    0,
+    compact ? 4 : 10,
+  );
 
   const lines = [
     "[Domain Bootstrap Snapshot]",
@@ -1456,30 +1461,37 @@ export function decorateMessageWithDomainBootstrapSnapshot(
     "bootstrap.facts:",
     ...visibleFacts.map((fact) => `- ${fact}`),
     "bootstrap.joins:",
-    ...snapshot.joins.slice(0, 3).map((joinRule) => `- ${joinRule}`),
+    ...snapshot.joins.slice(0, compact ? 2 : 3).map((joinRule) => `- ${joinRule}`),
     "bootstrap.cautions:",
-    ...snapshot.cautions.slice(0, 5).map((caution) => `- ${caution}`),
+    ...snapshot.cautions.slice(0, compact ? 3 : 5).map((caution) => `- ${caution}`),
     "bootstrap.gaps:",
     ...(snapshot.gaps.length > 0
-      ? snapshot.gaps.slice(0, 5).map((gap) => `- ${gap}`)
+      ? snapshot.gaps.slice(0, compact ? 3 : 5).map((gap) => `- ${gap}`)
       : ["- none"]),
     "bootstrap.still_available:",
     ...(snapshot.stillAvailable.length > 0
-      ? snapshot.stillAvailable.slice(0, 4).map((item) => `- ${item}`)
+      ? snapshot.stillAvailable.slice(0, compact ? 2 : 4).map((item) => `- ${item}`)
       : ["- none"]),
     "bootstrap.response_rules:",
     "- If bootstrap.facts already contain the requested site / account / bill / alert / power-factor answer, summarize those DB-backed facts first before attempting extra SQL.",
     "- Treat bootstrap.facts as already verified local EnMS DB facts. In the final user-facing answer, call them 本地 EnMS DB 已彙整資料 or 已確認資料, never bootstrap, snapshot, 引導快照, or derived label.",
-    "- Do not contradict a concrete bootstrap fact with a guessed table name, guessed join, or generic fallback answer.",
-    "- If the requested answer depends on a listed gap, explicitly name the missing table/field/data source.",
-    "- Never reply with only a vague phrase like '因資料限制'; explain what is missing and what can still be answered.",
-    "- When data is partial, separate confirmed facts from unavailable facts.",
-    "- Do not expose failed intermediate SQL attempts, schema guesses, or troubleshooting notes in the final answer.",
-    "bootstrap.response_template_when_partial_or_blocked:",
-    "- 已確認：列出目前已確認的系統、scope、表或站點。",
-    "- 缺少資料：明確列出缺哪張表、哪個欄位、或目前 0 rows 的來源。",
-    "- 目前可回答：列出在現有資料下仍可完成的分析。",
-    "- 建議下一步：列出最小補數據或改問法。",
+    ...(compact
+      ? [
+          "- If the requested answer depends on a listed gap, explicitly name the missing table/field/data source.",
+          "- When data is partial, separate confirmed facts from unavailable facts.",
+        ]
+      : [
+          "- Do not contradict a concrete bootstrap fact with a guessed table name, guessed join, or generic fallback answer.",
+          "- If the requested answer depends on a listed gap, explicitly name the missing table/field/data source.",
+          "- Never reply with only a vague phrase like '因資料限制'; explain what is missing and what can still be answered.",
+          "- When data is partial, separate confirmed facts from unavailable facts.",
+          "- Do not expose failed intermediate SQL attempts, schema guesses, or troubleshooting notes in the final answer.",
+          "bootstrap.response_template_when_partial_or_blocked:",
+          "- 已確認：列出目前已確認的系統、scope、表或站點。",
+          "- 缺少資料：明確列出缺哪張表、哪個欄位、或目前 0 rows 的來源。",
+          "- 目前可回答：列出在現有資料下仍可完成的分析。",
+          "- 建議下一步：列出最小補數據或改問法。",
+        ]),
     "[/Domain Bootstrap Snapshot]",
   ];
 

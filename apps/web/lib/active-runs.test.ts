@@ -17,6 +17,15 @@ vi.mock("./ycrm-learning-auto-trigger", () => ({
 	triggerAutoLearningDraftIfEligible: vi.fn(),
 }));
 
+vi.mock("@/app/api/web-sessions/shared", async (importOriginal) => {
+	const actual =
+		await importOriginal<typeof import("@/app/api/web-sessions/shared")>();
+	return {
+		...actual,
+		updateSessionLastAnswerMeta: vi.fn(),
+	};
+});
+
 // Mock agent-runner to control spawnAgentProcess
 vi.mock("./agent-runner", () => ({
 	spawnAgentProcess: vi.fn(),
@@ -133,6 +142,15 @@ describe("active-runs", () => {
 			triggerAutoLearningDraftIfEligible: vi.fn(),
 		}));
 
+		vi.mock("@/app/api/web-sessions/shared", async (importOriginal) => {
+			const actual =
+				await importOriginal<typeof import("@/app/api/web-sessions/shared")>();
+			return {
+				...actual,
+				updateSessionLastAnswerMeta: vi.fn(),
+			};
+		});
+
 		// Re-wire mocks after resetModules
 		vi.mock("./agent-runner", () => ({
 			spawnAgentProcess: vi.fn(),
@@ -231,6 +249,133 @@ describe("active-runs", () => {
 				"gpt-5.4",
 				undefined,
 			);
+		});
+
+		it("writes the latest answer source only after a model reply finishes", async () => {
+			const { child, startRun } = await setup();
+			const { writeFile } = await import("node:fs/promises");
+
+			startRun({
+				sessionId: "s-meta",
+				message: "hello",
+				agentSessionId: "s-meta",
+				completionTrace: {
+					answerMode: "model_run",
+					requestedModelId: "anthropic.claude-opus-4-6-v1",
+					domainId: "erp",
+				},
+			});
+
+			child._writeLine({
+				event: "agent",
+				stream: "assistant",
+				data: { delta: "Cloud reply" },
+			});
+			await new Promise((r) => setTimeout(r, 50));
+
+			expect(
+				vi.mocked(writeFile).mock.calls.some(
+					([path, payload]) =>
+						path === "/tmp/mock-web-chat/index.json" &&
+						typeof payload === "string" &&
+						payload.includes("\"lastAnswerMeta\""),
+				),
+			).toBe(false);
+
+			child.stdout.end();
+			await new Promise((r) => setTimeout(r, 50));
+			child._emit("close", 0);
+			await new Promise((r) => setTimeout(r, 50));
+
+			const indexWrite = vi.mocked(writeFile).mock.calls
+				.filter(
+					([path, payload]) =>
+						path === "/tmp/mock-web-chat/index.json" &&
+						typeof payload === "string" &&
+						payload.includes("\"lastAnswerMeta\""),
+				)
+				.at(-1);
+			expect(indexWrite?.[1]).toContain("\"answerMode\": \"model_run\"");
+			expect(indexWrite?.[1]).toContain("\"modelClass\": \"cloud\"");
+			expect(indexWrite?.[1]).toContain("\"requestedModelId\": \"anthropic.claude-opus-4-6-v1\"");
+			expect(indexWrite?.[1]).toContain("\"domainId\": \"erp\"");
+			expect(indexWrite?.[1]).toContain("\"turnStartedAt\":");
+		});
+
+		it("writes direct-answer metadata only after the synthetic reply is persisted", async () => {
+			const { createSyntheticCompletedRun } = await setup();
+			const { writeFile } = await import("node:fs/promises");
+
+			await createSyntheticCompletedRun({
+				sessionId: "s-direct",
+				text: "整理完成",
+				completionTrace: {
+					answerMode: "verified_direct",
+					requestedModelId: "gx10_hermes/hermes-agent",
+					domainId: "ycrm",
+				},
+			});
+
+			const indexWrite = vi.mocked(writeFile).mock.calls
+				.filter(
+					([path, payload]) =>
+						path === "/tmp/mock-web-chat/index.json" &&
+						typeof payload === "string" &&
+						payload.includes("\"lastAnswerMeta\""),
+				)
+				.at(-1);
+			expect(indexWrite?.[1]).toContain("\"answerMode\": \"verified_direct\"");
+			expect(indexWrite?.[1]).toContain("\"modelClass\": \"none\"");
+			expect(indexWrite?.[1]).toContain("\"requestedModelId\": \"gx10_hermes/hermes-agent\"");
+			expect(indexWrite?.[1]).toContain("\"domainId\": \"ycrm\"");
+			expect(indexWrite?.[1]).toContain("\"turnStartedAt\":");
+		});
+
+		it("does not let an older completed turn overwrite newer answer metadata", async () => {
+			const { createSyntheticCompletedRun } = await setup();
+			const { access, readFile, writeFile } = await import("node:fs/promises");
+			const files = new Map<string, string>();
+			let now = 2_000;
+			vi.spyOn(Date, "now").mockImplementation(() => now);
+
+			vi.mocked(access).mockImplementation(async (filePath) => {
+				if (!files.has(String(filePath))) {
+					throw new Error("ENOENT");
+				}
+			});
+			vi.mocked(readFile).mockImplementation(async (filePath) => files.get(String(filePath)) ?? "");
+			vi.mocked(writeFile).mockImplementation(async (filePath, payload) => {
+				files.set(String(filePath), typeof payload === "string" ? payload : String(payload));
+			});
+
+			await createSyntheticCompletedRun({
+				sessionId: "s-order",
+				text: "newer reply",
+				completionTrace: {
+					answerMode: "model_run",
+					requestedModelId: "openai/gpt-4.1-mini",
+					domainId: "erp",
+				},
+			});
+
+			now = 1_000;
+
+			await createSyntheticCompletedRun({
+				sessionId: "s-order",
+				text: "older reply",
+				completionTrace: {
+					answerMode: "verified_direct",
+					requestedModelId: "gx10_hermes/hermes-agent",
+					domainId: "ycrm",
+				},
+			});
+
+			const indexPayload = files.get("/tmp/mock-web-chat/index.json");
+			expect(indexPayload).toBeTruthy();
+			const [session] = JSON.parse(indexPayload ?? "[]");
+			expect(session.lastAnswerMeta.requestedModelId).toBe("openai/gpt-4.1-mini");
+			expect(session.lastAnswerMeta.answerMode).toBe("model_run");
+			expect(session.lastAnswerMeta.turnStartedAt).toBe(2_000);
 		});
 
 		it("creates a run and emits fallback text when process exits without output", async () => {

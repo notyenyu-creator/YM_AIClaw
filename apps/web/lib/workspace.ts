@@ -22,10 +22,18 @@ export type DuckdbQueryExecution<T = Record<string, unknown>> = {
 
 function parseDuckdbJsonRows<T>(stdout: string): T[] {
   const trimmed = stdout.trim();
-  if (!trimmed || trimmed === "[]") {
+  // DuckDB v1.5.0 can emit `[{]` instead of `[]` for empty postgres_scanner result sets.
+  if (!trimmed || trimmed === "[]" || trimmed === "[{]") {
     return [];
   }
   return JSON.parse(trimmed) as T[];
+}
+
+function previewDuckdbDebugText(value: string, maxLength: number): string {
+  if (!value) {
+    return "";
+  }
+  return value.length > maxLength ? `${value.slice(0, maxLength)}…` : value;
 }
 
 function extractDuckdbExecError(error: unknown): string {
@@ -1254,15 +1262,39 @@ export async function duckdbQueryExternalPgAsyncDetailed<T = Record<string, unkn
   try {
     const escapedConn = connectionString.replace(/'/g, "''");
     const fullSql = `INSTALL postgres_scanner; LOAD postgres_scanner; ATTACH '${escapedConn}' AS ${alias} (TYPE postgres_scanner, READ_ONLY); ${sql}`;
-    const { stdout } = await execFileAsync(bin, ["-json", ":memory:", fullSql], {
+    const { stdout, stderr } = await execFileAsync(bin, ["-json", ":memory:", fullSql], {
       encoding: "utf-8",
       timeout: 15_000,
       maxBuffer: 10 * 1024 * 1024,
     });
-    return {
-      rows: parseDuckdbJsonRows<T>(stdout),
-      error: null,
-    };
+    try {
+      return {
+        rows: parseDuckdbJsonRows<T>(stdout),
+        error: null,
+      };
+    } catch (error) {
+      const parseMessage =
+        error instanceof Error ? error.message : String(error);
+      console.error(
+        "[duckdb-json-parse-failed]",
+        JSON.stringify({
+          alias,
+          parseMessage,
+          stdoutLength: stdout.length,
+          stderrLength: stderr.length,
+          stdoutPreview: previewDuckdbDebugText(stdout, 1200),
+          stderrPreview: previewDuckdbDebugText(stderr, 800),
+          stdoutStartCharCodes: Array.from(stdout.slice(0, 16)).map((char) =>
+            char.charCodeAt(0)
+          ),
+          sqlPreview: previewDuckdbDebugText(
+            sql.trim().replace(/\s+/g, " "),
+            1200,
+          ),
+        }),
+      );
+      throw error;
+    }
   } catch (error) {
     return {
       rows: [],
