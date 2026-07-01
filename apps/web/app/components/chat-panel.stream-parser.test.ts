@@ -121,4 +121,32 @@ describe("createStreamParser", () => {
 
     expect(parser.getParts()).toEqual([{ type: "text", text: "Stable output" }]);
   });
+
+  it("preserves trusted report source events before text", () => {
+    const parser = createStreamParser();
+
+    parser.processEvent({
+      type: "data-report-source",
+      data: {
+        sourceKind: "verified_direct",
+        sourceDomain: "enms",
+        verifiedBy: "enms-verified-direct-query",
+      },
+    });
+    parser.processEvent({ type: "text-start" });
+    parser.processEvent({ type: "text-delta", delta: "Report ready." });
+    parser.processEvent({ type: "text-end" });
+
+    expect(parser.getParts()).toEqual([
+      {
+        type: "data-report-source",
+        data: {
+          sourceKind: "verified_direct",
+          sourceDomain: "enms",
+          verifiedBy: "enms-verified-direct-query",
+        },
+      },
+      { type: "text", text: "Report ready." },
+    ]);
+  });
 });

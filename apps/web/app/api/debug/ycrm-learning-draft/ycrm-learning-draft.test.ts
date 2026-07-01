@@ -4,7 +4,7 @@ import {
 	applyYcrmLearningDraftPromotion,
 	applyYcrmLearningDraftWriteback,
 	buildYcrmLearningDraft,
-} from "./ycrm-learning-draft";
+} from "../../../../lib/ycrm-learning-draft";
 
 describe("buildYcrmLearningDraft", () => {
 	it("creates customer-summary and memory drafts for entity-summary sessions", () => {

@@ -1,4 +1,6 @@
 import { duckdbQueryAsync } from "@/lib/workspace";
+import { redactDatabaseConnectionSecrets } from "@/lib/enms-db-config";
+import { checkSqlSafety } from "@/lib/report-filters";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -22,22 +24,25 @@ export async function POST(req: Request) {
     );
   }
 
-  // Basic SQL safety: reject obviously dangerous statements
-  const upper = sql.toUpperCase().trim();
-  if (
-    upper.startsWith("DROP") ||
-    upper.startsWith("DELETE") ||
-    upper.startsWith("INSERT") ||
-    upper.startsWith("UPDATE") ||
-    upper.startsWith("ALTER") ||
-    upper.startsWith("CREATE")
-  ) {
+  const safetyError = checkSqlSafety(sql);
+  if (safetyError) {
     return Response.json(
-      { error: "Only SELECT queries are allowed" },
+      { error: safetyError },
       { status: 403 },
     );
   }
 
-	const rows = await duckdbQueryAsync(sql);
-  return Response.json({ rows });
+  try {
+    const rows = await duckdbQueryAsync(sql);
+    return Response.json({ rows });
+  } catch (err) {
+    return Response.json(
+      {
+        error: redactDatabaseConnectionSecrets(
+          err instanceof Error ? err.message : "Query failed",
+        ),
+      },
+      { status: 500 },
+    );
+  }
 }

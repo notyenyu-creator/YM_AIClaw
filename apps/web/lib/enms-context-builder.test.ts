@@ -109,6 +109,60 @@ describe("buildEnmsContext", () => {
     );
   });
 
+  it("respects explicit EnMS exclusion even when energy keywords are present", () => {
+    const result = buildEnmsContext({
+      request: {
+        user_message:
+          "請只看 Y-CRM，不要看 ERP 或 EnMS。請整理 Calleen Hong 負責客戶背景，不要分析庫存或耗電。",
+      },
+    });
+    expect(result.shouldRouteToEnms).toBe(false);
+    expect(result.warnings).toContain("enms_explicitly_excluded");
+  });
+
+  it("treats system-first EnMS exclusions as explicit exclusions", () => {
+    const result = buildEnmsContext({
+      request: {
+        user_message:
+          "EnMS 先不要看，請只整理 Y-CRM 客戶背景，不要分析耗電。",
+      },
+    });
+    expect(result.shouldRouteToEnms).toBe(false);
+    expect(result.warnings).toContain("enms_explicitly_excluded");
+  });
+
+  it("does not let negated energy wording steal Y-CRM or ERP turns", () => {
+    const result = buildEnmsContext({
+      request: {
+        user_message:
+          "請只看 Y-CRM。請整理 Calleen Hong 負責客戶背景，不要分析庫存或耗電。",
+      },
+    });
+    expect(result.shouldRouteToEnms).toBe(false);
+    expect(result.warnings).toContain("enms_explicitly_excluded");
+  });
+
+  it("does not route generic rewrite prompts from a negated energy keyword", () => {
+    const result = buildEnmsContext({
+      request: {
+        user_message: "不要分析耗電，幫我把這段文字改寫得更清楚。",
+      },
+    });
+    expect(result.shouldRouteToEnms).toBe(false);
+    expect(result.warnings).toContain("enms_explicitly_excluded");
+  });
+
+  it("keeps EnMS route when EnMS is the explicit source and other systems are excluded", () => {
+    const result = buildEnmsContext({
+      request: {
+        user_message:
+          "請用 EnMS 資料比較阿里山與洋銘資訊最近 30 天總用電與功率因數，不要看 ERP 或 Y-CRM。",
+      },
+    });
+    expect(result.shouldRouteToEnms).toBe(true);
+    expect(result.intent).toBe("site_benchmarking");
+  });
+
   it("respects explicit enms hint even with weak keywords", () => {
     const result = buildEnmsContext({
       request: { user_message: "幫我看一下", current_system_hint: "enms" },

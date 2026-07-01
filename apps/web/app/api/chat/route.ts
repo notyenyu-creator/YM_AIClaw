@@ -119,7 +119,7 @@ const MAX_IMAGE_BYTES = 5 * 1024 * 1024; // 5 MB per image
 
 function extractImageAttachmentsFromMessage(text: string): ImageAttachment[] {
   const match = text.match(/\[Attached files: (.+?)\]/);
-  if (!match) return [];
+  if (!match) {return [];}
   const workspaceRoot = resolveWorkspaceRoot();
   const paths = match[1]
     .split(", ")
@@ -128,16 +128,16 @@ function extractImageAttachmentsFromMessage(text: string): ImageAttachment[] {
   const attachments: ImageAttachment[] = [];
   for (const filePath of paths) {
     const ext = extname(filePath).toLowerCase();
-    if (!IMAGE_EXTENSIONS.has(ext)) continue;
+    if (!IMAGE_EXTENSIONS.has(ext)) {continue;}
     const absPath = filePath.startsWith("/")
       ? filePath
       : workspaceRoot
         ? join(workspaceRoot, filePath)
         : filePath;
-    if (!existsSync(absPath)) continue;
+    if (!existsSync(absPath)) {continue;}
     try {
       const data = readFileSync(absPath);
-      if (data.length > MAX_IMAGE_BYTES) continue;
+      if (data.length > MAX_IMAGE_BYTES) {continue;}
       attachments.push({
         content: data.toString("base64"),
         mimeType: EXT_TO_MIME[ext] ?? "application/octet-stream",
@@ -313,9 +313,9 @@ function buildPlannerInputFromSession(
     return input;
   }
 
-  const previousUserMessage = [...messages]
+  const previousUserMessage = messages
     .slice(0, -1)
-    .reverse()
+    .toReversed()
     .find((message) => message.role === "user");
   const previousUserText = extractTextParts(previousUserMessage);
   const shouldAugmentWithPrevious =
@@ -610,15 +610,21 @@ export async function POST(req: Request) {
         pack: ycrmContextPack,
         snapshot: ycrmBootstrapSnapshot,
       });
-      const ycrmVerifiedDirectReply = await buildYcrmVerifiedDirectQueryAnswer({
-        userMessage: userText,
-        planner: ycrmPlannerSummary,
-      });
-      if (ycrmReadOnlyPlan.eligible) {
+      const ycrmBlockedReply =
+        buildReadOnlyExecutionBlockedReply(ycrmReadOnlyPlan);
+      if (ycrmBlockedReply) {
+        directAssistantReply = ycrmBlockedReply;
+        directAnswerMode = "system_direct";
+      } else if (ycrmReadOnlyPlan.eligible) {
         agentMessage = decorateMessageWithReadOnlyExecutionPlan(
           agentMessage,
           ycrmReadOnlyPlan,
         );
+        const ycrmVerifiedDirectReply =
+          await buildYcrmVerifiedDirectQueryAnswer({
+            userMessage: userText,
+            planner: ycrmPlannerSummary,
+          });
         if (ycrmVerifiedDirectReply) {
           directAssistantReply = ycrmVerifiedDirectReply;
           directAnswerMode = "verified_direct";
@@ -630,6 +636,11 @@ export async function POST(req: Request) {
           }
         }
       } else {
+        const ycrmVerifiedDirectReply =
+          await buildYcrmVerifiedDirectQueryAnswer({
+            userMessage: userText,
+            planner: ycrmPlannerSummary,
+          });
         directAssistantReply = ycrmVerifiedDirectReply;
         if (directAssistantReply) {
           directAnswerMode = "verified_direct";
@@ -698,14 +709,20 @@ export async function POST(req: Request) {
           pack: erpContextPack,
           snapshot: erpBootstrapSnapshot,
         });
-        const erpVerifiedDirectReply = await buildErpVerifiedDirectQueryAnswer({
-          userMessage: userText,
-        });
-        if (erpReadOnlyPlan.eligible) {
+        const erpBlockedReply =
+          buildReadOnlyExecutionBlockedReply(erpReadOnlyPlan);
+        if (erpBlockedReply) {
+          directAssistantReply = erpBlockedReply;
+          directAnswerMode = "system_direct";
+        } else if (erpReadOnlyPlan.eligible) {
           agentMessage = decorateMessageWithReadOnlyExecutionPlan(
             agentMessage,
             erpReadOnlyPlan,
           );
+          const erpVerifiedDirectReply =
+            await buildErpVerifiedDirectQueryAnswer({
+              userMessage: userText,
+            });
           if (erpVerifiedDirectReply) {
             directAssistantReply = erpVerifiedDirectReply;
             directAnswerMode = "verified_direct";
@@ -717,6 +734,10 @@ export async function POST(req: Request) {
             }
           }
         } else {
+          const erpVerifiedDirectReply =
+            await buildErpVerifiedDirectQueryAnswer({
+              userMessage: userText,
+            });
           directAssistantReply = erpVerifiedDirectReply;
           if (directAssistantReply) {
             directAnswerMode = "verified_direct";
@@ -754,7 +775,12 @@ export async function POST(req: Request) {
           pack: enmsContextPack,
           snapshot: enmsBootstrapSnapshot,
         });
-        if (enmsReadOnlyPlan.eligible) {
+        const enmsBlockedReply =
+          buildReadOnlyExecutionBlockedReply(enmsReadOnlyPlan);
+        if (enmsBlockedReply) {
+          directAssistantReply = enmsBlockedReply;
+          directAnswerMode = "system_direct";
+        } else if (enmsReadOnlyPlan.eligible) {
           agentMessage = decorateMessageWithReadOnlyExecutionPlan(
             agentMessage,
             enmsReadOnlyPlan,
@@ -828,6 +854,8 @@ export async function POST(req: Request) {
         : ycrmClaimed
           ? "ycrm"
           : null;
+    const traceRequestedModelId =
+      normalizedModelOverride ?? getAgentSession(sessionId)?.model ?? null;
 
     if (directAssistantReply) {
       await createSyntheticCompletedRun({
@@ -835,7 +863,7 @@ export async function POST(req: Request) {
         text: directAssistantReply,
         completionTrace: {
           answerMode: directAnswerMode ?? "system_direct",
-          requestedModelId: normalizedModelOverride ?? null,
+          requestedModelId: traceRequestedModelId,
           domainId: routedDomainId,
         },
       });
@@ -861,7 +889,7 @@ export async function POST(req: Request) {
           modelOverride: normalizedModelOverride,
           completionTrace: {
             answerMode: "model_run",
-            requestedModelId: normalizedModelOverride ?? null,
+            requestedModelId: traceRequestedModelId,
             domainId: routedDomainId,
           },
           imageAttachments:

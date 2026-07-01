@@ -1,6 +1,13 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const fileStore = new Map<string, string>();
+const TEST_ENMS_CONNECTION =
+  "host=118.168.188.27 port=55433 dbname=EnMS user=test password=secret sslmode=disable";
+const TEST_YCRM_CONNECTION =
+  "dbname=default user=test password=secret host=localhost port=5432";
+const TEST_ERP_CONNECTION =
+  "host=118.168.188.27 port=5433 dbname=ErpUAT_local user=test password=secret sslmode=disable";
+const ORIGINAL_ENV = { ...process.env };
 
 vi.mock("node:fs", () => ({
   existsSync: vi.fn((target: string) => fileStore.has(String(target))),
@@ -13,9 +20,8 @@ vi.mock("node:fs", () => ({
   }),
 }));
 
-vi.mock("@/lib/workspace", () => ({
-  resolveWorkspaceRoot: vi.fn(() => "/virtual/workspace"),
-  duckdbQueryExternalPgAsync: vi.fn(
+vi.mock("@/lib/workspace", () => {
+  const duckdbQueryExternalPgAsync = vi.fn(
     async (connectionString: string, sql: string) => {
       if (connectionString.includes("ErpUAT_local")) {
         if (sql.includes("information_schema.columns")) {
@@ -176,12 +182,37 @@ vi.mock("@/lib/workspace", () => ({
 
       return [];
     },
-  ),
-}));
+  );
+
+  return {
+    resolveWorkspaceRoot: vi.fn(() => "/virtual/workspace"),
+    duckdbQueryExternalPgAsync,
+    duckdbQueryExternalPgAsyncDetailed: vi.fn(
+      async (connectionString: string, sql: string, alias?: string) => ({
+        rows: await duckdbQueryExternalPgAsync(connectionString, sql, alias),
+        error: null,
+      }),
+    ),
+  };
+});
 
 describe("domain bootstrap snapshots", () => {
   beforeEach(() => {
     fileStore.clear();
+    process.env.ENMS_PG_CONNECTION = TEST_ENMS_CONNECTION;
+    process.env.YCRM_PG_CONNECTION = TEST_YCRM_CONNECTION;
+    process.env.ERP_PG_CONNECTION = TEST_ERP_CONNECTION;
+    delete process.env.OPENCLAW_ENMS_PG_CONNECTION;
+    delete process.env.ENMS_POSTGRES_CONNECTION;
+    delete process.env.Y_CRM_PG_CONNECTION;
+    delete process.env.OPENCLAW_YCRM_PG_CONNECTION;
+    delete process.env.YCRM_POSTGRES_CONNECTION;
+    delete process.env.OPENCLAW_ERP_PG_CONNECTION;
+    delete process.env.ERP_POSTGRES_CONNECTION;
+  });
+
+  afterEach(() => {
+    process.env = { ...ORIGINAL_ENV };
   });
 
   it("builds a Y-CRM bootstrap snapshot from the cached auto-schema file", async () => {
@@ -297,6 +328,57 @@ describe("domain bootstrap snapshots", () => {
     expect(snapshot?.facts.join(" ")).toContain("sales_order_count");
   });
 
+  it("blocks ERP bootstrap when live DB introspection fails", async () => {
+    const { duckdbQueryExternalPgAsyncDetailed } = await import("@/lib/workspace");
+    vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockResolvedValueOnce({
+      rows: [],
+      error:
+        "ATTACH 'host=118.168.188.27 port=5433 dbname=ErpUAT_local user=sa password=secret sslmode=disable' AS erp failed",
+    });
+    const { buildDomainBootstrapSnapshot } = await import("./domain-bootstrap");
+
+    const snapshot = await buildDomainBootstrapSnapshot({
+      system: "erp",
+      userMessage: "請查 ERP 訂單與庫存",
+      pack: {
+        planner: {
+          system: "erp",
+          updatedAt: Date.now(),
+          intent: "sales_order",
+          confidence: "high",
+          shouldRouteToErp: true,
+          matchedKeywords: ["訂單"],
+          warnings: [],
+          presentation: {
+            optional_chart_requested: false,
+            chart_render_allowed: false,
+            chart_guardrail_reason: null,
+            max_chart_panels: 0,
+          },
+        },
+        presentation: {
+          optional_chart_requested: false,
+          chart_render_allowed: false,
+          chart_guardrail_reason: null,
+          max_chart_panels: 0,
+        },
+        read_first: [],
+        references: ["skills/erp/reference/auto-schema-erp.md"],
+        wiki: [],
+        playbooks: [],
+        memory_keys: [],
+        live_query_steps: [],
+        execution_hints: [],
+      },
+    });
+
+    expect(snapshot?.system).toBe("erp");
+    expect(snapshot?.source).toBe("unavailable");
+    expect(snapshot?.availability).toBe("blocked");
+    expect(snapshot?.gaps.join(" ")).not.toContain("password=secret");
+    expect(snapshot?.gaps.join(" ")).toContain("ATTACH '<redacted-connection>' AS erp");
+  });
+
   it("builds an EnMS bootstrap snapshot with site match and data-availability cautions", async () => {
     const { buildDomainBootstrapSnapshot } = await import("./domain-bootstrap");
 
@@ -343,6 +425,150 @@ describe("domain bootstrap snapshots", () => {
     expect(snapshot?.gaps.join(" ")).toContain('EnMS table "DemandAlertHistory" currently has 0 rows');
     expect(snapshot?.cautions.join(" ")).toContain("PowerAccounts currently has 0 rows");
     expect(snapshot?.cautions.join(" ")).toContain("DemandAlertHistory currently has 0 rows");
+  });
+
+  it("returns a blocked EnMS bootstrap snapshot when DB config is missing", async () => {
+    delete process.env.ENMS_PG_CONNECTION;
+    delete process.env.OPENCLAW_ENMS_PG_CONNECTION;
+    delete process.env.ENMS_POSTGRES_CONNECTION;
+    const { buildDomainBootstrapSnapshot } = await import("./domain-bootstrap");
+
+    const snapshot = await buildDomainBootstrapSnapshot({
+      system: "enms",
+      userMessage: "請分析大溪廠的需量與契約容量風險",
+      pack: {
+        planner: {
+          system: "enms",
+          updatedAt: Date.now(),
+          intent: "demand_forecast",
+          confidence: "high",
+          shouldRouteToEnms: true,
+          matchedKeywords: ["需量", "契約容量"],
+          warnings: [],
+          presentation: {
+            optional_chart_requested: false,
+            chart_render_allowed: false,
+            chart_guardrail_reason: null,
+            max_chart_panels: 0,
+          },
+        },
+        presentation: {
+          optional_chart_requested: false,
+          chart_render_allowed: false,
+          chart_guardrail_reason: null,
+          max_chart_panels: 0,
+        },
+        read_first: [],
+        references: [],
+        wiki: [],
+        playbooks: [],
+        memory_keys: [],
+        live_query_steps: [],
+        execution_hints: [],
+      },
+    });
+
+    expect(snapshot?.system).toBe("enms");
+    expect(snapshot?.source).toBe("unavailable");
+    expect(snapshot?.availability).toBe("blocked");
+    expect(snapshot?.gaps.join(" ")).toContain("目前 EnMS 資料連線尚未啟用");
+  });
+
+  it("returns a blocked EnMS bootstrap snapshot when DB config targets the wrong source", async () => {
+    process.env.ENMS_PG_CONNECTION =
+      "host=127.0.0.1 port=5432 dbname=enms_27 user=test password=secret sslmode=disable";
+    const { buildDomainBootstrapSnapshot } = await import("./domain-bootstrap");
+
+    const snapshot = await buildDomainBootstrapSnapshot({
+      system: "enms",
+      userMessage: "請分析大溪廠的需量與契約容量風險",
+      pack: {
+        planner: {
+          system: "enms",
+          updatedAt: Date.now(),
+          intent: "demand_forecast",
+          confidence: "high",
+          shouldRouteToEnms: true,
+          matchedKeywords: ["需量", "契約容量"],
+          warnings: [],
+          presentation: {
+            optional_chart_requested: false,
+            chart_render_allowed: false,
+            chart_guardrail_reason: null,
+            max_chart_panels: 0,
+          },
+        },
+        presentation: {
+          optional_chart_requested: false,
+          chart_render_allowed: false,
+          chart_guardrail_reason: null,
+          max_chart_panels: 0,
+        },
+        read_first: [],
+        references: [],
+        wiki: [],
+        playbooks: [],
+        memory_keys: [],
+        live_query_steps: [],
+        execution_hints: [],
+      },
+    });
+
+    expect(snapshot?.system).toBe("enms");
+    expect(snapshot?.source).toBe("unavailable");
+    expect(snapshot?.availability).toBe("blocked");
+    expect(snapshot?.gaps.join(" ")).toContain("目前 EnMS 資料連線尚未啟用");
+  });
+
+  it("returns a blocked EnMS bootstrap snapshot when live introspection fails", async () => {
+    const { duckdbQueryExternalPgAsyncDetailed } = await import("@/lib/workspace");
+    vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockResolvedValueOnce({
+      rows: [],
+      error:
+        "ATTACH 'host=118.168.188.27 port=55433 dbname=EnMS user=sa password=secret sslmode=disable' AS enms failed",
+    });
+    const { buildDomainBootstrapSnapshot } = await import("./domain-bootstrap");
+
+    const snapshot = await buildDomainBootstrapSnapshot({
+      system: "enms",
+      userMessage: "請找最近 7 天最耗電設備",
+      pack: {
+        planner: {
+          system: "enms",
+          updatedAt: Date.now(),
+          intent: "natural_language_query",
+          confidence: "high",
+          shouldRouteToEnms: true,
+          matchedKeywords: ["耗電"],
+          warnings: [],
+          presentation: {
+            optional_chart_requested: false,
+            chart_render_allowed: false,
+            chart_guardrail_reason: null,
+            max_chart_panels: 0,
+          },
+        },
+        presentation: {
+          optional_chart_requested: false,
+          chart_render_allowed: false,
+          chart_guardrail_reason: null,
+          max_chart_panels: 0,
+        },
+        read_first: [],
+        references: [],
+        wiki: [],
+        playbooks: [],
+        memory_keys: [],
+        live_query_steps: [],
+        execution_hints: [],
+      },
+    });
+
+    expect(snapshot?.system).toBe("enms");
+    expect(snapshot?.source).toBe("unavailable");
+    expect(snapshot?.availability).toBe("blocked");
+    expect(snapshot?.gaps.join(" ")).not.toContain("password=secret");
+    expect(snapshot?.gaps.join(" ")).toContain("ATTACH '<redacted-connection>' AS enms");
   });
 
   it("adds multi-site benchmark facts when the planner intent is site_benchmarking", async () => {

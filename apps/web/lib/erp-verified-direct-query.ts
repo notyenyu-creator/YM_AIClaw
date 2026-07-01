@@ -1,7 +1,5 @@
+import { getErpPostgresConnectionString } from "./domain-db-config";
 import { duckdbQueryExternalPgAsyncDetailed } from "./workspace";
-
-const ERP_CONNECTION_STRING =
-  "host=118.168.188.27 port=5433 dbname=ErpUAT_local user=sa password=ym@mes42769778 sslmode=disable";
 
 type ErpCountRow = {
   total_count?: number | string;
@@ -517,6 +515,12 @@ function formatDecimal(value: number): string {
   }).format(value);
 }
 
+const ERP_REPORT_METADATA = {
+  sourceDomain: "erp",
+  sourceKind: "verified_direct",
+  verifiedBy: "erp-verified-direct-query",
+} as const;
+
 function buildErpCountReport(target: ErpCountTarget, row: ErpCountRow | undefined) {
   const totalCount = toNumber(row?.total_count);
   const chartRows = [
@@ -535,6 +539,7 @@ function buildErpCountReport(target: ErpCountTarget, row: ErpCountRow | undefine
     JSON.stringify(
       {
         version: 1,
+        ...ERP_REPORT_METADATA,
         title: `ERP 目前 ${target.label}總數`,
         description: `本地 ERP DB 查詢結果，${target.label}總數為 ${formatNumber(totalCount)}。`,
         panels: [
@@ -592,6 +597,7 @@ function buildErpInventoryRankingReport(
     JSON.stringify(
       {
         version: 1,
+        ...ERP_REPORT_METADATA,
         title: `ERP ${target.label}`,
         description: `本地 ERP DB 查詢結果，依可用庫存排序的前 ${target.limit} 個商品。`,
         panels: [
@@ -648,6 +654,7 @@ function buildErpCustomerOrderRankingReport(
     JSON.stringify(
       {
         version: 1,
+        ...ERP_REPORT_METADATA,
         title: `ERP ${target.label}`,
         description: `本地 ERP DB 查詢結果，依訂單筆數排序的前 ${target.limit} 個客戶。`,
         panels: [
@@ -702,6 +709,7 @@ function buildErpStatusSummaryReport(
     JSON.stringify(
       {
         version: 1,
+        ...ERP_REPORT_METADATA,
         title: target.panelTitle,
         description: `本地 ERP DB 查詢結果，依 ${target.statusColumn} 聚合的狀態分布。`,
         panels: [
@@ -756,6 +764,7 @@ function buildErpOverdueSummaryReport(
     JSON.stringify(
       {
         version: 1,
+        ...ERP_REPORT_METADATA,
         title: target.panelTitle,
         description: "本地 ERP DB 查詢結果，依交期是否逾期聚合的訂單概況。",
         panels: [
@@ -821,6 +830,7 @@ function buildErpOverdueExceptionReport(
     JSON.stringify(
       {
         version: 1,
+        ...ERP_REPORT_METADATA,
         title: `ERP ${target.label}`,
         description: `本地 ERP DB 查詢結果，列出交期已過且仍有待出數量的前 ${target.limit} 筆訂單。`,
         panels: [
@@ -882,6 +892,7 @@ function buildErpSalesOrderSummaryReport(
     JSON.stringify(
       {
         version: 1,
+        ...ERP_REPORT_METADATA,
         title: `ERP 訂單 ${target.soId} 摘要`,
         description: `本地 ERP DB 查詢結果，整理 ${target.soId} 的金額、狀態與出貨進度。`,
         panels: [
@@ -912,7 +923,7 @@ export async function buildErpVerifiedDirectQueryAnswer(
   if (salesOrderSummaryTarget) {
     try {
       const result = await duckdbQueryExternalPgAsyncDetailed<ErpSalesOrderSummaryRow>(
-        ERP_CONNECTION_STRING,
+        getErpPostgresConnectionString(),
         `
           WITH line_agg AS (
             SELECT
@@ -1002,7 +1013,7 @@ export async function buildErpVerifiedDirectQueryAnswer(
   if (statusSummaryTarget) {
     try {
       const result = await duckdbQueryExternalPgAsyncDetailed<ErpStatusSummaryRow>(
-        ERP_CONNECTION_STRING,
+        getErpPostgresConnectionString(),
         `
           SELECT
             COALESCE(${statusSummaryTarget.statusColumn}, 'UNKNOWN') AS status_code,
@@ -1034,7 +1045,7 @@ export async function buildErpVerifiedDirectQueryAnswer(
   if (overdueSummaryTarget) {
     try {
       const result = await duckdbQueryExternalPgAsyncDetailed<ErpOverdueSummaryRow>(
-        ERP_CONNECTION_STRING,
+        getErpPostgresConnectionString(),
         `
           SELECT
             CASE
@@ -1071,7 +1082,7 @@ export async function buildErpVerifiedDirectQueryAnswer(
   if (overdueExceptionTarget) {
     try {
       const result = await duckdbQueryExternalPgAsyncDetailed<ErpOverdueExceptionRow>(
-        ERP_CONNECTION_STRING,
+        getErpPostgresConnectionString(),
         `
           WITH line_agg AS (
             SELECT
@@ -1135,7 +1146,7 @@ export async function buildErpVerifiedDirectQueryAnswer(
   if (customerOrderRankingTarget) {
     try {
       const result = await duckdbQueryExternalPgAsyncDetailed<ErpCustomerOrderRankingRow>(
-        ERP_CONNECTION_STRING,
+        getErpPostgresConnectionString(),
         `
           SELECT
             COALESCE(NULLIF(TRIM(c.customer_name), ''), s.customer_id) AS customer_name,
@@ -1170,7 +1181,7 @@ export async function buildErpVerifiedDirectQueryAnswer(
   if (inventoryRankingTarget) {
     try {
       const result = await duckdbQueryExternalPgAsyncDetailed<ErpInventoryRankingRow>(
-        ERP_CONNECTION_STRING,
+        getErpPostgresConnectionString(),
         `
           SELECT
             COALESCE(NULLIF(TRIM(i.item_name), ''), inv.item_id) AS item_name,
@@ -1208,7 +1219,7 @@ export async function buildErpVerifiedDirectQueryAnswer(
 
   try {
     const result = await duckdbQueryExternalPgAsyncDetailed<ErpCountRow>(
-      ERP_CONNECTION_STRING,
+      getErpPostgresConnectionString(),
       `
         SELECT COUNT(*) AS total_count
         FROM erp.public."${target.tableName}"

@@ -30,9 +30,12 @@ describe("buildEnmsContextPack", () => {
       "statistical demand forecast against contract capacity",
     );
     expect(pack.execution_hints.join(" ")).toContain(
-      "host=118.168.188.27 port=55433 dbname=EnMS user=sa password=ym@mes42769778 sslmode=disable",
+      "server-side EnMS DB connector",
     );
-    expect(pack.execution_hints.join(" ")).toContain("dbname=enms_27");
+    expect(pack.execution_hints.join(" ")).not.toContain("ym@mes42769778");
+    expect(pack.execution_hints.join(" ")).toContain(
+      "runtime-configured server-side connector",
+    );
   });
 
   it("routes anomaly questions toward raw hypertable drill-down", () => {

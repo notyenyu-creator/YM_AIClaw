@@ -3,7 +3,12 @@
 import { useEffect, useState, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { ChartPanel } from "./chart-panel";
-import type { ReportConfig, PanelConfig } from "./types";
+import type {
+  ReportConfig,
+  PanelConfig,
+  ReportSourceDomain,
+  ReportSourceKind,
+} from "./types";
 
 type ReportCardProps = {
   config: ReportConfig;
@@ -69,12 +74,80 @@ type PanelData = {
   rows: Record<string, unknown>[];
   loading: boolean;
   error?: string;
+  sourceDomain?: ReportSourceDomain | null;
+  sourceKind?: ReportSourceKind | null;
+  rowCount?: number;
 };
 
 function panelInlineRows(panel: PanelConfig): Record<string, unknown>[] | null {
+  if (panel.sql) {return null;}
   if (Array.isArray(panel.rows)) {return panel.rows;}
   if (Array.isArray(panel.data)) {return panel.data;}
   return null;
+}
+
+function sourceDomainLabel(domain: ReportSourceDomain | null | undefined): string | null {
+  if (domain === "ycrm") {return "Y-CRM";}
+  if (domain === "erp") {return "ERP";}
+  if (domain === "enms") {return "EnMS";}
+  return null;
+}
+
+function panelVerifiedSource(panel: PanelConfig): {
+  sourceDomain: ReportSourceDomain;
+  sourceKind: "verified_direct";
+} | null {
+  return panel.sourceKind === "verified_direct" &&
+    (panel.sourceDomain === "ycrm" || panel.sourceDomain === "erp" || panel.sourceDomain === "enms")
+    ? {
+        sourceDomain: panel.sourceDomain,
+        sourceKind: "verified_direct",
+      }
+    : null;
+}
+
+function panelSourceDomain(panel: PanelConfig, data?: PanelData): ReportSourceDomain | null {
+  if (panelInlineRows(panel)) {
+    return data?.sourceDomain ?? panelVerifiedSource(panel)?.sourceDomain ?? null;
+  }
+  return data?.sourceDomain ?? null;
+}
+
+function sourceKindLabel(kind: ReportSourceKind | null | undefined): string | null {
+  if (kind === "verified_direct") {return "已驗證直查";}
+  if (kind === "external_postgres") {return "外部 DB";}
+  if (kind === "blocked_external_postgres") {return "外部 DB 已封鎖";}
+  if (kind === "workspace_duckdb") {return "Workspace DB";}
+  if (kind === "inline_rows") {return "內嵌資料";}
+  return null;
+}
+
+function sourceDomainBadgeStyle(kind: ReportSourceKind | null | undefined) {
+  if (kind === "blocked_external_postgres") {
+    return { color: "#f97316", background: "rgba(249, 115, 22, 0.14)" };
+  }
+  return { color: "#0ea5e9", background: "rgba(14, 165, 233, 0.12)" };
+}
+
+function sourceKindBadgeStyle(kind: ReportSourceKind | null | undefined) {
+  if (kind === "blocked_external_postgres") {
+    return { color: "#f97316", background: "rgba(249, 115, 22, 0.14)" };
+  }
+  return { color: "#22c55e", background: "rgba(34, 197, 94, 0.12)" };
+}
+
+function panelErrorTitle(kind: ReportSourceKind | null | undefined): string {
+  if (kind === "blocked_external_postgres") {
+    return "外部 SQL 已封鎖";
+  }
+  return "Query error";
+}
+
+function panelSourceKind(panel: PanelConfig, data?: PanelData): ReportSourceKind | null {
+  if (panelInlineRows(panel)) {
+    return data?.sourceKind ?? panelVerifiedSource(panel)?.sourceKind ?? "inline_rows";
+  }
+  return data?.sourceKind ?? null;
 }
 
 // --- Grid size helpers ---
@@ -115,9 +188,16 @@ export function ReportCard({ config }: ReportCardProps) {
     for (const panel of panels) {
       const inlineRows = panelInlineRows(panel);
       if (inlineRows) {
+        const verifiedSource = panelVerifiedSource(panel);
         setPanelData((prev) => ({
           ...prev,
-          [panel.id]: { rows: inlineRows, loading: false },
+          [panel.id]: {
+            rows: inlineRows,
+            loading: false,
+            sourceDomain: verifiedSource?.sourceDomain ?? null,
+            sourceKind: verifiedSource?.sourceKind ?? "inline_rows",
+            rowCount: inlineRows.length,
+          },
         }));
         continue;
       }
@@ -138,16 +218,49 @@ export function ReportCard({ config }: ReportCardProps) {
         });
         if (!res.ok) {
           const data = await res.json().catch(() => ({}));
+          const sourceDomain =
+            data.sourceDomain === "ycrm" || data.sourceDomain === "erp" || data.sourceDomain === "enms"
+              ? data.sourceDomain
+              : null;
+          const sourceKind =
+            data.sourceKind === "workspace_duckdb" ||
+            data.sourceKind === "external_postgres" ||
+            data.sourceKind === "blocked_external_postgres"
+              ? data.sourceKind
+              : null;
           setPanelData((prev) => ({
             ...prev,
-            [panel.id]: { rows: [], loading: false, error: data.error || `HTTP ${res.status}` },
+            [panel.id]: {
+              rows: [],
+              loading: false,
+              error: data.error || `HTTP ${res.status}`,
+              sourceDomain,
+              sourceKind,
+            },
           }));
           continue;
         }
         const data = await res.json();
+        const sourceDomain =
+          data.sourceDomain === "ycrm" || data.sourceDomain === "erp" || data.sourceDomain === "enms"
+            ? data.sourceDomain
+            : null;
+        const sourceKind =
+          data.sourceKind === "workspace_duckdb" ||
+          data.sourceKind === "external_postgres" ||
+          data.sourceKind === "blocked_external_postgres"
+            ? data.sourceKind
+            : null;
+        const rows = Array.isArray(data.rows) ? data.rows : [];
         setPanelData((prev) => ({
           ...prev,
-          [panel.id]: { rows: data.rows ?? [], loading: false },
+          [panel.id]: {
+            rows,
+            loading: false,
+            sourceDomain,
+            sourceKind,
+            rowCount: rows.length,
+          },
         }));
       } catch (err) {
         setPanelData((prev) => ({
@@ -378,6 +491,9 @@ function CompactPanelCard({
   panel: PanelConfig;
   data?: PanelData;
 }) {
+  const sourceKindValue = panelSourceKind(panel, data);
+  const sourceLabel = sourceDomainLabel(panelSourceDomain(panel, data));
+  const sourceKind = sourceKindLabel(sourceKindValue);
   return (
     <div
       className="rounded-lg overflow-hidden"
@@ -387,15 +503,33 @@ function CompactPanelCard({
       }}
     >
       <div className="px-2.5 py-1.5">
-        <h4
-          className="text-[11px] font-medium truncate"
-          style={{ color: "var(--color-text)" }}
-        >
-          {panel.title}
-        </h4>
+        <div className="flex items-center justify-between gap-2">
+          <h4
+            className="text-[11px] font-medium truncate"
+            style={{ color: "var(--color-text)" }}
+          >
+            {panel.title}
+          </h4>
+          {sourceLabel && (
+            <span
+              className="text-[9px] px-1.5 py-0.5 rounded-full flex-shrink-0"
+              style={sourceDomainBadgeStyle(sourceKindValue)}
+            >
+              資料:{sourceLabel}
+            </span>
+          )}
+          {sourceKind && (
+            <span
+              className="inline-flex text-[9px] px-1.5 py-0.5 rounded-full flex-shrink-0"
+              style={sourceKindBadgeStyle(sourceKindValue)}
+            >
+              {sourceKind}
+            </span>
+          )}
+        </div>
       </div>
       <div className="px-1 pb-1">
-        {data?.loading ? (
+        {!data || data.loading ? (
           <div className="flex items-center justify-center" style={{ height: 280 }}>
             <div
               className="w-4 h-4 border-2 rounded-full animate-spin"
@@ -429,6 +563,9 @@ function ExpandedPanelCard({
   data?: PanelData;
 }) {
   const colSpan = panelColSpan(panel.size);
+  const sourceKindValue = panelSourceKind(panel, data);
+  const sourceLabel = sourceDomainLabel(panelSourceDomain(panel, data));
+  const sourceKind = sourceKindLabel(sourceKindValue);
 
   return (
     <div
@@ -445,17 +582,35 @@ function ExpandedPanelCard({
         >
           {panel.title}
         </h4>
-        {data && !data.loading && !data.error && (
-          <span
-            className="text-[10px] px-1.5 py-0.5 rounded"
-            style={{ color: "var(--color-text-muted)" }}
-          >
-            {data.rows.length} rows
-          </span>
-        )}
+        <div className="flex items-center gap-1.5">
+          {sourceLabel && (
+            <span
+              className="text-[10px] px-1.5 py-0.5 rounded"
+              style={sourceDomainBadgeStyle(sourceKindValue)}
+            >
+              資料:{sourceLabel}
+            </span>
+          )}
+          {sourceKind && (
+            <span
+              className="text-[10px] px-1.5 py-0.5 rounded"
+              style={sourceKindBadgeStyle(sourceKindValue)}
+            >
+              {sourceKind}
+            </span>
+          )}
+          {data && !data.loading && !data.error && (
+            <span
+              className="text-[10px] px-1.5 py-0.5 rounded"
+              style={{ color: "var(--color-text-muted)" }}
+            >
+              {data.rows.length} rows
+            </span>
+          )}
+        </div>
       </div>
       <div className="px-1.5 pb-2">
-        {data?.loading ? (
+        {!data || data.loading ? (
           <div className="flex items-center justify-center" style={{ height: 280 }}>
             <div
               className="w-4 h-4 border-2 rounded-full animate-spin"
@@ -468,7 +623,7 @@ function ExpandedPanelCard({
         ) : data?.error ? (
           <div className="flex flex-col items-center justify-center gap-1.5" style={{ height: 280 }}>
             <p className="text-[10px]" style={{ color: "#f87171" }}>
-              Query error
+              {panelErrorTitle(data.sourceKind)}
             </p>
             <p
               className="text-[10px] px-2 py-1 rounded max-w-xs text-center"

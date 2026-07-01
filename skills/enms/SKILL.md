@@ -37,10 +37,10 @@ metadata: { "openclaw": { "always": true, "emoji": "⚡" } }
    - 不假設 schema / table / column 一定存在
 
 4. **禁止猜測 EnMS 連線資訊**
-   - 需要使用 DuckDB `postgres_scanner` 時，只能使用本文件列出的 `.27 / EnMS` 連線資訊
+   - 需要使用 DuckDB `postgres_scanner` 時，只能使用伺服器環境變數提供的 `.27 / EnMS` 連線資訊
    - **禁止**自行改寫成 `dbname=enms_27`
    - **禁止**改寫成 `host=localhost port=5432`
-   - **禁止**改寫成 `user=postgres password=postgres`
+   - **禁止**改寫成任何自行猜測的本機預設帳號或密碼
    - 若該連線失敗，應明確回報缺少連線或資料，而不是換用猜測的資料庫名稱
 
 5. **先摘要層，後原始層**
@@ -160,14 +160,15 @@ Host：118.168.188.27
 Port：55433
 Database：EnMS
 Username：sa
-Password：ym@mes42769778
+Password：由部署環境變數提供，不寫在文件或 prompt 內
 SSL：disable
 ```
 
-### 其他可用 Host
+### 非 AI runtime 的維運診斷 Host
 
-- 同機部署：`localhost:55433`
-- 同 Docker network：`postgresql:5432`
+DenchClaw / EnClaw 的 EnMS AI runtime 固定只使用 `118.168.188.27:55433/EnMS`。
+若 DBA 或維運人員在資料庫主機內部手動診斷，可能會看到 `localhost:55433`
+或 Docker network 的 `postgresql:5432`，但這些不是 AI runtime 可以自行切換的資料來源。
 
 ### 讀取通道（必須）
 
@@ -199,28 +200,23 @@ SQL
 - `.27 / EnMS`
 - `port=55433`
 - `user=sa`
-- `password=ym@mes42769778`
+- `password` 由 `ENMS_PG_CONNECTION` / `OPENCLAW_ENMS_PG_CONNECTION` / `ENMS_POSTGRES_CONNECTION` 提供
 - alias = `enms`
 - `READ_ONLY`
 
 ```bash
-duckdb -json ':memory:' "
-INSTALL postgres_scanner;
-LOAD postgres_scanner;
-ATTACH 'host=118.168.188.27 port=55433 dbname=EnMS user=sa password=ym@mes42769778'
-AS enms (TYPE postgres_scanner, READ_ONLY);
-SELECT version();
-"
+export ENMS_PG_CONNECTION='host=118.168.188.27 port=55433 dbname=EnMS user=sa password=<由部署環境提供> sslmode=disable'
+bash skills/enms/scripts/query_enms.sh "SELECT version();"
 ```
 
 ### 禁止使用的錯誤範例
 
 ```bash
 # 錯誤：不要猜資料庫名
-ATTACH 'dbname=enms_27 user=postgres password=postgres host=localhost port=5432'
+ATTACH 'dbname=<guessed_enms_db> user=<guessed_user> password=<guessed_password> host=localhost port=5432'
 
 # 錯誤：不要把 Y-CRM / 預設 PostgreSQL 連線套到 EnMS
-ATTACH 'dbname=default user=postgres password=postgres host=localhost port=5432'
+ATTACH 'dbname=<ycrm_or_default_db> user=<postgres_user> password=<postgres_password> host=localhost port=5432'
 ```
 
 ### 不建議當主來源
@@ -228,7 +224,8 @@ ATTACH 'dbname=default user=postgres password=postgres host=localhost port=5432'
 Mongo 只作為補充，不當 phase-1 主資料源：
 
 ```text
-mongodb://admin:admin123@118.168.188.27:27018/enms_mongo?authSource=admin
+由部署環境變數提供 Mongo URI；不要把帳號密碼寫進文件或 prompt。
+例如：ENMS_MONGO_URI=mongodb://<user>:<secret>@118.168.188.27:27018/enms_mongo?authSource=admin
 ```
 
 ---

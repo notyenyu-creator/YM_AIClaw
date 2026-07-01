@@ -5,9 +5,16 @@ import {
   type YcrmContextBuilderInput,
 } from "./ycrm-context-builder";
 
+type YcrmContextBuilderInputOverrides =
+  Partial<Omit<YcrmContextBuilderInput, "request" | "runtime_state" | "defaults">> & {
+    request?: Partial<YcrmContextBuilderInput["request"]>;
+    runtime_state?: Partial<YcrmContextBuilderInput["runtime_state"]>;
+    defaults?: Partial<YcrmContextBuilderInput["defaults"]>;
+  };
+
 function makeInput(
   userMessage: string,
-  overrides?: Partial<YcrmContextBuilderInput>,
+  overrides?: YcrmContextBuilderInputOverrides,
 ): YcrmContextBuilderInput {
   return {
     ...createDefaultYcrmContextInput(),
@@ -223,6 +230,17 @@ describe("buildYcrmContext", () => {
   it("lets an explicit 'do not use Y-CRM' instruction override a Y-CRM tab hint", () => {
     const result = buildYcrmContext(makeInput(
       "不要看 Y-CRM，改看 ERP 庫存與出貨狀態。",
+      {
+        request: { current_system_hint: "ycrm" },
+      },
+    ));
+
+    expect(result.decision.should_route_to_ycrm).toBe(false);
+  });
+
+  it("treats system-first Y-CRM exclusions as explicit exclusions", () => {
+    const result = buildYcrmContext(makeInput(
+      "Y-CRM 先不要查，改看 ERP 庫存與出貨狀態。",
       {
         request: { current_system_hint: "ycrm" },
       },

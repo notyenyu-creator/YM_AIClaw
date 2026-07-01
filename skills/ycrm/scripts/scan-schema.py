@@ -14,11 +14,17 @@ import subprocess, json, sys, os, re
 from datetime import datetime
 
 # ── 設定 ──
-DB_NAME = os.environ.get("DB_NAME", "default")
-DB_USER = os.environ.get("DB_USER", "postgres")
-DB_PASS = os.environ.get("DB_PASS", "postgres")
-DB_HOST = os.environ.get("DB_HOST", "localhost")
-DB_PORT = os.environ.get("DB_PORT", "5432")
+DB_ENV_KEYS = (
+    "YCRM_PG_CONNECTION",
+    "Y_CRM_PG_CONNECTION",
+    "OPENCLAW_YCRM_PG_CONNECTION",
+    "YCRM_POSTGRES_CONNECTION",
+)
+YCRM_CONN = next((os.environ.get(key, "").strip() for key in DB_ENV_KEYS if os.environ.get(key, "").strip()), "")
+if not YCRM_CONN:
+    print("ERROR: missing Y-CRM DB connection. Set YCRM_PG_CONNECTION before scanning schema.", file=sys.stderr)
+    sys.exit(1)
+YCRM_CONN_SQL = YCRM_CONN.replace("'", "''")
 ALIAS = "ycrm"
 SCHEMA = sys.argv[1] if len(sys.argv) > 1 else "workspace_3joxkr9ofo5hlxjan164egffx"
 
@@ -26,7 +32,7 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 OUTPUT_DIR = os.path.join(SCRIPT_DIR, "..", "reference")
 OUTPUT_FILE = os.path.join(OUTPUT_DIR, f"auto-schema-{SCHEMA}.md")
 
-ATTACH = f"INSTALL postgres_scanner; LOAD postgres_scanner; ATTACH 'dbname={DB_NAME} user={DB_USER} password={DB_PASS} host={DB_HOST} port={DB_PORT}' AS {ALIAS} (TYPE postgres_scanner, READ_ONLY);"
+ATTACH = f"INSTALL postgres_scanner; LOAD postgres_scanner; ATTACH '{YCRM_CONN_SQL}' AS {ALIAS} (TYPE postgres_scanner, READ_ONLY);"
 
 # ── 拼音 → 中文對照 ──
 PINYIN_MAP = {
@@ -125,10 +131,14 @@ STANDARD_COLS = {
 def run_duckdb(sql):
     """執行 DuckDB 查詢，回傳 JSON list"""
     full_sql = f"{ATTACH} {sql}"
+    child_env = os.environ.copy()
+    for key in DB_ENV_KEYS:
+        child_env.pop(key, None)
     try:
         result = subprocess.run(
-            ["duckdb", "-json", ":memory:", full_sql],
-            capture_output=True, text=True, timeout=30
+            ["duckdb", "-json", ":memory:"],
+            input=full_sql,
+            capture_output=True, text=True, timeout=30, env=child_env
         )
         if result.returncode == 0 and result.stdout.strip():
             return json.loads(result.stdout)

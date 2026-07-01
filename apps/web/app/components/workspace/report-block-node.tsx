@@ -4,6 +4,7 @@ import { Node, mergeAttributes } from "@tiptap/core";
 import { ReactNodeViewRenderer, NodeViewWrapper, type ReactNodeViewProps } from "@tiptap/react";
 import { useState, useCallback } from "react";
 import type { ReportConfig } from "../../components/charts/types";
+import { normalizeUntrustedReportConfig } from "@/lib/report-blocks";
 
 // Lazy-load ReportCard to keep bundle light
 import dynamic from "next/dynamic";
@@ -39,7 +40,7 @@ function ReportBlockView({
   let parseError: string | null = null;
 
   try {
-    const parsed = JSON.parse(configAttr);
+    const parsed = normalizeUntrustedReportConfig(JSON.parse(configAttr));
     if (parsed?.panels && Array.isArray(parsed.panels)) {
       parsedConfig = parsed as ReportConfig;
     } else {

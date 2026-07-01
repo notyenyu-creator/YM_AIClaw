@@ -324,6 +324,34 @@ describe("ChatSessionsSidebar", () => {
     expect(screen.getByText("Y-CRM")).toBeInTheDocument();
   });
 
+  it("makes verified direct replies clearly different from GX10 model runs", () => {
+    renderSidebar([
+      {
+        id: "s-direct-gx10",
+        title: "Direct DB With GX10 Selected",
+        createdAt: Date.now() - 1_000,
+        updatedAt: Date.now(),
+        messageCount: 2,
+        lastAnswerMeta: {
+          updatedAt: Date.now(),
+          turnStartedAt: Date.now(),
+          answerMode: "verified_direct",
+          requestedModelId: "gx10_hermes/hermes-agent",
+          modelClass: "none",
+          domainId: "enms",
+          executionStrategy: "verified_direct_query",
+        },
+      },
+    ]);
+
+    expect(screen.getByText("直接查資料")).toBeInTheDocument();
+    expect(screen.queryByText("本地模型")).not.toBeInTheDocument();
+    expect(screen.getByText("資料:EnMS")).toBeInTheDocument();
+    expect(screen.getByText("直接查資料").parentElement?.getAttribute("title")).toContain(
+      "這次沒有實際呼叫 AI 模型",
+    );
+  });
+
   it("renders reviewed badge for sessions that were manually resolved", () => {
     renderSidebar([
       {

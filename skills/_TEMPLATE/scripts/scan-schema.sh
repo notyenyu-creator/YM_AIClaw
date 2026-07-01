@@ -1,36 +1,58 @@
 #!/bin/bash
-# Y-CRM Schema 自動掃描腳本
-# 掃描指定工作區的所有表、欄位、外鍵關聯、enum 值
+# {{SYSTEM_DISPLAY_NAME}} Schema 自動掃描腳本
+# 掃描指定 schema 的所有表、欄位、外鍵關聯、enum 值
 # 產出完整的 schema reference，供 AI 直接使用
 #
 # 用法：
 #   bash scan-schema.sh [schema_name]
-#   bash scan-schema.sh                          # 預設掃 Y-CRM 工作區
-#   bash scan-schema.sh workspace_407lopjyyvm7bxeutk1tvqkpo  # 掃指定工作區
+#   bash scan-schema.sh                          # 預設掃 {{DEFAULT_SCHEMA}}
+#   bash scan-schema.sh <schema_name>            # 掃指定 schema
 
 set -euo pipefail
 
-DB_NAME="${DB_NAME:-default}"
-DB_USER="${DB_USER:-postgres}"
-DB_PASS="${DB_PASS:-postgres}"
-DB_HOST="${DB_HOST:-localhost}"
-DB_PORT="${DB_PORT:-5432}"
-ALIAS="ycrm"
-SCHEMA="${1:-workspace_3joxkr9ofo5hlxjan164egffx}"
+CONNECTION_ENV="${CONNECTION_ENV:-{{SYSTEM_ENV_PREFIX}}_PG_CONNECTION}"
+CONNECTION_STRING="${!CONNECTION_ENV:-}"
+
+if [ -z "$CONNECTION_STRING" ]; then
+  echo "ERROR: missing DB connection. Set $CONNECTION_ENV before scanning schema." >&2
+  exit 1
+fi
+
+CONNECTION_STRING_SQL="${CONNECTION_STRING//\'/\'\'}"
+ALIAS="{{ALIAS}}"
+SCHEMA="${1:-{{DEFAULT_SCHEMA}}}"
 
 OUTPUT_DIR="$(dirname "$0")/../reference"
 OUTPUT_FILE="$OUTPUT_DIR/auto-schema-${SCHEMA}.md"
 
-DDB="duckdb -json :memory:"
-ATTACH="INSTALL postgres_scanner; LOAD postgres_scanner; ATTACH 'dbname=$DB_NAME user=$DB_USER password=$DB_PASS host=$DB_HOST port=$DB_PORT' AS $ALIAS (TYPE postgres_scanner, READ_ONLY);"
+sql_literal() {
+  local value="${1//\'/\'\'}"
+  printf "'%s'" "$value"
+}
+
+sql_identifier() {
+  local value="${1//\"/\"\"}"
+  printf '"%s"' "$value"
+}
+
+SCHEMA_LITERAL="$(sql_literal "$SCHEMA")"
+SCHEMA_IDENTIFIER="$(sql_identifier "$SCHEMA")"
+
+run_duckdb() {
+  local query="$1"
+  {
+    printf "INSTALL postgres_scanner; LOAD postgres_scanner; ATTACH '%s' AS %s (TYPE postgres_scanner, READ_ONLY);\n" "$CONNECTION_STRING_SQL" "$ALIAS"
+    printf "%s\n" "$query"
+  } | env -u "$CONNECTION_ENV" duckdb -json :memory:
+}
 
 echo "🔍 掃描 schema: $SCHEMA ..."
 
 # ── 1. 列出所有表 ──
 echo "  📋 掃描表..."
-TABLES_JSON=$($DDB "$ATTACH SELECT table_name FROM $ALIAS.information_schema.tables WHERE table_schema = '$SCHEMA' AND table_name NOT LIKE '\_%' ESCAPE '\\' ORDER BY table_name;" 2>/dev/null)
+TABLES_JSON=$(run_duckdb "SELECT table_name FROM $ALIAS.information_schema.tables WHERE table_schema = $SCHEMA_LITERAL AND table_name NOT LIKE '\_%' ESCAPE '\\' ORDER BY table_name;" 2>/dev/null)
 
-CUSTOM_TABLES_JSON=$($DDB "$ATTACH SELECT table_name FROM $ALIAS.information_schema.tables WHERE table_schema = '$SCHEMA' AND table_name LIKE '\_%' ESCAPE '\\' ORDER BY table_name;" 2>/dev/null)
+CUSTOM_TABLES_JSON=$(run_duckdb "SELECT table_name FROM $ALIAS.information_schema.tables WHERE table_schema = $SCHEMA_LITERAL AND table_name LIKE '\_%' ESCAPE '\\' ORDER BY table_name;" 2>/dev/null)
 
 # ── 2. 對每張表掃描欄位 ──
 echo "  📊 掃描欄位與關聯..."
@@ -61,9 +83,11 @@ TABLES=$(echo "$TABLES_JSON" | python3 -c "import sys,json; [print(r['table_name
 for TABLE in $TABLES; do
   echo "### $TABLE"
   echo ""
+  TABLE_LITERAL="$(sql_literal "$TABLE")"
+  TABLE_IDENTIFIER="$(sql_identifier "$TABLE")"
 
   # 取得欄位
-  COLS_JSON=$($DDB "$ATTACH SELECT column_name, data_type, is_nullable FROM $ALIAS.information_schema.columns WHERE table_schema = '$SCHEMA' AND table_name = '$TABLE' ORDER BY ordinal_position;" 2>/dev/null)
+  COLS_JSON=$(run_duckdb "SELECT column_name, data_type, is_nullable FROM $ALIAS.information_schema.columns WHERE table_schema = $SCHEMA_LITERAL AND table_name = $TABLE_LITERAL ORDER BY ordinal_position;" 2>/dev/null)
 
   echo "| 欄位 | 型別 | 說明 |"
   echo "|------|------|------|"
@@ -210,7 +234,8 @@ for r in rows:
 " 2>/dev/null || true)
 
   for ENUM_COL in $ENUM_COLS; do
-    ENUM_VALS=$($DDB "$ATTACH SELECT DISTINCT \"$ENUM_COL\" AS val FROM $ALIAS.\"$SCHEMA\".\"$TABLE\" WHERE \"deletedAt\" IS NULL AND \"$ENUM_COL\" IS NOT NULL ORDER BY \"$ENUM_COL\" LIMIT 20;" 2>/dev/null || echo "[]")
+    ENUM_IDENTIFIER="$(sql_identifier "$ENUM_COL")"
+    ENUM_VALS=$(run_duckdb "SELECT DISTINCT $ENUM_IDENTIFIER AS val FROM $ALIAS.$SCHEMA_IDENTIFIER.$TABLE_IDENTIFIER WHERE \"deletedAt\" IS NULL AND $ENUM_IDENTIFIER IS NOT NULL ORDER BY $ENUM_IDENTIFIER LIMIT 20;" 2>/dev/null || echo "[]")
     VALS=$(echo "$ENUM_VALS" | python3 -c "import sys,json; vals=json.load(sys.stdin); print(', '.join([r['val'] for r in vals]))" 2>/dev/null || echo "（掃描失敗）")
     if [ -n "$VALS" ]; then
       echo ""
@@ -233,8 +258,9 @@ if [ -n "$CUSTOM_TABLES" ]; then
   for TABLE in $CUSTOM_TABLES; do
     echo "### $TABLE"
     echo ""
+    TABLE_LITERAL="$(sql_literal "$TABLE")"
 
-    COLS_JSON=$($DDB "$ATTACH SELECT column_name, data_type FROM $ALIAS.information_schema.columns WHERE table_schema = '$SCHEMA' AND table_name = '$TABLE' ORDER BY ordinal_position;" 2>/dev/null)
+    COLS_JSON=$(run_duckdb "SELECT column_name, data_type FROM $ALIAS.information_schema.columns WHERE table_schema = $SCHEMA_LITERAL AND table_name = $TABLE_LITERAL ORDER BY ordinal_position;" 2>/dev/null)
 
     echo "| 欄位 | 型別 |"
     echo "|------|------|"
@@ -258,7 +284,8 @@ echo "| 來源表 | FK 欄位 | 推測目標 |"
 echo "|--------|---------|----------|"
 
 for TABLE in $TABLES; do
-  FK_JSON=$($DDB "$ATTACH SELECT column_name FROM $ALIAS.information_schema.columns WHERE table_schema = '$SCHEMA' AND table_name = '$TABLE' AND data_type = 'uuid' AND column_name LIKE '%Id' AND column_name != 'id' ORDER BY column_name;" 2>/dev/null)
+  TABLE_LITERAL="$(sql_literal "$TABLE")"
+  FK_JSON=$(run_duckdb "SELECT column_name FROM $ALIAS.information_schema.columns WHERE table_schema = $SCHEMA_LITERAL AND table_name = $TABLE_LITERAL AND data_type = 'uuid' AND column_name LIKE '%Id' AND column_name != 'id' ORDER BY column_name;" 2>/dev/null)
 
   echo "$FK_JSON" | python3 -c "
 import sys, json

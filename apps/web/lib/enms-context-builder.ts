@@ -255,6 +255,17 @@ function countMatches(
   return { count: matched.length, matched };
 }
 
+function hasExplicitEnmsExclusion(message: string): boolean {
+  return (
+    /(不要查|不要看|不要用|不用|不查|不看|別查|勿查|排除|不要|別|勿)\s*(?:(?:ERP|erp|Y-CRM|y-crm)\s*(?:或|\/|、|,|，)\s*)*(EnMS|enms|能管|能源管理)(?=[\s,，。.!?]|$)/i.test(message) ||
+    /(EnMS|enms|能管|能源管理)[\s,，]*(先)?(不要查|不要看|不要用|不用|不查|不看|別查|勿查|排除)(?=[,，。.!?]|$)/i.test(message)
+  );
+}
+
+function hasNegatedEnergyAnalysis(message: string): boolean {
+  return /(不要|別|勿|不用|不看|不查|不要查|不要分析|不分析|先不要分析).{0,20}(耗電|用電|能耗|能源|電表|場域能耗|需量|功率因數|功因|超約|契約容量)/i.test(message);
+}
+
 export function detectEnmsIntent(message: string): {
   intent: EnmsIntent;
   matchedKeywords: string[];
@@ -308,12 +319,20 @@ export function buildEnmsContext(
   const ycrmSignal = countMatches(message, YCRM_ONLY_KEYWORDS).count;
   const erpSignal = countMatches(message, ERP_ONLY_KEYWORDS).count;
   const otherSystemSignal = Math.max(ycrmSignal, erpSignal);
+  const explicitEnmsExclusion = hasExplicitEnmsExclusion(message);
+  const negatedEnergyAnalysis =
+    hasNegatedEnergyAnalysis(message) &&
+    hint !== "enms" &&
+    (otherSystemSignal > 0 || totalMatches <= 1);
 
   let confidence: "low" | "medium" | "high" = "low";
   let shouldRouteToEnms = false;
   const warnings: string[] = [];
 
-  if (hint === "enms") {
+  if (explicitEnmsExclusion || negatedEnergyAnalysis) {
+    shouldRouteToEnms = false;
+    warnings.push("enms_explicitly_excluded");
+  } else if (hint === "enms") {
     shouldRouteToEnms = true;
     confidence = totalMatches >= 1 ? "high" : "medium";
   } else if (totalMatches >= 2 && totalMatches > otherSystemSignal) {

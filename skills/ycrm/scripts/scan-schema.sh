@@ -10,27 +10,39 @@
 
 set -euo pipefail
 
-DB_NAME="${DB_NAME:-default}"
-DB_USER="${DB_USER:-postgres}"
-DB_PASS="${DB_PASS:-postgres}"
-DB_HOST="${DB_HOST:-localhost}"
-DB_PORT="${DB_PORT:-5432}"
 ALIAS="ycrm"
 SCHEMA="${1:-workspace_3joxkr9ofo5hlxjan164egffx}"
+YCRM_CONN="${YCRM_PG_CONNECTION:-${Y_CRM_PG_CONNECTION:-${OPENCLAW_YCRM_PG_CONNECTION:-${YCRM_POSTGRES_CONNECTION:-}}}}"
+
+if [ -z "$YCRM_CONN" ]; then
+  echo "ERROR: missing Y-CRM DB connection. Set YCRM_PG_CONNECTION before scanning schema." >&2
+  exit 1
+fi
+YCRM_CONN_SQL="${YCRM_CONN//\'/\'\'}"
 
 OUTPUT_DIR="$(dirname "$0")/../reference"
 OUTPUT_FILE="$OUTPUT_DIR/auto-schema-${SCHEMA}.md"
 
-DDB="duckdb -json :memory:"
-ATTACH="INSTALL postgres_scanner; LOAD postgres_scanner; ATTACH 'dbname=$DB_NAME user=$DB_USER password=$DB_PASS host=$DB_HOST port=$DB_PORT' AS $ALIAS (TYPE postgres_scanner, READ_ONLY);"
+run_duckdb() {
+  local query="$1"
+  {
+    printf "INSTALL postgres_scanner; LOAD postgres_scanner; ATTACH '%s' AS %s (TYPE postgres_scanner, READ_ONLY);\n" "$YCRM_CONN_SQL" "$ALIAS"
+    printf "%s\n" "$query"
+  } | env \
+    -u YCRM_PG_CONNECTION \
+    -u Y_CRM_PG_CONNECTION \
+    -u OPENCLAW_YCRM_PG_CONNECTION \
+    -u YCRM_POSTGRES_CONNECTION \
+    duckdb -json :memory:
+}
 
 echo "🔍 掃描 schema: $SCHEMA ..."
 
 # ── 1. 列出所有表 ──
 echo "  📋 掃描表..."
-TABLES_JSON=$($DDB "$ATTACH SELECT table_name FROM $ALIAS.information_schema.tables WHERE table_schema = '$SCHEMA' AND table_name NOT LIKE '\_%' ESCAPE '\\' ORDER BY table_name;" 2>/dev/null)
+TABLES_JSON=$(run_duckdb "SELECT table_name FROM $ALIAS.information_schema.tables WHERE table_schema = '$SCHEMA' AND table_name NOT LIKE '\_%' ESCAPE '\\' ORDER BY table_name;" 2>/dev/null)
 
-CUSTOM_TABLES_JSON=$($DDB "$ATTACH SELECT table_name FROM $ALIAS.information_schema.tables WHERE table_schema = '$SCHEMA' AND table_name LIKE '\_%' ESCAPE '\\' ORDER BY table_name;" 2>/dev/null)
+CUSTOM_TABLES_JSON=$(run_duckdb "SELECT table_name FROM $ALIAS.information_schema.tables WHERE table_schema = '$SCHEMA' AND table_name LIKE '\_%' ESCAPE '\\' ORDER BY table_name;" 2>/dev/null)
 
 # ── 2. 對每張表掃描欄位 ──
 echo "  📊 掃描欄位與關聯..."
@@ -63,7 +75,7 @@ for TABLE in $TABLES; do
   echo ""
 
   # 取得欄位
-  COLS_JSON=$($DDB "$ATTACH SELECT column_name, data_type, is_nullable FROM $ALIAS.information_schema.columns WHERE table_schema = '$SCHEMA' AND table_name = '$TABLE' ORDER BY ordinal_position;" 2>/dev/null)
+  COLS_JSON=$(run_duckdb "SELECT column_name, data_type, is_nullable FROM $ALIAS.information_schema.columns WHERE table_schema = '$SCHEMA' AND table_name = '$TABLE' ORDER BY ordinal_position;" 2>/dev/null)
 
   echo "| 欄位 | 型別 | 說明 |"
   echo "|------|------|------|"
@@ -210,7 +222,7 @@ for r in rows:
 " 2>/dev/null || true)
 
   for ENUM_COL in $ENUM_COLS; do
-    ENUM_VALS=$($DDB "$ATTACH SELECT DISTINCT \"$ENUM_COL\" AS val FROM $ALIAS.\"$SCHEMA\".\"$TABLE\" WHERE \"deletedAt\" IS NULL AND \"$ENUM_COL\" IS NOT NULL ORDER BY \"$ENUM_COL\" LIMIT 20;" 2>/dev/null || echo "[]")
+    ENUM_VALS=$(run_duckdb "SELECT DISTINCT \"$ENUM_COL\" AS val FROM $ALIAS.\"$SCHEMA\".\"$TABLE\" WHERE \"deletedAt\" IS NULL AND \"$ENUM_COL\" IS NOT NULL ORDER BY \"$ENUM_COL\" LIMIT 20;" 2>/dev/null || echo "[]")
     VALS=$(echo "$ENUM_VALS" | python3 -c "import sys,json; vals=json.load(sys.stdin); print(', '.join([r['val'] for r in vals]))" 2>/dev/null || echo "（掃描失敗）")
     if [ -n "$VALS" ]; then
       echo ""
@@ -234,7 +246,7 @@ if [ -n "$CUSTOM_TABLES" ]; then
     echo "### $TABLE"
     echo ""
 
-    COLS_JSON=$($DDB "$ATTACH SELECT column_name, data_type FROM $ALIAS.information_schema.columns WHERE table_schema = '$SCHEMA' AND table_name = '$TABLE' ORDER BY ordinal_position;" 2>/dev/null)
+    COLS_JSON=$(run_duckdb "SELECT column_name, data_type FROM $ALIAS.information_schema.columns WHERE table_schema = '$SCHEMA' AND table_name = '$TABLE' ORDER BY ordinal_position;" 2>/dev/null)
 
     echo "| 欄位 | 型別 |"
     echo "|------|------|"
@@ -258,7 +270,7 @@ echo "| 來源表 | FK 欄位 | 推測目標 |"
 echo "|--------|---------|----------|"
 
 for TABLE in $TABLES; do
-  FK_JSON=$($DDB "$ATTACH SELECT column_name FROM $ALIAS.information_schema.columns WHERE table_schema = '$SCHEMA' AND table_name = '$TABLE' AND data_type = 'uuid' AND column_name LIKE '%Id' AND column_name <> 'id' ORDER BY column_name;" 2>/dev/null)
+  FK_JSON=$(run_duckdb "SELECT column_name FROM $ALIAS.information_schema.columns WHERE table_schema = '$SCHEMA' AND table_name = '$TABLE' AND data_type = 'uuid' AND column_name LIKE '%Id' AND column_name <> 'id' ORDER BY column_name;" 2>/dev/null)
 
   echo "$FK_JSON" | python3 -c "
 import sys, json

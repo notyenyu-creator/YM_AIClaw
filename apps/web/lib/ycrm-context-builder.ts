@@ -267,7 +267,9 @@ function detectIntent(message: string, priorIntentHint: YcrmIntent | null): Ycrm
 
 function shouldRouteToYcrm(message: string, hint: string | null, intent: YcrmIntent): boolean {
   const mentionsYcrm = lowerIncludes(message, "y-crm") || message.includes("Y-CRM");
-  const negativeYcrmMention = /(不要|別|勿|不用|不看|排除|不要查|不要用).{0,16}(Y-CRM|y-crm)|(Y-CRM|y-crm).{0,16}(不要|別|勿|不用|不看|排除)/i.test(message);
+  const negativeYcrmMention =
+    /(不要查|不要看|不要用|不用|不查|不看|別查|勿查|排除|不要|別|勿)\s*(?:(?:ERP|erp|EnMS|enms|能管|能源管理)\s*(?:或|\/|、|,|，)\s*)*(Y-CRM|y-crm)(?=[\s,，。.!?]|$)/i.test(message)
+    || /(Y-CRM|y-crm)[\s,，]*(先)?(不要查|不要看|不要用|不用|不查|不看|別查|勿查|排除)(?=[,，。.!?]|$)/i.test(message);
 
   if (negativeYcrmMention) {
     return false;
@@ -437,7 +439,7 @@ function buildHandoff(message: string, intent: YcrmIntent): YcrmContextBuilderOu
     targets.add("mes");
   }
   if (["能源", "energy"].some((keyword) => lowerIncludes(message, keyword))) {
-    targets.add("ems");
+    targets.add("enms");
   }
 
   return {

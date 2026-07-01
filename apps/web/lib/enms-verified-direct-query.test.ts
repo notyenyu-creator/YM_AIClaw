@@ -1,4 +1,8 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const TEST_ENMS_CONNECTION =
+  "host=118.168.188.27 port=55433 dbname=EnMS user=test password=secret sslmode=disable";
+const ORIGINAL_ENV = { ...process.env };
 
 vi.mock("./workspace", () => ({
   duckdbQueryExternalPgAsyncDetailed: vi.fn(),
@@ -8,6 +12,13 @@ describe("buildEnmsVerifiedDirectQueryAnswer", () => {
   beforeEach(() => {
     vi.resetModules();
     vi.clearAllMocks();
+    process.env.ENMS_PG_CONNECTION = TEST_ENMS_CONNECTION;
+    delete process.env.OPENCLAW_ENMS_PG_CONNECTION;
+    delete process.env.ENMS_POSTGRES_CONNECTION;
+  });
+
+  afterEach(() => {
+    process.env = { ...ORIGINAL_ENV };
   });
 
   it("answers exact account demand-alert count from EnMS DB rows and emits report-json", async () => {
@@ -46,8 +57,48 @@ describe("buildEnmsVerifiedDirectQueryAnswer", () => {
     expect(answer).toContain("Alert_4：1,983 筆");
     expect(answer).toContain("Alert_OverContract：79 筆");
     expect(answer).toContain("```report-json");
+    expect(answer).toContain("\"sourceDomain\": \"enms\"");
+    expect(answer).toContain("\"sourceKind\": \"verified_direct\"");
     expect(answer).toContain("\"rows\"");
     expect(answer).toContain("\"alert_type\": \"Alert_4\"");
+  });
+
+  it("returns a safe EnMS unavailable answer when DB config is missing", async () => {
+    delete process.env.ENMS_PG_CONNECTION;
+    delete process.env.OPENCLAW_ENMS_PG_CONNECTION;
+    delete process.env.ENMS_POSTGRES_CONNECTION;
+
+    const { buildEnmsVerifiedDirectQueryAnswer } = await import(
+      "./enms-verified-direct-query"
+    );
+
+    const answer = await buildEnmsVerifiedDirectQueryAnswer({
+      userMessage: "可以幫我用圖表呈現一下目前有多少電表嗎？",
+    });
+
+    expect(answer).toContain("目前 EnMS 資料連線尚未啟用");
+    expect(answer).not.toContain("password=");
+    expect(answer).not.toContain("ATTACH");
+  });
+
+  it("redacts database credentials from EnMS query errors", async () => {
+    const { duckdbQueryExternalPgAsyncDetailed } = await import("./workspace");
+    vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockResolvedValueOnce({
+      rows: [],
+      error:
+        "Catalog Error near ATTACH 'host=118.168.188.27 port=55433 dbname=EnMS user=sa password=secret sslmode=disable' AS enms",
+    });
+
+    const { buildEnmsVerifiedDirectQueryAnswer } = await import(
+      "./enms-verified-direct-query"
+    );
+
+    const answer = await buildEnmsVerifiedDirectQueryAnswer({
+      userMessage: "可以幫我用圖表呈現一下目前有多少電表嗎？",
+    });
+
+    expect(answer).toContain("ATTACH '<redacted-connection>' AS enms");
+    expect(answer).not.toContain("password=secret");
   });
 
   it("does not intercept broader EnMS trend questions", async () => {

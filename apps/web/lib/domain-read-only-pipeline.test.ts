@@ -68,6 +68,58 @@ describe("domain-read-only-pipeline", () => {
     expect(plan.presentation.chartRequested).toBe(true);
   });
 
+  it("blocks EnMS read-only execution when source-of-truth is unavailable", () => {
+    const preflight: EnmsPlannerPreflight = {
+      system: "enms",
+      updatedAt: Date.now(),
+      intent: "natural_language_query",
+      confidence: "high",
+      shouldRouteToEnms: true,
+      matchedKeywords: ["耗電"],
+      warnings: [],
+      presentation: {
+        optional_chart_requested: false,
+        chart_render_allowed: false,
+        chart_guardrail_reason: null,
+        max_chart_panels: 0,
+      },
+    };
+    const pack: EnmsContextPack = {
+      planner: preflight,
+      presentation: preflight.presentation,
+      read_first: [],
+      references: [],
+      wiki: [],
+      playbooks: [],
+      memory_keys: [],
+      live_query_steps: ["read_summary_view_first"],
+      execution_hints: ["Treat EnMS questions as DB-first requests."],
+    };
+    const blockedSnapshot: DomainBootstrapSnapshot = {
+      system: "enms",
+      source: "unavailable",
+      scope: "enms",
+      availability: "blocked",
+      facts: [],
+      joins: [],
+      cautions: ["EnMS 資料連線尚未就緒，已停止本次資料查詢以避免推測。"],
+      gaps: ["目前 EnMS 資料連線尚未啟用"],
+      stillAvailable: ["仍可判斷問題是否屬於 EnMS"],
+    };
+
+    const plan = buildDomainReadOnlyExecutionPlan({
+      system: "enms",
+      userMessage: "請找最近 7 天最耗電設備",
+      preflight,
+      pack,
+      snapshot: blockedSnapshot,
+    });
+
+    expect(plan.eligible).toBe(false);
+    expect(plan.blockedReason).toBe("source_of_truth_unavailable");
+    expect(buildReadOnlyExecutionBlockedReply(plan)).toContain("主要資料來源尚未就緒");
+  });
+
   it("excludes Y-CRM write intents from the unified read-only path", () => {
     const preflight: YcrmPlannerPreflight = {
       system: "ycrm",
@@ -149,8 +201,53 @@ describe("domain-read-only-pipeline", () => {
       snapshot: makeReadySnapshot("ycrm"),
     });
 
-    expect(plan.eligible).toBe(true);
+    expect(plan.eligible).toBe(false);
+    expect(plan.blockedReason).toBe("auto_schema_missing");
     expect(buildReadOnlyExecutionBlockedReply(plan)).toContain("auto-schema");
+  });
+
+  it("returns a blocked reply when Y-CRM requires cross-system evidence", () => {
+    const preflight: YcrmPlannerPreflight = {
+      system: "ycrm",
+      updatedAt: Date.now(),
+      intent: "cross_system_request",
+      confidence: "high",
+      shouldRouteToYcrm: true,
+      workspaceId: "workspace_demo",
+      needsWorkspaceValidation: false,
+      warnings: ["ycrm_provides_only_commercial_context_here"],
+      blockers: ["cross_system_required"],
+      crossSystem: true,
+      targetSystems: ["erp"],
+    };
+    const pack: YcrmContextPack = {
+      planner: preflight,
+      presentation: {
+        optional_chart_requested: false,
+        chart_render_allowed: false,
+        chart_guardrail_reason: null,
+        max_chart_panels: 0,
+      },
+      read_first: [],
+      references: [],
+      wiki: [],
+      playbooks: [],
+      memory_keys: [],
+      live_query_steps: ["read_ycrm_context_first"],
+      execution_hints: ["Do not answer cross-system questions from Y-CRM alone."],
+    };
+
+    const plan = buildDomainReadOnlyExecutionPlan({
+      system: "ycrm",
+      userMessage: "請比對 Y-CRM 商機和 ERP 出貨狀態",
+      preflight,
+      pack,
+      snapshot: makeReadySnapshot("ycrm"),
+    });
+
+    expect(plan.eligible).toBe(false);
+    expect(plan.blockedReason).toBe("cross_system_required");
+    expect(buildReadOnlyExecutionBlockedReply(plan)).toContain("需要跨系統資料");
   });
 
   it("decorates ERP unified read-only prompts with explicit execution rules", () => {
@@ -190,6 +287,9 @@ describe("domain-read-only-pipeline", () => {
     });
 
     expect(plan.eligible).toBe(true);
+    if (!plan.eligible) {
+      throw new Error("expected ERP read-only plan to be eligible");
+    }
     const decorated = decorateMessageWithReadOnlyExecutionPlan("請列出庫存圖表", plan);
     expect(decorated).toContain("[Unified Read-Only Execution Plan]");
     expect(decorated).toContain("pipeline.domain=erp");

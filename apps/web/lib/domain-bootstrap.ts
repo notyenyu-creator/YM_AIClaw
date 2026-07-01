@@ -1,14 +1,25 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { EnmsContextPack } from "./enms-context-pack";
+import {
+  getErpPostgresConnectionString,
+  getUserFacingDomainDbUnavailableMessage,
+  getYcrmPostgresConnectionString,
+  isDomainDbConfigurationError,
+} from "./domain-db-config";
+import {
+  getEnmsPostgresConnectionString,
+  getUserFacingEnmsDbUnavailableMessage,
+  isEnmsDbConfigurationError,
+  redactDatabaseConnectionSecrets,
+} from "./enms-db-config";
 import type { ErpContextPack } from "./erp-context-pack";
 import type { YcrmContextPack } from "./ycrm-context-pack";
-import { duckdbQueryExternalPgAsync, resolveWorkspaceRoot } from "./workspace";
-
-const ERP_CONNECTION_STRING =
-  "host=118.168.188.27 port=5433 dbname=ErpUAT_local user=erp_local password=erp_local";
-const ENMS_CONNECTION_STRING =
-  "host=118.168.188.27 port=55433 dbname=EnMS user=sa password=ym@mes42769778 sslmode=disable";
+import {
+  duckdbQueryExternalPgAsync,
+  duckdbQueryExternalPgAsyncDetailed,
+  resolveWorkspaceRoot,
+} from "./workspace";
 
 export type DomainBootstrapSystem = "ycrm" | "erp" | "enms";
 export type DomainBootstrapSource =
@@ -279,6 +290,7 @@ async function buildYcrmBootstrapSnapshot(
   if (!autoSchemaPath) {
     return null;
   }
+  getYcrmPostgresConnectionString();
 
   const content = readWorkspaceFile(autoSchemaPath);
   if (!content) {
@@ -364,9 +376,32 @@ async function buildYcrmBootstrapSnapshot(
   };
 }
 
+function buildYcrmConfigUnavailableSnapshot(error: unknown): DomainBootstrapSnapshot {
+  const message =
+    error instanceof Error
+      ? error.message
+      : getUserFacingDomainDbUnavailableMessage("ycrm");
+  return {
+    system: "ycrm",
+    source: "unavailable",
+    scope: "ycrm",
+    availability: "blocked",
+    facts: [],
+    joins: [],
+    cautions: ["Y-CRM 資料連線尚未就緒，已停止本次資料查詢以避免推測。"],
+    gaps: [message],
+    stillAvailable: [
+      "仍可判斷問題是否屬於 Y-CRM",
+      "仍可參考既有操作知識與處理建議",
+      "ERP / EnMS 不受此 Y-CRM 連線狀態影響",
+    ],
+  };
+}
+
 async function buildErpBootstrapSnapshot(): Promise<DomainBootstrapSnapshot> {
-  const columnRows = await duckdbQueryExternalPgAsync<ColumnRow>(
-    ERP_CONNECTION_STRING,
+  const erpConnectionString = getErpPostgresConnectionString();
+  const columnResult = await duckdbQueryExternalPgAsyncDetailed<ColumnRow>(
+    erpConnectionString,
     `
       SELECT table_name, column_name
       FROM erp.information_schema.columns
@@ -377,8 +412,14 @@ async function buildErpBootstrapSnapshot(): Promise<DomainBootstrapSnapshot> {
     "erp",
   );
 
-  const countRows = await duckdbQueryExternalPgAsync<Record<string, unknown>>(
-    ERP_CONNECTION_STRING,
+  if (columnResult.error) {
+    return buildErpConfigUnavailableSnapshot(
+      new Error(redactDatabaseConnectionSecrets(columnResult.error)),
+    );
+  }
+
+  const countResult = await duckdbQueryExternalPgAsyncDetailed<Record<string, unknown>>(
+    erpConnectionString,
     `
       SELECT
         (SELECT COUNT(*) FROM erp.public."B_COMPANY") AS company_count,
@@ -390,6 +431,14 @@ async function buildErpBootstrapSnapshot(): Promise<DomainBootstrapSnapshot> {
     "erp",
   );
 
+  if (countResult.error) {
+    return buildErpConfigUnavailableSnapshot(
+      new Error(redactDatabaseConnectionSecrets(countResult.error)),
+    );
+  }
+
+  const columnRows = columnResult.rows;
+  const countRows = countResult.rows;
   const facts: string[] = [];
   const gaps: string[] = [];
   const counts = countRows[0] ?? {};
@@ -429,38 +478,6 @@ async function buildErpBootstrapSnapshot(): Promise<DomainBootstrapSnapshot> {
     }
   }
 
-  if (facts.length === 0) {
-    const fallback = readWorkspaceFile("skills/erp/reference/auto-schema-erp.md");
-    if (fallback) {
-      return {
-        system: "erp",
-        source: "reference_file",
-        scope: "erp.public",
-        availability: "partial",
-        facts: summarizeHeadingsAsFacts(
-          fallback,
-          ["B_COMPANY", "B_SITE", "B_CUSTOMER", "SO", "SO_LINE", "INVENTORY"],
-          "reference_table",
-        ).slice(0, 6),
-        joins: [
-          "SO.customer_id -> B_CUSTOMER.customer_id",
-          "SO_LINE.(company_id, site_id, so_id) -> SO.(company_id, site_id, so_id)",
-        ],
-        cautions: [
-          "Use quoted uppercase table names such as erp.public.\"SO\".",
-          "Filter cancelled documents before drawing conclusions.",
-        ],
-        gaps: [
-          "Live ERP introspection was unavailable, so this snapshot is using the cached reference file.",
-        ],
-        stillAvailable: [
-          "Reference-level table and field guidance",
-          "Safe SQL pattern guidance for quoted uppercase ERP tables",
-        ],
-      };
-    }
-  }
-
   const availability =
     facts.length === 0 ? "blocked" : gaps.length > 0 ? "partial" : "ready";
   return {
@@ -484,6 +501,28 @@ async function buildErpBootstrapSnapshot(): Promise<DomainBootstrapSnapshot> {
       "Company/site scope confirmation",
       "Master-data and schema-level explanation",
       "Any ERP query whose required tables still contain rows",
+    ],
+  };
+}
+
+function buildErpConfigUnavailableSnapshot(error: unknown): DomainBootstrapSnapshot {
+  const message =
+    error instanceof Error
+      ? error.message
+      : getUserFacingDomainDbUnavailableMessage("erp");
+  return {
+    system: "erp",
+    source: "unavailable",
+    scope: "erp.public",
+    availability: "blocked",
+    facts: [],
+    joins: [],
+    cautions: ["ERP 資料連線尚未就緒，已停止本次資料查詢以避免推測。"],
+    gaps: [message],
+    stillAvailable: [
+      "仍可判斷問題是否屬於 ERP",
+      "仍可參考既有操作知識與處理建議",
+      "Y-CRM / EnMS 不受此 ERP 連線狀態影響",
     ],
   };
 }
@@ -529,9 +568,10 @@ async function buildEnmsBootstrapSnapshot(
       messageIncludesAny(userMessage, ["更新", "最近", "新鮮度"])) ||
     needsAnomalyPreview;
   const dayWindow = extractRecentDayWindow(userMessage, 30);
+  const enmsConnectionString = getEnmsPostgresConnectionString();
 
-  const columnRows = await duckdbQueryExternalPgAsync<ColumnRow>(
-    ENMS_CONNECTION_STRING,
+  const columnResult = await duckdbQueryExternalPgAsyncDetailed<ColumnRow>(
+    enmsConnectionString,
     `
       SELECT table_name, column_name
       FROM enms.information_schema.columns
@@ -553,9 +593,15 @@ async function buildEnmsBootstrapSnapshot(
     `,
     "enms",
   );
+  if (columnResult.error) {
+    return buildEnmsConfigUnavailableSnapshot(
+      new Error(redactDatabaseConnectionSecrets(columnResult.error)),
+    );
+  }
+  const columnRows = columnResult.rows;
 
-  const statusRows = await duckdbQueryExternalPgAsync<Record<string, unknown>>(
-    ENMS_CONNECTION_STRING,
+  const statusResult = await duckdbQueryExternalPgAsyncDetailed<Record<string, unknown>>(
+    enmsConnectionString,
     `
       SELECT
         (SELECT COUNT(*) FROM enms.public."sites") AS site_count,
@@ -588,6 +634,12 @@ async function buildEnmsBootstrapSnapshot(
     `,
     "enms",
   );
+  if (statusResult.error) {
+    return buildEnmsConfigUnavailableSnapshot(
+      new Error(redactDatabaseConnectionSecrets(statusResult.error)),
+    );
+  }
+  const statusRows = statusResult.rows;
 
   const facts: string[] = [];
   const gaps: string[] = [];
@@ -606,7 +658,7 @@ async function buildEnmsBootstrapSnapshot(
 
   const siteCandidates = extractSiteCandidates(userMessage);
   const allSiteRows = await duckdbQueryExternalPgAsync<Record<string, unknown>>(
-    ENMS_CONNECTION_STRING,
+    getEnmsPostgresConnectionString(),
     `
       SELECT site_id, site_name, company_no
       FROM enms.public."sites"
@@ -635,7 +687,7 @@ async function buildEnmsBootstrapSnapshot(
     const siteRows = await duckdbQueryExternalPgAsync<
       Record<string, unknown>
     >(
-      ENMS_CONNECTION_STRING,
+      getEnmsPostgresConnectionString(),
       `
         SELECT site_id, site_name, company_no
         FROM enms.public."sites"
@@ -681,7 +733,7 @@ async function buildEnmsBootstrapSnapshot(
             .join(", ")})`
         : "";
     const contractRows = await duckdbQueryExternalPgAsync<Record<string, unknown>>(
-      ENMS_CONNECTION_STRING,
+      getEnmsPostgresConnectionString(),
       `
         WITH ranked AS (
           SELECT
@@ -740,7 +792,7 @@ async function buildEnmsBootstrapSnapshot(
             .join(", ")})`
         : "";
     const pfRows = await duckdbQueryExternalPgAsync<Record<string, unknown>>(
-      ENMS_CONNECTION_STRING,
+      getEnmsPostgresConnectionString(),
       `
         SELECT
           s.site_name,
@@ -779,7 +831,7 @@ async function buildEnmsBootstrapSnapshot(
             .join(", ")})`
         : "";
     const topLoadRows = await duckdbQueryExternalPgAsync<Record<string, unknown>>(
-      ENMS_CONNECTION_STRING,
+      getEnmsPostgresConnectionString(),
       `
         SELECT
           s.site_name,
@@ -822,7 +874,7 @@ async function buildEnmsBootstrapSnapshot(
 
   if (needsAlertTypePreview) {
     const alertRows = await duckdbQueryExternalPgAsync<Record<string, unknown>>(
-      ENMS_CONNECTION_STRING,
+      getEnmsPostgresConnectionString(),
       `
         SELECT
           "AlertType",
@@ -846,7 +898,7 @@ async function buildEnmsBootstrapSnapshot(
 
   if (needsBillTrendPreview) {
     const billRows = await duckdbQueryExternalPgAsync<Record<string, unknown>>(
-      ENMS_CONNECTION_STRING,
+      getEnmsPostgresConnectionString(),
       `
         SELECT
           "AccountNumber",
@@ -877,7 +929,7 @@ async function buildEnmsBootstrapSnapshot(
 
   if (needsSiteAccountPreview) {
     const siteAccountRows = await duckdbQueryExternalPgAsync<Record<string, unknown>>(
-      ENMS_CONNECTION_STRING,
+      getEnmsPostgresConnectionString(),
       `
         SELECT
           s.site_name,
@@ -920,7 +972,7 @@ async function buildEnmsBootstrapSnapshot(
             .join(", ")})`
         : "";
     const todayPfRows = await duckdbQueryExternalPgAsync<Record<string, unknown>>(
-      ENMS_CONNECTION_STRING,
+      getEnmsPostgresConnectionString(),
       `
         SELECT
           s.site_name,
@@ -942,7 +994,7 @@ async function buildEnmsBootstrapSnapshot(
       "enms",
     );
     const todayAlertRows = await duckdbQueryExternalPgAsync<Record<string, unknown>>(
-      ENMS_CONNECTION_STRING,
+      getEnmsPostgresConnectionString(),
       `
         SELECT
           s.site_name,
@@ -963,7 +1015,7 @@ async function buildEnmsBootstrapSnapshot(
       "enms",
     );
     const todayRawRows = await duckdbQueryExternalPgAsync<Record<string, unknown>>(
-      ENMS_CONNECTION_STRING,
+      getEnmsPostgresConnectionString(),
       `
         SELECT
           s.site_name,
@@ -998,11 +1050,11 @@ async function buildEnmsBootstrapSnapshot(
     }
     for (const row of todayAlertRows) {
       const key = String(row.site_name);
-      anomalyMap.set(key, { ...(anomalyMap.get(key) ?? {}), ...row });
+      anomalyMap.set(key, { ...anomalyMap.get(key), ...row });
     }
     for (const row of todayRawRows) {
       const key = String(row.site_name);
-      anomalyMap.set(key, { ...(anomalyMap.get(key) ?? {}), ...row });
+      anomalyMap.set(key, { ...anomalyMap.get(key), ...row });
     }
 
     for (const row of anomalyMap.values()) {
@@ -1021,7 +1073,7 @@ async function buildEnmsBootstrapSnapshot(
             .join(", ")})`
         : "";
     const benchmarkRows = await duckdbQueryExternalPgAsync<Record<string, unknown>>(
-      ENMS_CONNECTION_STRING,
+      getEnmsPostgresConnectionString(),
       `
         WITH recent AS (
           SELECT
@@ -1131,7 +1183,7 @@ async function buildEnmsBootstrapSnapshot(
         : "";
 
     const roiRows = await duckdbQueryExternalPgAsync<Record<string, unknown>>(
-      ENMS_CONNECTION_STRING,
+      getEnmsPostgresConnectionString(),
       `
         WITH site_accounts AS (
           SELECT DISTINCT
@@ -1342,6 +1394,30 @@ async function buildEnmsBootstrapSnapshot(
   };
 }
 
+function buildEnmsConfigUnavailableSnapshot(
+  error: unknown,
+): DomainBootstrapSnapshot {
+  const message =
+    error instanceof Error
+      ? error.message
+      : getUserFacingEnmsDbUnavailableMessage();
+  return {
+    system: "enms",
+    source: "unavailable",
+    scope: "enms.public",
+    availability: "blocked",
+    facts: [],
+    joins: [],
+    cautions: ["EnMS 資料連線尚未就緒，已停止本次資料查詢以避免推測。"],
+    gaps: [message],
+    stillAvailable: [
+      "仍可判斷問題是否屬於 EnMS",
+      "仍可參考既有操作知識與處理建議",
+      "ERP / Y-CRM 不受此 EnMS 連線狀態影響",
+    ],
+  };
+}
+
 export async function buildDomainBootstrapSnapshot(
   request: BootstrapRequest,
 ): Promise<DomainBootstrapSnapshot | null> {
@@ -1356,7 +1432,16 @@ export async function buildDomainBootstrapSnapshot(
       default:
         return null;
     }
-  } catch {
+  } catch (error) {
+    if (request.system === "ycrm" && isDomainDbConfigurationError(error)) {
+      return buildYcrmConfigUnavailableSnapshot(error);
+    }
+    if (request.system === "erp" && isDomainDbConfigurationError(error)) {
+      return buildErpConfigUnavailableSnapshot(error);
+    }
+    if (request.system === "enms" && isEnmsDbConfigurationError(error)) {
+      return buildEnmsConfigUnavailableSnapshot(error);
+    }
     return null;
   }
 }
@@ -1407,25 +1492,49 @@ function selectRelevantBootstrapFacts(
       score += 50;
     }
     if (wantsEfficiency) {
-      if (fact.startsWith("billing_calendar_mapping:")) score += 90;
-      if (fact.startsWith("roi_preview_fact:")) score += 120;
-      if (fact.startsWith("roi_readiness:")) score += 100;
-      if (fact.startsWith("bill_trend_fact:")) score += 90;
-      if (fact.startsWith("site_accounts:")) score += 70;
+      if (fact.startsWith("billing_calendar_mapping:")) {
+        score += 90;
+      }
+      if (fact.startsWith("roi_preview_fact:")) {
+        score += 120;
+      }
+      if (fact.startsWith("roi_readiness:")) {
+        score += 100;
+      }
+      if (fact.startsWith("bill_trend_fact:")) {
+        score += 90;
+      }
+      if (fact.startsWith("site_accounts:")) {
+        score += 70;
+      }
     }
-    if (wantsTopLoad && fact.startsWith("top_load_")) score += 120;
-    if (wantsContractRisk && fact.startsWith("contract_risk_")) score += 120;
-    if (wantsPowerFactor && fact.startsWith("power_factor_")) score += 120;
-    if (wantsAlertSummary && fact.startsWith("alert_type_")) score += 120;
-    if (wantsSiteAccounts && fact.startsWith("site_accounts:")) score += 120;
-    if (wantsBenchmark && fact.startsWith("site_benchmark_")) score += 120;
-    if (wantsBenchmark && fact.startsWith("benchmark_window:")) score += 100;
+    if (wantsTopLoad && fact.startsWith("top_load_")) {
+      score += 120;
+    }
+    if (wantsContractRisk && fact.startsWith("contract_risk_")) {
+      score += 120;
+    }
+    if (wantsPowerFactor && fact.startsWith("power_factor_")) {
+      score += 120;
+    }
+    if (wantsAlertSummary && fact.startsWith("alert_type_")) {
+      score += 120;
+    }
+    if (wantsSiteAccounts && fact.startsWith("site_accounts:")) {
+      score += 120;
+    }
+    if (wantsBenchmark && fact.startsWith("site_benchmark_")) {
+      score += 120;
+    }
+    if (wantsBenchmark && fact.startsWith("benchmark_window:")) {
+      score += 100;
+    }
     return { fact, score, index };
   });
 
   const prioritized = scored
     .filter((entry) => entry.score > 0)
-    .sort((left, right) => {
+    .toSorted((left, right) => {
       if (right.score !== left.score) {
         return right.score - left.score;
       }

@@ -1,36 +1,19 @@
 import {
   duckdbQueryAsyncDetailed,
-  duckdbQueryExternalPgAsyncDetailed,
 } from "@/lib/workspace";
+import {
+  redactDatabaseConnectionSecrets,
+} from "@/lib/enms-db-config";
+import {
+  collectExternalPgReportDomains,
+  EXTERNAL_PG_DOMAIN_LABELS,
+} from "@/lib/report-domain-routing";
 import { buildFilterClauses, injectFilters, checkSqlSafety } from "@/lib/report-filters";
 import type { FilterEntry } from "@/lib/report-filters";
 import { trackServer } from "@/lib/telemetry";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
-
-const YCRM_PG_CONNECTION =
-  "dbname=default user=postgres password=postgres host=localhost port=5432";
-const ERP_PG_CONNECTION =
-  "host=118.168.188.27 port=5433 dbname=ErpUAT_local user=erp_local password=erp_local";
-const ENMS_PG_CONNECTION =
-  "host=118.168.188.27 port=55433 dbname=EnMS user=sa password=ym@mes42769778 sslmode=disable";
-
-function resolveExternalPgTarget(sql: string): {
-  alias: "ycrm" | "erp" | "enms";
-  connectionString: string;
-} | null {
-  if (/\bycrm\./i.test(sql)) {
-    return { alias: "ycrm", connectionString: YCRM_PG_CONNECTION };
-  }
-  if (/\berp\./i.test(sql)) {
-    return { alias: "erp", connectionString: ERP_PG_CONNECTION };
-  }
-  if (/\benms\./i.test(sql)) {
-    return { alias: "enms", connectionString: ENMS_PG_CONNECTION };
-  }
-  return null;
-}
 
 /**
  * POST /api/workspace/reports/execute
@@ -68,24 +51,50 @@ export async function POST(req: Request) {
   // Build filter clauses and inject into SQL
   const filterClauses = buildFilterClauses(filters);
   const finalSql = injectFilters(sql, filterClauses);
+  const safeSql = redactDatabaseConnectionSecrets(finalSql);
+  const externalDomains = collectExternalPgReportDomains(finalSql);
+  if (externalDomains.length > 0) {
+    return Response.json(
+      {
+        error: `這張圖表引用外部資料域（${externalDomains.map((domain) => EXTERNAL_PG_DOMAIN_LABELS[domain]).join("、")}）。為避免繞過 OpenClaw Gateway 與 domain guardrail，外部 Y-CRM / ERP / EnMS 圖表必須改走 verified direct query 產生的受控圖表資料。`,
+        sql: safeSql,
+        sourceDomain: externalDomains.length === 1 ? externalDomains[0] : null,
+        sourceKind: "blocked_external_postgres" as const,
+      },
+      { status: 400 },
+    );
+  }
 
   try {
-    const externalTarget = resolveExternalPgTarget(finalSql);
-    const result = externalTarget
-      ? await duckdbQueryExternalPgAsyncDetailed(
-          externalTarget.connectionString,
-          finalSql,
-          externalTarget.alias,
-        )
-      : await duckdbQueryAsyncDetailed(finalSql);
+    const result = await duckdbQueryAsyncDetailed(finalSql);
     if (result.error) {
-      return Response.json({ error: result.error, sql: finalSql }, { status: 500 });
+      return Response.json(
+        {
+          error: redactDatabaseConnectionSecrets(result.error),
+          sql: safeSql,
+          sourceDomain: null,
+          sourceKind: "workspace_duckdb" as const,
+        },
+        { status: 500 },
+      );
     }
     trackServer("report_executed");
-    return Response.json({ rows: result.rows, sql: finalSql });
+    return Response.json({
+      rows: result.rows,
+      sql: safeSql,
+      sourceDomain: null,
+      sourceKind: "workspace_duckdb" as const,
+    });
   } catch (err) {
     return Response.json(
-      { error: err instanceof Error ? err.message : "Query execution failed" },
+      {
+        error: redactDatabaseConnectionSecrets(
+          err instanceof Error ? err.message : "Query execution failed",
+        ),
+        sql: safeSql,
+        sourceDomain: null,
+        sourceKind: "workspace_duckdb" as const,
+      },
       { status: 500 },
     );
   }

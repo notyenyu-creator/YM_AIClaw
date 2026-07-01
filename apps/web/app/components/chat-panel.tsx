@@ -610,6 +610,14 @@ function AttachmentStrip({
 type ParsedPart =
 	| { type: "text"; text: string }
 	| { type: "user-message"; id?: string; text: string }
+	| {
+			type: "data-report-source";
+			data: {
+				sourceKind: "verified_direct";
+				sourceDomain: "enms" | "erp" | "ycrm";
+				verifiedBy?: string;
+			};
+		}
 	| { type: "reasoning"; text: string; state?: string }
 	| {
 			type: "dynamic-tool";
@@ -630,6 +638,29 @@ export function createStreamParser() {
 		const t = event.type as string;
 
 		switch (t) {
+			case "data-report-source": {
+				const data = event.data && typeof event.data === "object" && !Array.isArray(event.data)
+					? event.data as Record<string, unknown>
+					: event;
+				if (
+					data.sourceKind === "verified_direct" &&
+					(data.sourceDomain === "enms" ||
+						data.sourceDomain === "erp" ||
+						data.sourceDomain === "ycrm")
+				) {
+					currentTextIdx = -1;
+					currentReasoningIdx = -1;
+					parts.push({
+						type: "data-report-source",
+						data: {
+							sourceKind: "verified_direct",
+							sourceDomain: data.sourceDomain,
+							verifiedBy: typeof data.verifiedBy === "string" ? data.verifiedBy : undefined,
+						},
+					});
+				}
+				break;
+			}
 			case "user-message":
 				currentTextIdx = -1;
 				currentReasoningIdx = -1;
@@ -936,7 +967,7 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 		useEffect(() => { setMounted(true); }, []);
 
 		useEffect(() => {
-			if (visible === false) return;
+			if (visible === false) {return;}
 			const timer = setTimeout(() => {
 				editorRef.current?.focus();
 			}, 150);
@@ -1744,7 +1775,7 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 
 		// ── Gateway session mode: load transcript + reconnect to active stream ──
 		useEffect(() => {
-			if (!gatewaySessionKey || !gatewaySessionId) return;
+			if (!gatewaySessionKey || !gatewaySessionId) {return;}
 			let cancelled = false;
 
 			reconnectAbortRef.current?.abort();
@@ -1757,7 +1788,7 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 				let baseMessages: Array<{ id: string; role: "user" | "assistant"; parts: UIMessage["parts"] }> = [];
 				try {
 					const res = await fetch(`/api/gateway/sessions/${encodeURIComponent(gatewaySessionId)}`);
-					if (cancelled) return;
+					if (cancelled) {return;}
 					if (res.ok) {
 						const data = await res.json();
 						const sessionMessages: Array<{
@@ -1776,7 +1807,7 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 							};
 						});
 						baseMessages = uiMessages;
-						if (!cancelled) setMessages(baseMessages);
+						if (!cancelled) {setMessages(baseMessages);}
 					}
 				} catch { /* ignore */ }
 

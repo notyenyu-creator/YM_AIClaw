@@ -7,6 +7,8 @@ import type {
   ChartType,
   PanelConfig,
   PanelSize,
+  ReportSourceDomain,
+  ReportSourceKind,
   ReportConfig,
 } from "../app/components/charts/types";
 
@@ -15,6 +17,12 @@ export type { ReportConfig };
 export type ParsedSegment =
   | { type: "text"; text: string }
   | { type: "report-artifact"; config: ReportConfig };
+
+export type TrustedReportSource = {
+  sourceDomain: ReportSourceDomain;
+  sourceKind: "verified_direct";
+  verifiedBy?: string;
+};
 
 const CHART_TYPES = new Set<ChartType>([
   "bar",
@@ -29,6 +37,13 @@ const CHART_TYPES = new Set<ChartType>([
 ]);
 
 const PANEL_SIZES = new Set<PanelSize>(["full", "half", "third"]);
+
+const REPORT_SOURCE_KINDS = new Set<ReportSourceKind>([
+  "workspace_duckdb",
+  "external_postgres",
+  "verified_direct",
+  "inline_rows",
+]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -61,6 +76,35 @@ function rowsOrUndefined(value: unknown): Record<string, unknown>[] | undefined 
   return value.filter(isRecord);
 }
 
+function reportSourceKindOrUndefined(value: unknown): ReportSourceKind | undefined {
+  if (typeof value !== "string") {return undefined;}
+  const normalized = value.trim().toLowerCase() as ReportSourceKind;
+  return REPORT_SOURCE_KINDS.has(normalized) ? normalized : undefined;
+}
+
+function reportSourceDomainOrUndefined(value: unknown): ReportSourceDomain | undefined {
+  if (typeof value !== "string") {return undefined;}
+  const normalized = value.trim().toLowerCase() as ReportSourceDomain;
+  return normalized === "ycrm" || normalized === "erp" || normalized === "enms"
+    ? normalized
+    : undefined;
+}
+
+function isTrustedVerifiedDirectSource(
+  source: {
+    sourceDomain?: ReportSourceDomain;
+    sourceKind?: ReportSourceKind;
+  },
+  trustedSource?: TrustedReportSource | null,
+): source is { sourceDomain: ReportSourceDomain; sourceKind: "verified_direct" } {
+  return (
+    source.sourceKind === "verified_direct" &&
+    !!source.sourceDomain &&
+    trustedSource?.sourceKind === "verified_direct" &&
+    trustedSource.sourceDomain === source.sourceDomain
+  );
+}
+
 function normalizeMapping(value: unknown): PanelConfig["mapping"] | null {
   if (!isRecord(value)) {return null;}
 
@@ -80,7 +124,15 @@ function normalizeMapping(value: unknown): PanelConfig["mapping"] | null {
   return mapping;
 }
 
-function normalizePanel(value: unknown): PanelConfig | null {
+function normalizePanel(
+  value: unknown,
+  inheritedSource?: {
+    sourceDomain?: ReportSourceDomain;
+    sourceKind?: ReportSourceKind;
+    verifiedBy?: string;
+  },
+  trustedSource?: TrustedReportSource | null,
+): PanelConfig | null {
   if (!isRecord(value)) {return null;}
 
   const id = stringOrUndefined(value.id);
@@ -109,9 +161,24 @@ function normalizePanel(value: unknown): PanelConfig | null {
     mapping,
   };
 
-  if (sql) {panel.sql = sql;}
-  if (rows) {panel.rows = rows;}
-  if (data) {panel.data = data;}
+  if (sql) {
+    panel.sql = sql;
+  } else {
+    if (rows) {panel.rows = rows;}
+    if (data) {panel.data = data;}
+  }
+
+  const sourceDomain = reportSourceDomainOrUndefined(value.sourceDomain) ?? inheritedSource?.sourceDomain;
+  const sourceKind = reportSourceKindOrUndefined(value.sourceKind) ?? inheritedSource?.sourceKind;
+  const verifiedBy = stringOrUndefined(value.verifiedBy) ?? inheritedSource?.verifiedBy;
+  const source = { sourceDomain, sourceKind };
+  if (!sql && isTrustedVerifiedDirectSource(source, trustedSource)) {
+    panel.sourceDomain = source.sourceDomain;
+    panel.sourceKind = "verified_direct";
+    panel.verifiedBy = verifiedBy ?? trustedSource?.verifiedBy;
+  } else if (!sql && sourceKind === "inline_rows") {
+    panel.sourceKind = "inline_rows";
+  }
 
   const size = stringOrUndefined(value.size);
   if (size && PANEL_SIZES.has(size as PanelSize)) {
@@ -121,15 +188,24 @@ function normalizePanel(value: unknown): PanelConfig | null {
   return panel;
 }
 
-function normalizeReportConfig(value: unknown): ReportConfig | null {
+function normalizeReportConfig(
+  value: unknown,
+  trustedSource?: TrustedReportSource | null,
+): ReportConfig | null {
   if (!isRecord(value) || !Array.isArray(value.panels)) {return null;}
 
+  const inheritedSource = {
+    sourceDomain: reportSourceDomainOrUndefined(value.sourceDomain),
+    sourceKind: reportSourceKindOrUndefined(value.sourceKind),
+    verifiedBy: stringOrUndefined(value.verifiedBy),
+  };
   const panels: PanelConfig[] = [];
   for (const panelValue of value.panels) {
-    const panel = normalizePanel(panelValue);
+    const panel = normalizePanel(panelValue, inheritedSource, trustedSource);
     if (!panel) {return null;}
     panels.push(panel);
   }
+  if (panels.length === 0) {return null;}
 
   const config: ReportConfig = {
     version: typeof value.version === "number" ? value.version : 1,
@@ -146,11 +222,18 @@ function normalizeReportConfig(value: unknown): ReportConfig | null {
   return config;
 }
 
+export function normalizeUntrustedReportConfig(value: unknown): ReportConfig | null {
+  return normalizeReportConfig(value, null);
+}
+
 /**
  * Split text containing ```report-json ... ``` fenced blocks into
  * alternating text and report-artifact segments.
  */
-export function splitReportBlocks(text: string): ParsedSegment[] {
+export function splitReportBlocks(
+  text: string,
+  options?: { trustedReportSource?: TrustedReportSource | null },
+): ParsedSegment[] {
   const reportFenceRegex = /```report-json\s*\n([\s\S]*?)```/g;
   const segments: ParsedSegment[] = [];
   let lastIndex = 0;
@@ -162,7 +245,10 @@ export function splitReportBlocks(text: string): ParsedSegment[] {
     }
 
     try {
-      const config = normalizeReportConfig(JSON.parse(match[1]));
+      const config = normalizeReportConfig(
+        JSON.parse(match[1]),
+        options?.trustedReportSource ?? null,
+      );
       if (config) {
         segments.push({ type: "report-artifact", config });
       } else {

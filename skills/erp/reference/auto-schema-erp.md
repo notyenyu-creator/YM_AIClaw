@@ -4,13 +4,9 @@
 > 產生日期：2026-04-27
 > 涵蓋核心 30 表（共 108 表，其餘表用 `information_schema.columns` 動態探查）
 
-## 連線複製貼上
+## 連線方式
 
-```sql
-INSTALL postgres_scanner;
-LOAD postgres_scanner;
-ATTACH 'host=118.168.188.27 port=5433 dbname=ErpUAT_local user=erp_local password=erp_local' AS erp (TYPE postgres, READ_ONLY);
-```
+正式查詢時由 DenchClaw runtime 透過 `ERP_PG_CONNECTION` / `OPENCLAW_ERP_PG_CONNECTION` / `ERP_POSTGRES_CONNECTION` 注入唯讀連線；本 reference 只描述 schema，不提供可複製貼上的帳密或 `ATTACH` 字串。
 
 ---
 

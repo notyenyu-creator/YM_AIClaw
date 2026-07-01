@@ -5,6 +5,11 @@
 >
 > 工程檢查清單：
 > [DenchClaw_系統串接工程檢查清單.md](/Users/ym/DenchClaw/docs/DenchClaw_系統串接工程檢查清單.md)
+>
+> 工程流程與多 Agent 驗收標準：
+> [DenchClaw_工程流程與多Agent驗收標準.md](/Users/ym/DenchClaw/docs/DenchClaw_工程流程與多Agent驗收標準.md)
+>
+> 架構邊界：本文件描述目前 DenchClaw 的受控 domain runtime 路線；不引入第二套 runtime，不改 OpenClaw Gateway + Hermes-style orchestration + AI Wiki，也不改既有 8 大核心。
 
 ## 目前架構總覽
 
@@ -21,32 +26,32 @@
             │                               │  REST API (/rest/*)
             ▼                               ▼
 ┌────────────────────────┐      ┌──────────────────────────────────────┐
-│    DenchClaw Agent     │      │          Y-CRM Backend               │
-│    (OpenAI GPT)        │      │          (NestJS + GraphQL Yoga)      │
+│    DenchClaw Runtime   │      │          Y-CRM Backend               │
+│ Gateway + Domain Flow  │      │          (NestJS + GraphQL Yoga)      │
 │                        │      │          localhost:3000 / AWS:8867    │
 │  ┌──────────────────┐  │      ├──────────────────────────────────────┤
-│  │ Tools            │  │      │  REST API     │  GraphQL API          │
-│  │ • exec (指令)    │  │      │  /rest/*      │  /graphql             │
-│  │ • web  (網路)    │  │      └───────────────┴──────────────────────┘
-│  │ • read (讀檔)    │  │                          │
+│  │ Domain Pipeline  │  │      │  REST API     │  GraphQL API          │
+│  │ • planner        │  │      │  /rest/*      │  /graphql             │
+│  │ • context builder│  │      └───────────────┴──────────────────────┘
+│  │ • verified query │  │                          │
 │  └────────┬─────────┘  │                          │ TypeORM
 │           │             │                          ▼
-│           │ exec tool   │      ┌──────────────────────────────────────┐
+│           │ server-side │      ┌──────────────────────────────────────┐
 │           ▼             │      │                                      │
 │  ┌──────────────────┐   │      │          PostgreSQL 16               │
-│  │   DuckDB CLI     │   │      │          localhost:5432               │
-│  │   (:memory:)     │   │      │          DB: default                  │
+│  │ Domain Adapter   │   │      │          localhost:5432               │
+│  │ server-side only │   │      │          DB: default                  │
 │  │                  │   │      ├──────────────────────────────────────┤
 │  │  ┌────────────┐  │   │      │  core schema                         │
-│  │  │ postgres_  │  │───┼──────│  ├── workspace (工作區)               │
-│  │  │ scanner    │  │   │      │  ├── user (使用者) ⚠️ 跳過密碼欄位   │
-│  │  │ (READ_ONLY)│  │   │      │  └── userWorkspace (使用者↔工作區)   │
+│  │  │ DB/API     │  │───┼──────│  ├── workspace (工作區)               │
+│  │  │ adapter    │  │   │      │  ├── user (使用者) ⚠️ 跳過密碼欄位   │
+│  │  │ READ_ONLY  │  │   │      │  └── userWorkspace (使用者↔工作區)   │
 │  │  └────────────┘  │   │      │                                      │
 │  │                  │   │      │  workspace_3jox... (Y-CRM 主工作區)  │
 │  │  ┌────────────┐  │   │      │  ├── person, company, opportunity    │
 │  │  │ 未來擴充   │  │   │      │  ├── task, note, message             │
-│  │  │ mysql_     │  │   │      │  └── _自訂物件 (_pet, _yeJiMuBiao)  │
-│  │  │ scanner    │──┼───┼─ ─ ─ │                                      │
+│  │  │ future     │  │   │      │  └── _自訂物件 (_pet, _yeJiMuBiao)  │
+│  │  │ adapters   │──┼───┼─ ─ ─ │                                      │
 │  │  └────────────┘  │   │      │  workspace_407l... (Calleen公司)     │
 │  └──────────────────┘   │      │  workspace_1g99... (HONG MING)      │
 │                        │      │  ... 共 9 個工作區                    │
@@ -65,8 +70,8 @@
 │  └──────────────────┘   │
 │                        │
 │  ┌──────────────────┐   │
-│  │ REST API 寫入    │───┼────→ Y-CRM REST API (curl POST/PATCH/DELETE)
-│  │ (透過 exec curl) │   │      localhost:3000/rest/*
+│  │ Guarded API 寫入 │───┼────→ Y-CRM REST API (server-side POST/PATCH/DELETE)
+│  │ (control bridge) │   │      localhost:3000/rest/*
 │  └──────────────────┘   │
 └────────────────────────┘
 ```
@@ -80,50 +85,43 @@
 | 元件 | 技術 | Port | 說明 |
 |------|------|------|------|
 | **Web UI** | Next.js (dev mode) | 3200 | 聊天介面，使用者與 AI 互動 |
-| **AI Agent** | OpenAI GPT-4.1-mini | — | 理解自然語言，決定呼叫哪些工具 |
-| **DuckDB** | DuckDB CLI (:memory:) | — | **關鍵橋樑** — 透過 scanner 擴充連接外部資料庫 |
-| **Tools** | exec, web, read 等 | — | Agent 的「手腳」，執行查詢/API 呼叫 |
-| **Skills** | SKILL.md 文件 | — | 教 AI 如何操作特定系統的指令手冊 |
+| **Domain Runtime** | OpenClaw Gateway + Hermes-style flow | — | planner、context builder、context pack、verified query、chart guardrail、wiki review |
+| **Model Layer** | gpt-4.1-mini / GX10 Router | — | 理解自然語言與生成回覆，但不直接持有 DB secret |
+| **Server-side Adapters** | DuckDB / API client / future adapters | — | 在後端受控環境讀取 env secret，執行唯讀查詢或 guarded API |
+| **Tools** | exec, web, read 等 | — | 只在受控流程內使用，不作為 AI 直連 DB 的公開入口 |
+| **Skills** | SKILL.md 文件 | — | 定義 domain 規則、資料邊界、問題路由與安全注意事項 |
 | **Extensions** | JS plugins | — | 插件系統（AI gateway、分析追蹤） |
 | **Identity** | IDENTITY.md | — | AI 的身份合約，定義能力與限制 |
 
-### DuckDB 的核心角色
+### Server-side Adapter 的核心角色
 
-DuckDB 是 DenchClaw 連接外部資料庫的**關鍵中間層**：
+DuckDB 可以作為後端受控 adapter 之一，但正式邊界不是「AI 直接執行 DuckDB」。正確路徑是：
 
 ```
-DenchClaw Agent
+使用者問題
     │
-    │ exec tool（執行 duckdb CLI 指令）
     ▼
-┌─────────────────────────────────────────┐
-│              DuckDB (:memory:)           │
-│                                         │
-│  INSTALL postgres_scanner;              │
-│  LOAD postgres_scanner;                 │
-│  ATTACH 'dbname=default               │
-│    user=postgres password=postgres      │
-│    host=localhost port=5432'            │
-│  AS ycrm (TYPE postgres_scanner,        │
-│           READ_ONLY);                   │
-│                                         │
-│  SELECT * FROM ycrm.core.workspace;     │
-└─────────────────────────────────────────┘
-           │
-           │ postgres_scanner（唯讀連線）
-           ▼
-    PostgreSQL（Y-CRM 資料庫）
+OpenClaw Gateway
+    │
+    ▼
+Hermes-style planner / context builder
+    │
+    ▼
+Domain verified direct query
+    │
+    ▼
+Server-side adapter（DuckDB / API client / future adapter）
+    │
+    ▼
+外部系統資料來源
 ```
 
-**為什麼用 DuckDB 而不是直接 psql？**
+重點：
 
-| 優勢 | 說明 |
-|------|------|
-| **安全** | `:memory:` + `READ_ONLY` 確保不會意外寫入 |
-| **跨資料庫** | 同一個查詢可 JOIN 不同來源（PostgreSQL + MySQL + SQLite） |
-| **輕量** | 無需安裝 client，CLI 即可執行 |
-| **擴充性** | 未來加 ERP（MySQL）只需 `INSTALL mysql_scanner` |
-| **JSON 輸出** | `-json` 參數直接輸出 JSON，方便 AI 解析 |
+- DB host、user、password、token 只存在 server-side env。
+- Skill、IDENTITY、report-json、client request 不攜帶 raw connection string。
+- DuckDB / postgres_scanner 是 adapter implementation detail，不是 AI prompt contract。
+- 未來 WMS / MES / RFID / EMS 可改用 REST、MSSQL、Timescale、MQTT/OPC-UA 或 vendor API adapter。
 
 ### Skill 系統運作方式
 
@@ -142,10 +140,10 @@ DenchClaw Agent
 ```
 
 每個 Skill 的 SKILL.md 包含：
-1. **Frontmatter** — `metadata: { "openclaw": { "always": true } }` 表示始終載入
-2. **連線方式** — DuckDB 指令或 API endpoint
-3. **探查流程** — 先查 information_schema 再寫查詢（動態探查優先）
-4. **查詢範例** — 常見操作的 SQL / curl 範例
+1. **Frontmatter** — `metadata: { "openclaw": { "always": true } }` 表示 skill 索引始終可見，完整內容仍需 runtime / read flow 載入
+2. **資料入口邊界** — domain adapter、server-side adapter config 或受控 API endpoint
+3. **探查流程** — 由 context builder / verified query 讀取 schema 與代表資料
+4. **查詢範例** — 常見操作的 query template / API action template，不包含 secret 或 raw connection string
 5. **安全規則** — READ_ONLY、跳過敏感欄位、soft delete filter
 
 ### 設定檔結構
@@ -262,23 +260,22 @@ Redis     :6379 (Docker)             Redis     :6379 (Docker)
 使用者：「幫我查 Y-CRM 裡姓王的客戶」
          │
          ▼
-DenchClaw Agent（GPT-4.1-mini）
+DenchClaw Runtime（OpenClaw Gateway + Hermes-style flow）
   │
-  │ 讀取 ycrm/SKILL.md → 知道怎麼連 Y-CRM
-  │
-  │ Step 1: exec tool → duckdb 查 information_schema（探查表結構）
-  │ Step 2: exec tool → duckdb SELECT 查詢（帶 deletedAt IS NULL）
+  │ planner 判斷 domain = Y-CRM
+  │ context builder / context pack 確認 schema、時間窗、資料限制
+  │ verified direct query 透過 server-side adapter 唯讀查詢
   │
   ▼
-DuckDB (:memory:, postgres_scanner, READ_ONLY)
+Y-CRM domain adapter（server-side only, READ_ONLY）
   │
-  │ SQL 查詢
+  │ 受控查詢，不暴露 DB secret 給 prompt/client/report-json
   ▼
 PostgreSQL (Y-CRM)
   │
   │ 回傳 JSON 結果
   ▼
-DenchClaw Agent → 整理結果 → 回覆使用者
+DenchClaw Runtime → 文字回答 / verified rows / chart guardrail / learning draft
 ```
 
 ### 寫入流程（新增/修改/刪除）
@@ -287,47 +284,46 @@ DenchClaw Agent → 整理結果 → 回覆使用者
 使用者：「幫我新增一個客戶 王小明」
          │
          ▼
-DenchClaw Agent
+DenchClaw Runtime
   │
-  │ Step 1: DuckDB 查詢確認無重複
-  │ Step 2: DuckDB 查詢 companyId 等外鍵
-  │ Step 3: exec tool → curl POST Y-CRM REST API
-  │ Step 4: DuckDB 查詢確認寫入成功
+  │ Step 1: verified query 確認無重複
+  │ Step 2: context builder 確認 companyId 等外鍵
+  │ Step 3: guarded API / control bridge 執行寫入
+  │ Step 4: verified query 確認寫入成功
   │
   ▼
-curl -X POST http://localhost:3000/rest/people \
-  -H "Authorization: Bearer <TOKEN>" \
-  -d '{"name":{"firstName":"小明","lastName":"王"}}'
+Y-CRM guarded API
+  POST /rest/people
+  Authorization token 由 server-side runtime 注入，不出現在 prompt
 ```
 
 ---
 
-## 未來擴充：串接 ERP / WMS / MES
+## 未來擴充：串接 ERP / WMS / MES / RFID / EMS
 
 ### 擴充架構圖
 
 ```
-                    DenchClaw Agent (GPT-4.1-mini)
+                    DenchClaw Runtime
+          (OpenClaw Gateway + Hermes-style flow)
                            │
               ┌────────────┼────────────┬────────────┐
               │            │            │            │
               ▼            ▼            ▼            ▼
-         ycrm Skill   erp Skill   wms Skill   mes Skill
+         ycrm Skill   erp Skill   wms Skill   mes/rfid/ems Skill
               │            │            │            │
               ▼            ▼            ▼            ▼
 ┌─────────────────────────────────────────────────────────┐
-│                    DuckDB (:memory:)                     │
+│              Domain adapters（server-side only）         │
 │                                                         │
-│  ATTACH ycrm  (postgres_scanner → PostgreSQL:5432)      │
-│  ATTACH erp   (postgres_scanner → PostgreSQL:5433)      │
-│  ATTACH wms   (mysql_scanner    → MySQL:3306)           │
-│  ATTACH mes   (透過 REST API，不直連 DB)                 │
+│  ycrm adapter → PostgreSQL（server-side env）            │
+│  erp adapter  → DB / API（server-side env）              │
+│  wms adapter  → DB / API / vendor connector             │
+│  mes adapter  → REST / MQTT / OPC-UA / vendor API       │
 │                                                         │
-│  ── 跨系統 JOIN 查詢 ──                                  │
-│  SELECT c.name, o.order_no, s.ship_date                 │
-│  FROM ycrm.workspace_xxx.company c                      │
-│  JOIN erp.public.orders o ON c.erp_id = o.customer_id   │
-│  JOIN wms.inventory.shipments s ON o.id = s.order_id    │
+│  跨系統問題由 planner 標記 cross-system，                │
+│  各 domain adapter 分別查詢後，由 context pack 彙整，     │
+│  不讓 skill 直接寫跨 DB JOIN 或攜帶 raw connection。       │
 └─────────────────────────────────────────────────────────┘
 ```
 
@@ -335,21 +331,21 @@ curl -X POST http://localhost:3000/rest/people \
 
 | 步驟 | 動作 | 說明 |
 |------|------|------|
-| 1 | 確認連線方式 | DB 直連（最佳）或 API only |
-| 2 | 建立 `skills/<系統>/SKILL.md` | 連線資訊 + 表結構 + 查詢範例 + 安全規則 |
+| 1 | 確認 adapter 方式 | PostgreSQL 只是其中一種；也可為 REST、MSSQL、Timescale、MQTT/OPC-UA 或 vendor API |
+| 2 | 建立 `skills/<系統>/SKILL.md` | domain 規則 + 資料邊界 + context builder / verified query 指引 + 安全規則 |
 | 3 | 同步到 runtime 路徑 | 複製到 `~/.openclaw-dench/workspace/skills/` |
 | 4 | 更新 `IDENTITY.md` | 加入 contract section 宣告新能力 |
 | 5 | 重啟 DenchClaw | 載入新 Skill |
-| 6 | 測試對話 | 驗證查詢/寫入正常 |
+| 6 | 測試對話 | 驗證 domain pipeline、cross-domain guard、chart guardrail、model/source badge 與 wiki review |
 
-### DuckDB Scanner 支援
+### Adapter 支援
 
-| Scanner | 適用資料庫 | 安裝指令 |
+| Adapter 類型 | 適用來源 | 說明 |
 |---------|-----------|---------|
-| `postgres_scanner` | PostgreSQL | `INSTALL postgres_scanner;` |
-| `mysql_scanner` | MySQL / MariaDB | `INSTALL mysql_scanner;` |
-| `sqlite_scanner` | SQLite | `INSTALL sqlite_scanner;` |
-| ODBC | SQL Server / Oracle | 需額外設定 ODBC driver |
+| DuckDB scanner | PostgreSQL / MySQL / SQLite | 只在 server-side runtime 內使用，不放入 prompt contract |
+| ODBC / native driver | SQL Server / Oracle | 由後端 adapter 管理 driver 與 secret |
+| REST / vendor API | ERP / WMS / MES / EMS | 透過 guarded API client 與權限檢查 |
+| MQTT / OPC-UA | RFID / OT / 設備資料 | 透過 domain adapter 或 control bridge，需額外安全 gate |
 
 ---
 
@@ -357,11 +353,11 @@ curl -X POST http://localhost:3000/rest/people \
 
 | 規則 | 說明 |
 |------|------|
-| `:memory:` | DuckDB 永遠使用記憶體模式，不存檔 |
-| `READ_ONLY` | Scanner 連線永遠唯讀 |
+| server-side env | DB / API secret 只存在後端 runtime，不進 prompt、client request 或 report-json |
+| `READ_ONLY` | 查詢 adapter 預設唯讀；寫入/控制走 guarded API / control bridge |
 | 跳過敏感欄位 | `passwordHash`, tokens, secrets 等 |
-| `deletedAt IS NULL` | Y-CRM 使用 soft delete，查詢必須過濾 |
-| Bearer Token | REST API 寫入需認證 |
+| soft-delete filter | 若該 domain schema 有 soft-delete 欄位，依 schema 探查結果套用 |
+| Bearer Token | REST API 寫入需由 server-side runtime 注入 |
 | 動態探查優先 | 永遠先查 `information_schema` 再寫查詢 |
 
 ---

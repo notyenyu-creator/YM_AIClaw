@@ -1,10 +1,9 @@
 import { duckdbQueryAsync } from "@/lib/workspace";
+import { redactDatabaseConnectionSecrets } from "@/lib/enms-db-config";
+import { checkSqlSafety } from "@/lib/report-filters";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
-
-const BLOCKED_PATTERN =
-  /^\s*(DROP\s+DATABASE|ATTACH|DETACH|COPY|EXPORT|INSTALL|LOAD|PRAGMA|\.)/i;
 
 export async function POST(req: Request) {
   let body: { sql?: string };
@@ -22,9 +21,10 @@ export async function POST(req: Request) {
     );
   }
 
-  if (BLOCKED_PATTERN.test(sql)) {
+  const safetyError = checkSqlSafety(sql);
+  if (safetyError) {
     return Response.json(
-      { error: "This SQL statement is not allowed" },
+      { error: safetyError },
       { status: 403 },
     );
   }
@@ -34,7 +34,11 @@ export async function POST(req: Request) {
     return Response.json({ rows: rows ?? [], ok: true });
   } catch (err) {
     return Response.json(
-      { error: err instanceof Error ? err.message : "Query failed" },
+      {
+        error: redactDatabaseConnectionSecrets(
+          err instanceof Error ? err.message : "Query failed",
+        ),
+      },
       { status: 500 },
     );
   }

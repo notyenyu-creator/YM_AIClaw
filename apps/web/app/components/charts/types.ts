@@ -13,6 +13,15 @@ export type ChartType =
 
 export type PanelSize = "full" | "half" | "third";
 
+export type ReportSourceDomain = "ycrm" | "erp" | "enms";
+
+export type ReportSourceKind =
+  | "workspace_duckdb"
+  | "external_postgres"
+  | "blocked_external_postgres"
+  | "verified_direct"
+  | "inline_rows";
+
 export type PanelMapping = {
   /** Key for x-axis or category axis */
   xAxis?: string;
@@ -35,6 +44,10 @@ export type PanelConfig = {
   rows?: Record<string, unknown>[];
   /** Alias for rows to be tolerant of older/generated payloads. */
   data?: Record<string, unknown>[];
+  /** Optional source metadata for badges and guarded empty states. */
+  sourceDomain?: ReportSourceDomain;
+  sourceKind?: ReportSourceKind;
+  verifiedBy?: string;
   mapping: PanelMapping;
   size?: PanelSize;
 };

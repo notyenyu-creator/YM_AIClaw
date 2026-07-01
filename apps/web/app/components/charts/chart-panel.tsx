@@ -481,7 +481,7 @@ function ChartPanelInner({ config, data, compact }: ChartPanelProps) {
   if (processedData.length === 0) {
     return (
       <div
-        className="flex items-center justify-center rounded-xl"
+        className="flex flex-col items-center justify-center gap-1.5 rounded-xl px-4 text-center"
         style={{
           height: compact ? 200 : 320,
           background: "var(--color-surface)",
@@ -490,7 +490,10 @@ function ChartPanelInner({ config, data, compact }: ChartPanelProps) {
           fontSize: 13,
         }}
       >
-        No data
+        <span style={{ color: "var(--color-text)" }}>沒有可視覺化資料</span>
+        <span className="text-[11px]">
+          目前沒有足夠資料可繪製圖表。
+        </span>
       </div>
     );
   }

@@ -5,9 +5,18 @@
 
 echo "{"
 
+YCRM_PG_CONNECTION="${YCRM_PG_CONNECTION:-${Y_CRM_PG_CONNECTION:-${OPENCLAW_YCRM_PG_CONNECTION:-${YCRM_POSTGRES_CONNECTION:-}}}}"
+ESCAPED_YCRM_PG_CONNECTION="$(printf '%s' "$YCRM_PG_CONNECTION" | perl -pe "s/'/''/g")"
+
 # 1. PostgreSQL
 PG_STATUS="false"
-if duckdb ':memory:' "INSTALL postgres_scanner; LOAD postgres_scanner; ATTACH 'dbname=default user=postgres password=postgres host=localhost port=5432' AS ycrm (TYPE postgres_scanner, READ_ONLY); SELECT 1;" > /dev/null 2>&1; then
+if [ -n "$YCRM_PG_CONNECTION" ] && env -u YCRM_PG_CONNECTION -u Y_CRM_PG_CONNECTION -u OPENCLAW_YCRM_PG_CONNECTION -u YCRM_POSTGRES_CONNECTION duckdb ':memory:' > /dev/null 2>&1 <<SQL
+INSTALL postgres_scanner;
+LOAD postgres_scanner;
+ATTACH '${ESCAPED_YCRM_PG_CONNECTION}' AS ycrm (TYPE postgres_scanner, READ_ONLY);
+SELECT 1;
+SQL
+then
   PG_STATUS="true"
 fi
 echo "  \"postgresql\": $PG_STATUS,"
@@ -50,7 +59,13 @@ echo "  \"redis\": $REDIS_STATUS,"
 # 5. 工作區數量
 WS_COUNT=0
 if [ "$PG_STATUS" = "true" ]; then
-  WS_COUNT=$(duckdb -json ':memory:' "INSTALL postgres_scanner; LOAD postgres_scanner; ATTACH 'dbname=default user=postgres password=postgres host=localhost port=5432' AS ycrm (TYPE postgres_scanner, READ_ONLY); SELECT COUNT(*) AS cnt FROM ycrm.core.workspace WHERE \"deletedAt\" IS NULL;" 2>/dev/null | grep -o '"cnt":[0-9]*' | grep -o '[0-9]*' || echo "0")
+  WS_COUNT=$(env -u YCRM_PG_CONNECTION -u Y_CRM_PG_CONNECTION -u OPENCLAW_YCRM_PG_CONNECTION -u YCRM_POSTGRES_CONNECTION duckdb -json ':memory:' 2>/dev/null <<SQL | grep -o '"cnt":[0-9]*' | grep -o '[0-9]*' || echo "0"
+INSTALL postgres_scanner;
+LOAD postgres_scanner;
+ATTACH '${ESCAPED_YCRM_PG_CONNECTION}' AS ycrm (TYPE postgres_scanner, READ_ONLY);
+SELECT COUNT(*) AS cnt FROM ycrm.core.workspace WHERE "deletedAt" IS NULL;
+SQL
+)
 fi
 echo "  \"workspace_count\": $WS_COUNT"
 

@@ -1,32 +1,46 @@
 #!/usr/bin/env python3
 """
-Y-CRM Schema 自動掃描腳本
-掃描指定工作區的所有表、欄位、外鍵關聯、enum 值
+{{SYSTEM_DISPLAY_NAME}} Schema 自動掃描腳本
+掃描指定 schema 的所有表、欄位、外鍵關聯、enum 值
 產出完整的 schema reference，供 AI 直接使用
 
 用法：
   python3 scan-schema.py [schema_name]
-  python3 scan-schema.py                                     # 預設掃 Y-CRM 工作區
-  python3 scan-schema.py workspace_407lopjyyvm7bxeutk1tvqkpo # 掃指定工作區
+  python3 scan-schema.py                                     # 預設掃 {{DEFAULT_SCHEMA}}
+  python3 scan-schema.py <schema_name>                       # 掃指定 schema
 """
 
 import subprocess, json, sys, os, re
 from datetime import datetime
 
 # ── 設定 ──
-DB_NAME = os.environ.get("DB_NAME", "default")
-DB_USER = os.environ.get("DB_USER", "postgres")
-DB_PASS = os.environ.get("DB_PASS", "postgres")
-DB_HOST = os.environ.get("DB_HOST", "localhost")
-DB_PORT = os.environ.get("DB_PORT", "5432")
-ALIAS = "ycrm"
-SCHEMA = sys.argv[1] if len(sys.argv) > 1 else "workspace_3joxkr9ofo5hlxjan164egffx"
+CONNECTION_ENV = os.environ.get("CONNECTION_ENV", "{{SYSTEM_ENV_PREFIX}}_PG_CONNECTION")
+CONNECTION_STRING = os.environ.get(CONNECTION_ENV, "").strip()
+if not CONNECTION_STRING:
+    print(f"ERROR: missing DB connection. Set {CONNECTION_ENV} before scanning schema.", file=sys.stderr)
+    sys.exit(1)
+
+CONNECTION_STRING_SQL = CONNECTION_STRING.replace("'", "''")
+ALIAS = "{{ALIAS}}"
+SCHEMA = sys.argv[1] if len(sys.argv) > 1 else "{{DEFAULT_SCHEMA}}"
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 OUTPUT_DIR = os.path.join(SCRIPT_DIR, "..", "reference")
 OUTPUT_FILE = os.path.join(OUTPUT_DIR, f"auto-schema-{SCHEMA}.md")
 
-ATTACH = f"INSTALL postgres_scanner; LOAD postgres_scanner; ATTACH 'dbname={DB_NAME} user={DB_USER} password={DB_PASS} host={DB_HOST} port={DB_PORT}' AS {ALIAS} (TYPE postgres_scanner, READ_ONLY);"
+ATTACH = f"INSTALL postgres_scanner; LOAD postgres_scanner; ATTACH '{CONNECTION_STRING_SQL}' AS {ALIAS} (TYPE postgres_scanner, READ_ONLY);"
+
+
+def sql_literal(value):
+    return "'" + str(value).replace("'", "''") + "'"
+
+
+def sql_identifier(value):
+    return '"' + str(value).replace('"', '""') + '"'
+
+
+SCHEMA_LITERAL = sql_literal(SCHEMA)
+SCHEMA_IDENTIFIER = sql_identifier(SCHEMA)
 
 # ── 拼音 → 中文對照 ──
 PINYIN_MAP = {
@@ -126,9 +140,11 @@ def run_duckdb(sql):
     """執行 DuckDB 查詢，回傳 JSON list"""
     full_sql = f"{ATTACH} {sql}"
     try:
+        child_env = os.environ.copy()
+        child_env.pop(CONNECTION_ENV, None)
         result = subprocess.run(
             ["duckdb", "-json", ":memory:", full_sql],
-            capture_output=True, text=True, timeout=30
+            capture_output=True, text=True, timeout=30, env=child_env
         )
         if result.returncode == 0 and result.stdout.strip():
             return json.loads(result.stdout)
@@ -208,12 +224,12 @@ print(f"🔍 掃描 schema: {SCHEMA} ...")
 print("  📋 掃描表...")
 std_tables = run_duckdb(
     f"SELECT table_name FROM {ALIAS}.information_schema.tables "
-    f"WHERE table_schema = '{SCHEMA}' AND table_name NOT LIKE '\\_%' ESCAPE '\\' "
+    f"WHERE table_schema = {SCHEMA_LITERAL} AND table_name NOT LIKE '\\_%' ESCAPE '\\' "
     f"ORDER BY table_name;"
 )
 custom_tables = run_duckdb(
     f"SELECT table_name FROM {ALIAS}.information_schema.tables "
-    f"WHERE table_schema = '{SCHEMA}' AND table_name LIKE '\\_%' ESCAPE '\\' "
+    f"WHERE table_schema = {SCHEMA_LITERAL} AND table_name LIKE '\\_%' ESCAPE '\\' "
     f"ORDER BY table_name;"
 )
 
@@ -225,10 +241,11 @@ all_table_names = std_table_names + custom_table_names
 print("  📊 掃描欄位...")
 table_columns = {}
 for tn in all_table_names:
+    table_literal = sql_literal(tn)
     cols = run_duckdb(
         f'SELECT column_name, data_type, is_nullable '
         f'FROM {ALIAS}.information_schema.columns '
-        f"WHERE table_schema = '{SCHEMA}' AND table_name = '{tn}' "
+        f"WHERE table_schema = {SCHEMA_LITERAL} AND table_name = {table_literal} "
         f'ORDER BY ordinal_position;'
     )
     table_columns[tn] = cols
@@ -238,13 +255,15 @@ print("  🏷️  掃描 enum 值...")
 table_enums = {}
 for tn, cols in table_columns.items():
     enums = {}
+    table_identifier = sql_identifier(tn)
     for c in cols:
         if c["data_type"] == "USER-DEFINED":
+            column_identifier = sql_identifier(c["column_name"])
             vals = run_duckdb(
-                f'SELECT DISTINCT "{c["column_name"]}" AS val '
-                f'FROM {ALIAS}."{SCHEMA}"."{tn}" '
-                f'WHERE "deletedAt" IS NULL AND "{c["column_name"]}" IS NOT NULL '
-                f'ORDER BY "{c["column_name"]}" LIMIT 20;'
+                f'SELECT DISTINCT {column_identifier} AS val '
+                f'FROM {ALIAS}.{SCHEMA_IDENTIFIER}.{table_identifier} '
+                f'WHERE "deletedAt" IS NULL AND {column_identifier} IS NOT NULL '
+                f'ORDER BY {column_identifier} LIMIT 20;'
             )
             if vals:
                 enums[c["column_name"]] = [r["val"] for r in vals]

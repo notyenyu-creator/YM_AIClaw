@@ -1,8 +1,6 @@
 import type { YcrmPlannerPreflight } from "./ycrm-context-builder";
+import { getYcrmPostgresConnectionString } from "./domain-db-config";
 import { duckdbQueryExternalPgAsyncDetailed } from "./workspace";
-
-const YCRM_CONNECTION_STRING =
-  "dbname=default user=postgres password=postgres host=localhost port=5432";
 
 type YcrmCountRow = {
   total_count?: number | string;
@@ -99,14 +97,18 @@ function includesAny(message: string, keywords: string[]) {
 
 function extractRecentDayWindow(message: string): number | null {
   const match = message.match(/(?:最近|近)\s*(\d{1,3})\s*(?:天|日)/);
-  if (!match) return null;
+  if (!match) {
+    return null;
+  }
   const days = Number(match[1]);
   return Number.isFinite(days) && days > 0 ? days : null;
 }
 
 function extractGregorianYear(message: string): number | null {
   const match = message.match(/\b(20\d{2})\b/);
-  if (!match) return null;
+  if (!match) {
+    return null;
+  }
   const year = Number(match[1]);
   return Number.isFinite(year) ? year : null;
 }
@@ -136,7 +138,7 @@ function normalizeIsoDateParts(year: number, month: number, day: number): string
 
 function extractIsoDateCandidates(message: string): string[] {
   const results: string[] = [];
-  for (const match of message.matchAll(/\b(20\d{2})[\/-](\d{1,2})[\/-](\d{1,2})\b/g)) {
+  for (const match of message.matchAll(/\b(20\d{2})[/-](\d{1,2})[/-](\d{1,2})\b/g)) {
     const normalized = normalizeIsoDateParts(
       Number(match[1]),
       Number(match[2]),
@@ -455,7 +457,7 @@ function detectYcrmOpportunityAmountTrendTarget(
 
     const isoDateCandidates = extractIsoDateCandidates(normalizedMessage);
     if (isoDateCandidates.length >= 2) {
-      const [startDate, endDate] = isoDateCandidates.sort();
+      const [startDate, endDate] = isoDateCandidates.toSorted();
       return {
         label: `${startDate} 到 ${endDate} 商機金額趨勢`,
         grain: "day",
@@ -589,6 +591,12 @@ function formatTime(value: string | null | undefined): string {
   return trimmed ? trimmed : "UNKNOWN";
 }
 
+const YCRM_REPORT_METADATA = {
+  sourceDomain: "ycrm",
+  sourceKind: "verified_direct",
+  verifiedBy: "ycrm-verified-direct-query",
+} as const;
+
 function buildYcrmCountReport(
   workspaceId: string,
   target: YcrmCountTarget,
@@ -611,6 +619,7 @@ function buildYcrmCountReport(
     JSON.stringify(
       {
         version: 1,
+        ...YCRM_REPORT_METADATA,
         title: `Y-CRM 目前${target.label}總數`,
         description: `工作區 ${workspaceId} 的 ${target.label}總數為 ${formatNumber(totalCount)}。`,
         panels: [
@@ -664,6 +673,7 @@ function buildYcrmOverviewReport(
     JSON.stringify(
       {
         version: 1,
+        ...YCRM_REPORT_METADATA,
         title: target.label,
         description: `工作區 ${workspaceId} 的聯絡人、客戶公司、商機與任務總數。`,
         panels: [
@@ -742,6 +752,7 @@ function buildYcrmOpportunityStageReport(
     JSON.stringify(
       {
         version: 1,
+        ...YCRM_REPORT_METADATA,
         title: `Y-CRM ${target.label}`,
         description: `工作區 ${workspaceId} 的商機依 stage 聚合分布。`,
         panels: [
@@ -797,6 +808,7 @@ function buildYcrmTaskStatusReport(
     JSON.stringify(
       {
         version: 1,
+        ...YCRM_REPORT_METADATA,
         title: `Y-CRM ${target.label}`,
         description: `工作區 ${workspaceId} 的任務依 status 聚合分布。`,
         panels: [
@@ -852,6 +864,7 @@ function buildYcrmTaskDueReport(
     JSON.stringify(
       {
         version: 1,
+        ...YCRM_REPORT_METADATA,
         title: `Y-CRM ${target.label}`,
         description: `工作區 ${workspaceId} 的任務依到期狀態聚合分布。`,
         panels: [
@@ -900,7 +913,7 @@ function buildYcrmOpportunityAmountTrendReport(
       total_amount: row.total_amount,
     });
   }
-  const currencies = [...latestByCurrency.keys()].sort();
+  const currencies = [...latestByCurrency.keys()].toSorted();
   const panels = currencies.map((currency) => ({
     id: `ycrm-opportunity-amount-trend-${currency.toLowerCase()}`,
     title: `${target.grain === "day" ? "每日" : "每月"}新增商機總金額 (${currency})`,
@@ -932,6 +945,7 @@ function buildYcrmOpportunityAmountTrendReport(
     JSON.stringify(
       {
         version: 1,
+        ...YCRM_REPORT_METADATA,
         title: `Y-CRM ${target.label}`,
         description: `工作區 ${workspaceId} 的 ${target.label}；若存在多幣別，會分幣別呈現。`,
         panels,
@@ -1007,6 +1021,7 @@ function buildYcrmOpportunityStageAmountReport(
     JSON.stringify(
       {
         version: 1,
+        ...YCRM_REPORT_METADATA,
         title: `Y-CRM ${target.label}`,
         description: `工作區 ${workspaceId} 的商機依 stage 與幣別聚合之金額分布。`,
         panels: [
@@ -1053,7 +1068,7 @@ export async function buildYcrmVerifiedDirectQueryAnswer(
     try {
       const result =
         await duckdbQueryExternalPgAsyncDetailed<YcrmOpportunityAmountTrendRow>(
-          YCRM_CONNECTION_STRING,
+          getYcrmPostgresConnectionString(),
           `
             SELECT
               strftime(date_trunc('${opportunityAmountTrendTarget.grain}', "createdAt"), '${opportunityAmountTrendTarget.grain === "day" ? "%Y-%m-%d" : "%Y-%m"}') AS month,
@@ -1076,7 +1091,7 @@ export async function buildYcrmVerifiedDirectQueryAnswer(
       if (result.rows.length === 0) {
         const availabilityResult =
           await duckdbQueryExternalPgAsyncDetailed<YcrmOpportunityAmountTrendAvailabilityRow>(
-            YCRM_CONNECTION_STRING,
+            getYcrmPostgresConnectionString(),
             `
               SELECT
                 CAST(CAST(${opportunityAmountTrendTarget.startSql} AS DATE) AS VARCHAR) AS requested_window_start,
@@ -1138,7 +1153,7 @@ export async function buildYcrmVerifiedDirectQueryAnswer(
     try {
       const result =
         await duckdbQueryExternalPgAsyncDetailed<YcrmOpportunityStageAmountRow>(
-          YCRM_CONNECTION_STRING,
+          getYcrmPostgresConnectionString(),
           `
             SELECT
               COALESCE(stage, 'UNKNOWN') AS stage,
@@ -1189,7 +1204,7 @@ export async function buildYcrmVerifiedDirectQueryAnswer(
 
     try {
       const result = await duckdbQueryExternalPgAsyncDetailed<YcrmTaskDueRow>(
-        YCRM_CONNECTION_STRING,
+        getYcrmPostgresConnectionString(),
         `
           SELECT
             CASE
@@ -1244,7 +1259,7 @@ export async function buildYcrmVerifiedDirectQueryAnswer(
 
     try {
       const result = await duckdbQueryExternalPgAsyncDetailed<YcrmTaskStatusRow>(
-        YCRM_CONNECTION_STRING,
+        getYcrmPostgresConnectionString(),
         `
           SELECT
             COALESCE(status, 'UNKNOWN') AS status,
@@ -1294,7 +1309,7 @@ export async function buildYcrmVerifiedDirectQueryAnswer(
 
     try {
       const result = await duckdbQueryExternalPgAsyncDetailed<YcrmOpportunityStageRow>(
-        YCRM_CONNECTION_STRING,
+        getYcrmPostgresConnectionString(),
         `
           SELECT
             COALESCE(stage, 'UNKNOWN') AS stage,
@@ -1341,7 +1356,7 @@ export async function buildYcrmVerifiedDirectQueryAnswer(
 
     try {
       const result = await duckdbQueryExternalPgAsyncDetailed<YcrmOverviewRow>(
-        YCRM_CONNECTION_STRING,
+        getYcrmPostgresConnectionString(),
         `
           SELECT '聯絡人' AS category, COUNT(*) AS count
           FROM ycrm."${input.planner.workspaceId}"."person"
@@ -1399,7 +1414,7 @@ export async function buildYcrmVerifiedDirectQueryAnswer(
 
   try {
     const result = await duckdbQueryExternalPgAsyncDetailed<YcrmCountRow>(
-      YCRM_CONNECTION_STRING,
+      getYcrmPostgresConnectionString(),
       `
         SELECT COUNT(*) AS total_count
         FROM ycrm."${input.planner.workspaceId}"."${target.tableName}"

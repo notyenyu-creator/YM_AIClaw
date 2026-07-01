@@ -11,7 +11,7 @@ import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { ChainOfThought, type ChainPart } from "./chain-of-thought";
 import { isStatusReasoningText } from "./chat-stream-status";
-import { splitReportBlocks, hasReportBlocks } from "@/lib/report-blocks";
+import { splitReportBlocks, hasReportBlocks, type TrustedReportSource } from "@/lib/report-blocks";
 import { splitDiffBlocks, hasDiffBlocks } from "@/lib/diff-blocks";
 import type { ReportConfig } from "./charts/types";
 import { DiffCard } from "./diff-viewer";
@@ -83,6 +83,7 @@ function toolStatus(
 function groupParts(parts: UIMessage["parts"]): MessageSegment[] {
 	const segments: MessageSegment[] = [];
 	let chain: ChainPart[] = [];
+	let trustedReportSource: TrustedReportSource | null = null;
 
 	const flush = (textFollows?: boolean) => {
 		if (chain.length > 0) {
@@ -101,13 +102,39 @@ function groupParts(parts: UIMessage["parts"]): MessageSegment[] {
 	};
 
 	for (const part of parts) {
+		if (part.type === "data-report-source") {
+			const sourcePart = part as {
+				type: "data-report-source";
+				sourceKind?: string;
+				sourceDomain?: string;
+				verifiedBy?: string;
+				data?: {
+					sourceKind?: string;
+					sourceDomain?: string;
+					verifiedBy?: string;
+				};
+			};
+			const sourceData = sourcePart.data ?? sourcePart;
+			trustedReportSource =
+				sourceData.sourceKind === "verified_direct" &&
+				(sourceData.sourceDomain === "enms" ||
+					sourceData.sourceDomain === "erp" ||
+					sourceData.sourceDomain === "ycrm")
+					? {
+							sourceKind: "verified_direct",
+							sourceDomain: sourceData.sourceDomain,
+							verifiedBy: sourceData.verifiedBy,
+						}
+					: null;
+			continue;
+		}
 		if (part.type === "text") {
 			const text = (part as { type: "text"; text: string }).text;
 			if (isLeakedSilentToken(text)) { continue; }
 			flush(true);
 			if (hasReportBlocks(text)) {
 				segments.push(
-					...(splitReportBlocks(text) as MessageSegment[]),
+					...(splitReportBlocks(text, { trustedReportSource }) as MessageSegment[]),
 				);
 			} else if (hasDiffBlocks(text)) {
 				for (const seg of splitDiffBlocks(text)) {
@@ -958,7 +985,7 @@ const FEEDBACK_SURVEY_ID = "019cc021-a8bf-0000-d41d-b82956ef7e6a";
 
 function FeedbackButtons({ messageId, sessionId }: { messageId: string; sessionId?: string | null }) {
 	const revealTrace = useCallback((sid: string | null | undefined, mid: string) => {
-		if (!sid) return;
+		if (!sid) {return;}
 		fetch("/api/feedback", {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },

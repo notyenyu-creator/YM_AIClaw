@@ -3,7 +3,15 @@
 import { useEffect, useState, useCallback, useMemo } from "react";
 import { ChartPanel } from "./chart-panel";
 import { FilterBar } from "./filter-bar";
-import type { ReportConfig, FilterState, PanelConfig, FilterConfig } from "./types";
+import type {
+  ReportConfig,
+  FilterState,
+  PanelConfig,
+  FilterConfig,
+  ReportSourceDomain,
+  ReportSourceKind,
+} from "./types";
+import { normalizeUntrustedReportConfig } from "@/lib/report-blocks";
 
 type ReportViewerProps = {
   /** Report config object (inline or loaded) */
@@ -42,12 +50,65 @@ type PanelData = {
   rows: Record<string, unknown>[];
   loading: boolean;
   error?: string;
+  sourceDomain?: ReportSourceDomain | null;
+  sourceKind?: ReportSourceKind | null;
 };
 
 function panelInlineRows(panel: PanelConfig): Record<string, unknown>[] | null {
+  if (panel.sql) {return null;}
   if (Array.isArray(panel.rows)) {return panel.rows;}
   if (Array.isArray(panel.data)) {return panel.data;}
   return null;
+}
+
+function sourceDomainLabel(domain: ReportSourceDomain | null | undefined): string | null {
+  if (domain === "ycrm") {return "Y-CRM";}
+  if (domain === "erp") {return "ERP";}
+  if (domain === "enms") {return "EnMS";}
+  return null;
+}
+
+function panelVerifiedSource(panel: PanelConfig): {
+  sourceDomain: ReportSourceDomain;
+  sourceKind: "verified_direct";
+} | null {
+  return panel.sourceKind === "verified_direct" &&
+    (panel.sourceDomain === "ycrm" || panel.sourceDomain === "erp" || panel.sourceDomain === "enms")
+    ? {
+        sourceDomain: panel.sourceDomain,
+        sourceKind: "verified_direct",
+      }
+    : null;
+}
+
+function sourceKindLabel(kind: ReportSourceKind | null | undefined): string | null {
+  if (kind === "workspace_duckdb") {return "Workspace DB";}
+  if (kind === "external_postgres") {return "外部 DB";}
+  if (kind === "blocked_external_postgres") {return "外部 DB 已封鎖";}
+  if (kind === "verified_direct") {return "已驗證直查";}
+  if (kind === "inline_rows") {return "內嵌資料";}
+  return null;
+}
+
+function sourceDomainBadgeStyle(kind: ReportSourceKind | null | undefined) {
+  if (kind === "blocked_external_postgres") {
+    return { color: "#f97316", background: "rgba(249, 115, 22, 0.14)" };
+  }
+  return { color: "#0ea5e9", background: "rgba(14, 165, 233, 0.12)" };
+}
+
+function sourceKindBadgeStyle(kind: ReportSourceKind | null | undefined) {
+  if (kind === "blocked_external_postgres") {
+    return { color: "#f97316", background: "rgba(249, 115, 22, 0.14)" };
+  }
+  return { color: "#22c55e", background: "rgba(34, 197, 94, 0.12)" };
+}
+
+function panelErrorTitle(kind: ReportSourceKind | null | undefined): string {
+  if (kind === "blocked_external_postgres") {
+    return "外部 SQL 已封鎖";
+  }
+  return "Query error";
 }
 
 /** Build filter entries for the API from active filter state + filter configs. */
@@ -114,7 +175,10 @@ export function ReportViewer({ config: propConfig, reportPath }: ReportViewerPro
         const data = await res.json();
         if (cancelled) {return;}
         try {
-          const parsed = JSON.parse(data.content) as ReportConfig;
+          const parsed = normalizeUntrustedReportConfig(JSON.parse(data.content));
+          if (!parsed) {
+            throw new Error("Invalid report JSON");
+          }
           setConfig(parsed);
         } catch {
           throw new Error("Invalid report JSON");
@@ -150,12 +214,15 @@ export function ReportViewer({ config: propConfig, reportPath }: ReportViewerPro
       config.panels.map(async (panel) => {
         const inlineRows = panelInlineRows(panel);
         if (inlineRows) {
+          const verifiedSource = panelVerifiedSource(panel);
           setPanelData((prev) => ({
             ...prev,
             [panel.id]: {
               panelId: panel.id,
               rows: inlineRows,
               loading: false,
+              sourceDomain: verifiedSource?.sourceDomain ?? null,
+              sourceKind: verifiedSource?.sourceKind ?? "inline_rows",
             },
           }));
           return;
@@ -186,6 +253,16 @@ export function ReportViewer({ config: propConfig, reportPath }: ReportViewerPro
 
           if (!res.ok) {
             const data = await res.json().catch(() => ({}));
+            const sourceDomain =
+              data.sourceDomain === "ycrm" || data.sourceDomain === "erp" || data.sourceDomain === "enms"
+                ? data.sourceDomain
+                : null;
+            const sourceKind =
+              data.sourceKind === "workspace_duckdb" ||
+              data.sourceKind === "external_postgres" ||
+              data.sourceKind === "blocked_external_postgres"
+                ? data.sourceKind
+                : null;
             setPanelData((prev) => ({
               ...prev,
               [panel.id]: {
@@ -193,18 +270,32 @@ export function ReportViewer({ config: propConfig, reportPath }: ReportViewerPro
                 rows: [],
                 loading: false,
                 error: data.error || `HTTP ${res.status}`,
+                sourceDomain,
+                sourceKind,
               },
             }));
             return;
           }
 
           const data = await res.json();
+          const sourceDomain =
+            data.sourceDomain === "ycrm" || data.sourceDomain === "erp" || data.sourceDomain === "enms"
+              ? data.sourceDomain
+              : null;
+          const sourceKind =
+            data.sourceKind === "workspace_duckdb" ||
+            data.sourceKind === "external_postgres" ||
+            data.sourceKind === "blocked_external_postgres"
+              ? data.sourceKind
+              : null;
           setPanelData((prev) => ({
             ...prev,
             [panel.id]: {
               panelId: panel.id,
               rows: data.rows ?? [],
               loading: false,
+              sourceDomain,
+              sourceKind,
             },
           }));
         } catch (err) {
@@ -373,6 +464,10 @@ function PanelCard({
   data?: PanelData;
 }) {
   const colSpan = panelColSpan(panel.size);
+  const inlineVerifiedSource = panelInlineRows(panel) ? panelVerifiedSource(panel) : null;
+  const sourceKindValue = data?.sourceKind ?? inlineVerifiedSource?.sourceKind ?? null;
+  const sourceLabel = sourceDomainLabel(data?.sourceDomain ?? inlineVerifiedSource?.sourceDomain ?? null);
+  const sourceKind = sourceKindLabel(sourceKindValue);
 
   return (
     <div
@@ -390,19 +485,37 @@ function PanelCard({
         >
           {panel.title}
         </h3>
-        {data && !data.loading && !data.error && (
-          <span
-            className="text-[10px] px-1.5 py-0.5 rounded"
-            style={{ color: "var(--color-text-muted)" }}
-          >
-            {data.rows.length} rows
-          </span>
-        )}
+        <div className="flex items-center gap-1.5">
+          {sourceLabel && (
+            <span
+              className="text-[10px] px-1.5 py-0.5 rounded"
+              style={sourceDomainBadgeStyle(sourceKindValue)}
+            >
+              資料:{sourceLabel}
+            </span>
+          )}
+          {sourceKind && (
+            <span
+              className="text-[10px] px-1.5 py-0.5 rounded"
+              style={sourceKindBadgeStyle(sourceKindValue)}
+            >
+              {sourceKind}
+            </span>
+          )}
+          {data && !data.loading && !data.error && (
+            <span
+              className="text-[10px] px-1.5 py-0.5 rounded"
+              style={{ color: "var(--color-text-muted)" }}
+            >
+              {data.rows.length} rows
+            </span>
+          )}
+        </div>
       </div>
 
       {/* Chart area */}
       <div className="px-2 pb-3">
-        {data?.loading ? (
+        {!data || data.loading ? (
           <div
             className="flex items-center justify-center"
             style={{ height: 320 }}
@@ -421,7 +534,7 @@ function PanelCard({
             style={{ height: 320 }}
           >
             <p className="text-xs" style={{ color: "#f87171" }}>
-              Query error
+              {panelErrorTitle(data.sourceKind)}
             </p>
             <p
               className="text-[10px] px-2 py-1 rounded max-w-xs text-center"

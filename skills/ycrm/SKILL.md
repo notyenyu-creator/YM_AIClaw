@@ -70,7 +70,7 @@ read /Users/ym/.openclaw-dench/workspace/skills/ycrm/reference/auto-schema-works
 - **size 可選**：`full`（全寬）、`half`（半寬）
 - **sql 裡的金額**：`"amountAmountMicros"` 除以 1000000 轉元
 - 更多模板請 read `reference/analysis-templates.md`
-3. **資料庫已預設連線** — PostgreSQL 在 `localhost:5432`，帳密 `postgres/postgres`，資料庫 `default`，直接用下方 duckdb 命令即可，不需要使用者額外確認。
+3. **資料庫由 runtime secrets 連線** — 正式查詢由伺服器端 `YCRM_PG_CONNECTION` / `Y_CRM_PG_CONNECTION` / `OPENCLAW_YCRM_PG_CONNECTION` / `YCRM_POSTGRES_CONNECTION` 注入，不要把帳密寫進 prompt、wiki 或 source code。
 
 ## 你能做什麼
 
@@ -85,9 +85,7 @@ read /Users/ym/.openclaw-dench/workspace/skills/ycrm/reference/auto-schema-works
 
 ### 連線命令（只改 SELECT 部分）
 
-```bash
-duckdb -json ':memory:' "INSTALL postgres_scanner; LOAD postgres_scanner; ATTACH 'dbname=default user=postgres password=postgres host=localhost port=5432' AS ycrm (TYPE postgres_scanner, READ_ONLY); <YOUR_SELECT_HERE>"
-```
+由 DenchClaw runtime 代入伺服器端連線；skill 文件只提供 schema 與 SQL 原則，不提供可複製貼上的帳密或 `ATTACH` 字串。
 
 ### 查詢規則
 

@@ -1,6 +1,6 @@
 # Y-CRM 資料庫速查表
 
-> PostgreSQL `localhost:5432`，資料庫名 `default`，透過 DuckDB postgres_scanner 查詢。
+> PostgreSQL 連線由 `YCRM_PG_CONNECTION` / `Y_CRM_PG_CONNECTION` / `OPENCLAW_YCRM_PG_CONNECTION` / `YCRM_POSTGRES_CONNECTION` 提供；DenchClaw 透過 DuckDB postgres_scanner 以 `READ_ONLY` 查詢。
 > 所有欄位名為 camelCase，查詢時須用雙引號包裹（如 `"nameFirstName"`）。
 > 軟刪除：`"deletedAt" IS NULL` 表示有效資料。
 

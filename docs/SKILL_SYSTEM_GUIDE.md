@@ -1,12 +1,22 @@
 # DenchClaw Skill 系統指南
 
-> 給新進同事的完整說明 — 理解 DenchClaw 如何整合外部系統（Y-CRM、ERP、WMS、MES 等）
+> 給新進同事的主入口說明 — 理解 DenchClaw 如何整合外部系統（Y-CRM、ERP、EnMS、WMS、MES、RFID、EMS 等）。
+>
+> 閱讀順序建議：
+> 1. 先讀本文件，掌握 Skill、IDENTITY、AI Wiki 與 domain runtime 的關係。
+> 2. 再讀 [DenchClaw 外部系統整合指南](/Users/ym/DenchClaw/skills/INTEGRATION_GUIDE.md)，照步驟接入新系統。
+> 3. 最後用 [工程流程與多 Agent 驗收標準](/Users/ym/DenchClaw/docs/DenchClaw_工程流程與多Agent驗收標準.md) 做小步實作與回歸驗收。
+>
+> 工程流程與多 Agent 驗收標準請參考：
+> [DenchClaw_工程流程與多Agent驗收標準.md](/Users/ym/DenchClaw/docs/DenchClaw_工程流程與多Agent驗收標準.md)
+>
+> 架構邊界：本指南只描述 Skill / IDENTITY / AI Wiki 的整合方式，不改 DenchClaw 產品架構，不改 OpenClaw Gateway + Hermes-style orchestration + AI Wiki，也不改既有 8 大核心。
 
 ---
 
 ## 一、架構概覽
 
-DenchClaw 是基於 OpenClaw 的 AI Agent，核心能力是**連接多個外部資料庫系統**，讓 AI 能直接查詢真實資料、產生圖表。
+DenchClaw 是基於 OpenClaw 的 AI Agent，核心能力是透過**受控 domain runtime** 連接多個外部系統，讓 AI 可以在不接觸明文連線資訊的前提下查詢真實資料、產生圖表與沉澱知識。
 
 ```
 ┌─────────────────────────────────────────────────────┐
@@ -27,39 +37,31 @@ DenchClaw 是基於 OpenClaw 的 AI Agent，核心能力是**連接多個外部�
     ┌─────────────┼──────────────┐
     ▼             ▼              ▼
 ┌────────┐  ┌────────┐    ┌────────┐
-│ Y-CRM  │  │  ERP   │    │  WMS   │
-│ PG:5432│  │ PG:5433│    │ PG:5434│
+│ Y-CRM  │  │  ERP   │    │  EnMS  │
+│Domain  │  │Domain  │    │Domain  │
 └────────┘  └────────┘    └────────┘
     ▲             ▲              ▲
     └─────────────┴──────────────┘
-          透過 DuckDB postgres_scanner
-          唯讀查詢（READ_ONLY）
+        server-side env config
+        verified direct query / context builder
 ```
 
 ### 查詢方式
 
-所有外部系統都透過 **DuckDB + postgres_scanner** 查詢：
-
-```bash
-duckdb -json ':memory:' "
-  INSTALL postgres_scanner;
-  LOAD postgres_scanner;
-  ATTACH 'dbname=<DB> user=<USER> password=<PASS> host=localhost port=<PORT>'
-    AS <alias> (TYPE postgres_scanner, READ_ONLY);
-  SELECT ... FROM <alias>.<schema>.<table>;
-"
-```
+外部系統查詢走 DenchClaw 受控 runtime：
 
 重點：
-- `:memory:` — 不建立本地檔案
-- `READ_ONLY` — 唯讀，不可能意外寫入
-- 每次查詢都是獨立連線，無狀態
+- DB host、user、password、token 只放在 server-side env config。
+- Skill / IDENTITY / report-json / client request 不放 raw connection string。
+- 常見問答走 domain verified direct query 或 context builder。
+- 圖表資料由 verified rows 產生，避免模型自行編造數字。
+- 若某個系統不是 PostgreSQL，也應以 domain adapter 接入，不把 PostgreSQL/DuckDB 視為唯一前提。
 
 ---
 
-## 二、兩層知識架構
+## 二、三層知識架構
 
-DenchClaw 的 AI 知識分兩層，這是最核心的設計：
+DenchClaw 的 AI 知識分三層，這是最核心的設計：
 
 ```
 ┌──────────────────────────────────────────────┐
@@ -68,12 +70,12 @@ DenchClaw 的 AI 知識分兩層，這是最核心的設計：
 │  • 語言規則（繁體中文）                        │
 │  • 每個系統的 contract section                 │
 │    - 觸發關鍵字                               │
-│    - 可複製的 duckdb 連線命令                  │
-│    - 最重要的注意事項                          │
+│    - domain runtime 入口與資料邊界              │
+│    - 禁止編造資料與不可直連 DB                  │
 │  • 圖表輸出格式（report-json）                 │
 │  • 預設工作區/schema                           │
 │                                               │
-│  AI 一定看得到，即使是小模型（GPT-4.1-mini）    │
+│  AI 一定看得到，但不應放明文 secret             │
 └──────────────────────────────────────────────┘
          ▼ AI 需要主動 read 檔案
 ┌──────────────────────────────────────────────┐
@@ -82,11 +84,21 @@ DenchClaw 的 AI 知識分兩層，這是最核心的設計：
 │  • 完整查詢流程（Step 1→5）                    │
 │  • 資料庫結構說明                              │
 │  • 欄位命名規則                               │
-│  • 常見陷阱與 workaround                      │
+│  • 常見風險與處置方式                          │
 │  • REST API 範例（寫入操作）                   │
 │  • 問題路由表                                 │
 │                                               │
-│  小模型可能跳過 read → 看不到                   │
+│  模型可能未完整讀取 → 關鍵邊界要在 IDENTITY 重申 │
+└──────────────────────────────────────────────┘
+         ▼ 高價值案例進 review / promotion
+┌──────────────────────────────────────────────┐
+│  第三層：AI Wiki / Knowledge Layer             │
+│                                               │
+│  • wiki / schema / ontology / source-of-truth  │
+│  • playbook / operation template               │
+│  • review draft → human review → promotion     │
+│                                               │
+│  長期知識不只放 skill，應沉澱到 AI Wiki          │
 └──────────────────────────────────────────────┘
 ```
 
@@ -96,15 +108,15 @@ OpenClaw 的 skill 載入機制：
 1. Gateway 掃描 `~/.openclaw-dench/workspace/skills/` 下所有 SKILL.md
 2. **只把名稱+描述+路徑**放入 system prompt（`<available_skills>` XML）
 3. **不嵌入 SKILL.md 全文** — AI 必須自己 `read` 檔案才能看到內容
-4. 小模型（GPT-4.1-mini、Gemma）經常跳過 read 步驟
+4. 部分模型或模型路由可能跳過 read 步驟
 
-所以**最關鍵的指令必須放在 IDENTITY.md**（直接嵌入 prompt），SKILL.md 放補充資訊。
+所以最關鍵的安全邊界必須放在 `IDENTITY.md`，但只能放 domain alias、runtime 入口與規則，不放完整連線資訊。`SKILL.md` 放補充流程；可重用的 schema、playbook 與高價值案例，應透過 review flow 進入 AI Wiki。
 
 ---
 
 ## 三、新系統接入流程（必讀）
 
-接入任何新系統（ERP、WMS、MES）都遵循相同的三步流程：
+接入任何新系統（ERP、WMS、MES、RFID、EMS，或新增 EnMS 子模組）都遵循相同原則，以小步、可驗收的垂直切片逐步完成：
 
 ### Step 1：建立 SKILL.md
 
@@ -131,12 +143,13 @@ metadata: { "openclaw": { "always": true, "emoji": "🏭" } }
 你是 <系統名稱> 的專家...
 
 ## 最重要的規則
-1. 絕對禁止編造資料 — 必須用 duckdb 查詢真實資料
-2. 動態探查優先 — 永遠先查 information_schema
-3. 圖表流程 — 查資料 → VALUES 嵌入結果 → report-json
+1. 絕對禁止編造資料 — 必須走 DenchClaw domain runtime 或 verified direct query
+2. 動態探查優先 — 永遠先確認 schema / context pack / source-of-truth
+3. 圖表流程 — verified rows → report-json → chart guardrail
+4. 不得在 Skill 內寫入 DB host、user、password、token 或完整 connection string
 
-## 連線命令（可複製）
-（完整的 duckdb 連線命令）
+## 資料入口
+（domain alias、server-side env key 名稱、context builder / verified query 入口，不放明文連線資訊）
 
 ## 查詢流程（Step 1→5）
 （從探查 schema 到輸出圖表的完整步驟）
@@ -151,7 +164,7 @@ metadata: { "openclaw": { "always": true, "emoji": "🏭" } }
 （Create / Update / Delete 的 curl 範例）
 
 ## 安全規則
-（READ_ONLY、敏感欄位、soft delete）
+（server-side env、READ_ONLY、敏感欄位、soft-delete 欄位需依 schema 探查結果套用）
 
 ## 問題路由表
 （什麼問題 → AI 該做什麼）
@@ -160,6 +173,7 @@ metadata: { "openclaw": { "always": true, "emoji": "🏭" } }
 注意：
 - `metadata.openclaw.always: true` — 確保 skill 永遠載入
 - `inject: true` 是**無效的**（OpenClaw 不認這個欄位）
+- 驗收方式：確認 Skill 不含 raw connection string；問題路由能指向 domain pipeline；若該 domain 有可沉澱案例，補上 AI Wiki / playbook 寫回位置。
 
 ### Step 2：更新 IDENTITY.md
 
@@ -174,20 +188,24 @@ Full skill file: `/Users/ym/.openclaw-dench/workspace/skills/<name>/SKILL.md`
 
 **When user mentions <觸發關鍵字> → follow this contract.**
 
-### Quick Query Command
-\`\`\`bash
-duckdb -json ':memory:' "INSTALL postgres_scanner; LOAD postgres_scanner;
-ATTACH 'dbname=<DB> user=<USER> password=<PASS> host=localhost port=<PORT>'
-AS <alias> (TYPE postgres_scanner, READ_ONLY); <YOUR_SELECT_HERE>"
-\`\`\`
+### Domain Runtime Entry
+- Domain alias: `<alias>`
+- Runtime env key: `<SYSTEM>_ADAPTER_CONFIG`（只存在 server-side runtime，不寫出值；PostgreSQL adapter 可使用 `<SYSTEM>_PG_CONNECTION` 作為具體實作）
+- Query path: `domain verified direct query / context builder`
+- Chart path: `verified rows -> report-json`
 
 Default schema: `<預設 schema>`
 ```
 
 **同時更新 "What you do" section**：
 ```markdown
-- **Query and manage <系統> data** via postgres_scanner and REST API
+- **Query and manage <系統> data** via DenchClaw domain runtime and guarded API
 ```
+
+驗收方式：
+- IDENTITY.md 只保留 domain runtime 入口與安全規則，不含 DB host、user、password、token。
+- 小模型即使沒讀完整 Skill，也會知道禁止編造資料、不可直連 DB、必須走 domain pipeline。
+- 新增內容經過 PM/TPM/RD/SRE/QA/UIUX 六角色檢查，沒有 P0/P1 阻斷問題。
 
 ### Step 3：測試與部署
 
@@ -201,8 +219,16 @@ openclaw --profile dench gateway restart
 # 3. 開新對話測試（skill 在新對話才載入）
 # 到 http://localhost:3200 開一個新 chat
 # 輸入：「<系統名> 有哪些資料表？」
-# AI 應該要跑 information_schema 查詢
+# AI 應該走 domain verified direct query / context builder，不直接顯示 DB 連線資訊
 ```
+
+驗收方式：
+- Focused tests 或 smoke test 證明 domain pipeline 可讀資料。
+- Cross-domain 測試通過：問 ERP 不出 EnMS 回答，問 Y-CRM 不出 ERP 回答。
+- Chart 測試通過：有 verified rows 才畫圖；缺資料、query error、欄位 mapping error 要分得清楚。
+- Security 測試通過：raw connection string、unsafe SQL、secret leak 都被拒絕或 redacted。
+- Model/source 顯示正確：DB 直查、GX10 本地模型、雲端模型能區分。
+- 使用者確認後才 commit。
 
 ---
 
@@ -231,8 +257,8 @@ Step 3: 動態探查（如果沒有 auto-schema）
     │
     ▼
 Step 4: 執行查詢
-    │  • 用 duckdb + postgres_scanner
-    │  • 必加 "deletedAt" IS NULL（soft delete）
+    │  • 走 domain verified direct query / context builder
+    │  • 若該 domain schema 有 soft-delete 欄位，依探查結果套用過濾
     │  • 必加 LIMIT（大表保護）
     │  • camelCase 欄位要雙引號
     │
@@ -286,16 +312,16 @@ Y-CRM 是目前接入的第一個系統，可作為其他系統的參考。
 
 | 項目 | 值 |
 |------|-----|
-| 資料庫 | PostgreSQL, `dbname=default`, port 5432 |
-| 使用者 | `postgres` / `postgres` |
+| 資料庫 | PostgreSQL，連線字串由 `YCRM_PG_CONNECTION` 等部署環境變數提供 |
+| 使用者 | 由部署環境變數提供，不寫在文件或 prompt |
 | DuckDB alias | `ycrm` |
 | 預設 schema | `workspace_3joxkr9ofo5hlxjan164egffx` |
 | 工作區數量 | 9 個（多租戶） |
 | 核心表 | company, person, opportunity, task, note, workspaceMember |
 
-### 重要陷阱（血淚經驗）
+### 重要整合經驗
 
-| 陷阱 | 說明 | 解法 |
+| 風險 | 說明 | 處置 |
 |------|------|------|
 | `createdByName` ≠ 負責人 | 只是「按下新增按鈕的人」 | 用 FK 欄位 `fuZeYeWuId` |
 | 文字欄位不完整 | `fuZeYeWuTuBiaoXianShiYong` 有空字串 | 用 FK `fuZeYeWuId` 兩步查詢 |
@@ -304,33 +330,25 @@ Y-CRM 是目前接入的第一個系統，可作為其他系統的參考。
 | 金額單位 | `amountAmountMicros` 是微元 | 除以 1,000,000 |
 | 自訂欄位是拼音 | `fuZeYeWu` = 負責業務 | auto-schema 有對照表 |
 
-### 完整查詢範例：查某業務的商機
+### 查詢邏輯範例：查某業務的商機
 
-```bash
-# Step 1: 找 workspaceMember ID（匹配中文姓名兩種順序）
-duckdb -json ':memory:' "
-  INSTALL postgres_scanner; LOAD postgres_scanner;
-  ATTACH 'dbname=default user=postgres password=postgres host=localhost port=5432'
-    AS ycrm (TYPE postgres_scanner, READ_ONLY);
-  SELECT \"id\", \"nameFirstName\", \"nameLastName\"
-  FROM ycrm.workspace_3joxkr9ofo5hlxjan164egffx.\"workspaceMember\"
-  WHERE (\"nameLastName\" || \"nameFirstName\" = '許子新'
-     OR \"nameFirstName\" || ' ' || \"nameLastName\" = '許子新')
-    AND \"deletedAt\" IS NULL;
-"
+正式執行時應由 DenchClaw domain verified direct query 代為組裝與執行，不把連線資訊放進 prompt。邏輯上分成兩步：
 
-# Step 2: 用 ID 查商機
-duckdb -json ':memory:' "
-  INSTALL postgres_scanner; LOAD postgres_scanner;
-  ATTACH 'dbname=default user=postgres password=postgres host=localhost port=5432'
-    AS ycrm (TYPE postgres_scanner, READ_ONLY);
-  SELECT \"stage\", COUNT(*) AS cnt,
-         SUM(\"amountAmountMicros\")/1000000 AS amount
-  FROM ycrm.workspace_3joxkr9ofo5hlxjan164egffx.opportunity
-  WHERE \"fuZeYeWuId\" = '<上一步查到的ID>'
-    AND \"deletedAt\" IS NULL
-  GROUP BY \"stage\";
-"
+```sql
+-- Step 1: 找 workspaceMember ID（匹配中文姓名兩種順序）
+SELECT "id", "nameFirstName", "nameLastName"
+FROM <domain_alias>.<workspace_schema>."workspaceMember"
+WHERE ("nameLastName" || "nameFirstName" = :ownerName
+   OR "nameFirstName" || ' ' || "nameLastName" = :ownerName)
+  AND <soft_delete_filter_if_available>;
+
+-- Step 2: 用 ID 查商機
+SELECT "stage", COUNT(*) AS cnt,
+       SUM("amountAmountMicros") / 1000000 AS amount
+FROM <domain_alias>.<workspace_schema>.opportunity
+WHERE "fuZeYeWuId" = :workspaceMemberId
+  AND <soft_delete_filter_if_available>
+GROUP BY "stage";
 ```
 
 ### Auto-schema 產生工具
@@ -369,7 +387,7 @@ scan-schema.py 功能：
 
 ## 六、接入新系統檢查清單
 
-新增 ERP / WMS / MES 時，逐項確認：
+新增 ERP / WMS / MES / RFID / EMS，或擴充 EnMS 子模組時，逐項確認：
 
 ### 檔案
 
@@ -380,26 +398,33 @@ scan-schema.py 功能：
 
 ### SKILL.md 內容
 
-- [ ] 連線命令可直接複製執行
+- [ ] 資料入口只描述 domain alias、runtime env key 與 context builder，不含明文連線資訊
 - [ ] 查詢流程有 Step 1→5
 - [ ] 「絕對禁止編造資料」規則存在
 - [ ] 欄位命名規則有說明
-- [ ] 安全規則（READ_ONLY、敏感欄位、soft delete）
+- [ ] 安全規則（server-side env、READ_ONLY、敏感欄位、soft-delete 欄位依 schema 探查結果套用）
 - [ ] 問題路由表
+- [ ] 高價值案例有 AI Wiki / playbook / review promotion 的沉澱位置
 
 ### IDENTITY.md contract
 
 - [ ] 觸發關鍵字列表
-- [ ] 可複製的 duckdb 連線命令
+- [ ] DenchClaw domain runtime 入口
 - [ ] 預設 schema 指定
 - [ ] 「絕對禁止編造資料」（在 IDENTITY.md 重複一次）
+- [ ] 不含 DB host、user、password、token 或完整 connection string
 
 ### 測試
 
-- [ ] duckdb 連線命令可正常執行
-- [ ] `information_schema.tables` 能列出表
-- [ ] 開新對話，問「<系統>有哪些表？」→ AI 跑查詢
-- [ ] 問業務問題 → AI 回傳正確數據 + report-json
+- [ ] domain verified direct query / context builder 可讀 schema 與代表資料
+- [ ] 開新對話，問「<系統>有哪些表？」→ AI 走 domain pipeline，不直連 DB
+- [ ] 問業務問題 → AI 回傳正確數據 + source metadata + report-json
+- [ ] Cross-domain 回歸：問 ERP 不出 EnMS 回答，問 Y-CRM 不出 ERP 回答
+- [ ] Chart 回歸：有資料、無資料、query error、欄位 mapping error 都分得清楚
+- [ ] Security 回歸：raw connection string、unsafe SQL、secret leak 都被拒絕或 redacted
+- [ ] Model/source 回歸：DB 直查、GX10 本地模型、雲端模型能被 UI 區分
+- [ ] UI 回歸：sidebar tag、source badge、chart empty state、tooltip 能清楚呈現，使用者可分辨模型來源、資料來源與空資料原因
+- [ ] Wiki writeback 回歸：高價值案例可進入 learning draft、review、promotion 或 playbook
 - [ ] 重啟 gateway 後 skill 正常載入
 
 ---
@@ -408,7 +433,7 @@ scan-schema.py 功能：
 
 | Skill | 路徑 | 功能 | 資料來源 |
 |-------|------|------|----------|
-| **Y-CRM** | `skills/ycrm/` | CRM 資料查詢、圖表 | PostgreSQL (postgres_scanner) |
+| **Y-CRM** | `skills/ycrm/` | CRM 資料查詢、圖表 | server-side domain runtime |
 | **CRM** | `skills/crm/` | 本地 DuckDB 工作區管理 | 本地 workspace.duckdb |
 | **Browser** | `skills/browser/` | Chromium 瀏覽器自動化 | 網頁 |
 | **App Builder** | `skills/app-builder/` | 建立 Dench Apps | 本地檔案系統 |
@@ -475,13 +500,13 @@ scan-schema.py 功能：
 ## 九、常見問題
 
 ### Q: AI 編造資料怎麼辦？
-A: 檢查 IDENTITY.md 是否有「絕對禁止編造資料」規則。如果小模型仍然編造，把查詢命令直接寫在 IDENTITY.md 的 contract section（不要只放在 SKILL.md）。
+A: 檢查 IDENTITY.md 是否有「絕對禁止編造資料」與「必須走 domain pipeline」規則。如果模型仍然編造，應補強 verified direct query、context builder、answer template 與回歸題庫，不要把 DB 連線命令寫進 prompt。
 
 ### Q: AI 說「找不到表」？
-A: 檢查 duckdb 命令是否有 `INSTALL postgres_scanner; LOAD postgres_scanner; ATTACH ...` 前綴。沒有這個前綴，schema 不存在。
+A: 先檢查該 domain 的 server-side env 是否設定、context builder 是否可讀 schema、auto-schema reference 是否最新。不要要求 AI 從 prompt 直接組 raw DB 連線。
 
 ### Q: 新增的 skill 沒有生效？
-A: 三個檢查點：
+A: 四個檢查點：
 1. `~/.openclaw-dench/workspace/skills/<name>/SKILL.md` 存在嗎？
 2. Frontmatter 有 `metadata: { "openclaw": { "always": true } }` 嗎？
 3. 有重啟 gateway 嗎？（`openclaw --profile dench gateway restart`）
@@ -494,4 +519,4 @@ A: 修改 `~/.openclaw-dench/workspace/skills/` 下的檔案後，開一個**新
 A: `inject: true` **完全無效** — OpenClaw 原始碼不認這個欄位。只有 `always: true` 有作用（在 `metadata.openclaw.always` 裡）。
 
 ### Q: 為什麼 report-json 的 SQL 要用 VALUES？
-A: Chart renderer 只有本地 DuckDB，沒有 postgres_scanner 連線。所以必須把查詢結果嵌入為 `VALUES` 靜態數據，chart renderer 才能渲染。
+A: Chart renderer 不應直接連外部 DB。外部 domain 的圖表應由 verified direct query 先產生可信 rows，再以 `VALUES` 或 inline verified rows 形式交給 chart renderer，確保文字回答與圖表資料一致。

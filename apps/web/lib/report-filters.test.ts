@@ -310,18 +310,41 @@ describe("checkSqlSafety", () => {
     expect(checkSqlSafety('SELECT "delete_count", "update_time" FROM v_stats')).toBeNull();
   });
 
-  it("allows GRANT (not in forbidden list, only checks start keyword)", () => {
-    // checkSqlSafety only blocks specific forbidden start keywords
-    expect(checkSqlSafety("GRANT ALL ON users TO admin")).toBeNull();
+  it("allows SELECT with mutation words inside literals or comments", () => {
+    expect(checkSqlSafety("SELECT 'DROP TABLE is only a label' AS note")).toBeNull();
+    expect(checkSqlSafety("SELECT 1 -- DROP TABLE users")).toBeNull();
+    expect(checkSqlSafety("SELECT 1 /* DELETE FROM users */")).toBeNull();
   });
 
-  it("allows empty SQL (no forbidden keyword match)", () => {
-    // Empty string doesn't start with any forbidden keyword
-    expect(checkSqlSafety("")).toBeNull();
+  it("rejects connection, extension, and privilege statements", () => {
+    expect(checkSqlSafety("ATTACH 'host=x password=secret' AS enms")).not.toBeNull();
+    expect(checkSqlSafety("INSTALL postgres_scanner")).not.toBeNull();
+    expect(checkSqlSafety("LOAD postgres_scanner")).not.toBeNull();
+    expect(checkSqlSafety("GRANT ALL ON users TO admin")).not.toBeNull();
+    expect(checkSqlSafety("SELECT * FROM x; ATTACH 'host=x password=secret' AS enms")).not.toBeNull();
+  });
+
+  it("rejects multi-statement mutation attempts", () => {
+    expect(checkSqlSafety("SELECT 1; DROP TABLE users")).not.toBeNull();
+    expect(checkSqlSafety("WITH base AS (SELECT 1) SELECT * FROM base; UPDATE users SET name = 'x'")).not.toBeNull();
+    expect(checkSqlSafety("SELECT * FROM users; DELETE FROM users")).not.toBeNull();
+  });
+
+  it("rejects empty SQL", () => {
+    expect(checkSqlSafety("")).not.toBeNull();
   });
 
   it("allows EXPLAIN SELECT (not in forbidden list)", () => {
     expect(checkSqlSafety("EXPLAIN SELECT * FROM users")).toBeNull();
+  });
+
+  it("rejects non-report read or operational statements", () => {
+    expect(checkSqlSafety("PRAGMA show_tables")).not.toBeNull();
+    expect(checkSqlSafety("SET threads=4")).not.toBeNull();
+    expect(checkSqlSafety("CALL system_function()")).not.toBeNull();
+    expect(checkSqlSafety("VACUUM")).not.toBeNull();
+    expect(checkSqlSafety("MERGE INTO users USING updates ON users.id = updates.id WHEN MATCHED THEN UPDATE SET name = updates.name")).not.toBeNull();
+    expect(checkSqlSafety("EXPLAIN VACUUM")).not.toBeNull();
   });
 });
 
@@ -379,6 +402,7 @@ describe("injectFilters (edge cases)", () => {
     const clauses = [`"x" = '1'`];
     const result = injectFilters(sql, clauses);
     expect(result).toContain("__report_data");
+    expect(result).not.toContain("t;;");
   });
 
   it("handles SQL with nested CTE", () => {
@@ -387,5 +411,83 @@ describe("injectFilters (edge cases)", () => {
     const result = injectFilters(sql, clauses);
     expect(result).toContain("__report_data");
     expect(result).toContain("WITH a AS");
+  });
+});
+
+describe("checkSqlSafety (DuckDB file readers)", () => {
+  it.each([
+    "SELECT getenv('ENMS_PG_CONNECTION') AS leaked",
+    "SELECT * FROM postgres_scan('host=localhost password=secret', 'public', 'users')",
+    "SELECT * FROM postgres_query('host=localhost password=secret', 'SELECT 1')",
+    "SELECT * FROM postgres_execute('host=localhost password=secret', 'SELECT 1')",
+    "SELECT * FROM postgres_attach('host=localhost password=secret')",
+    "SELECT * FROM json_execute_serialized_sql(json_serialize_sql('SELECT 1'))",
+    "SELECT json_serialize_sql('SELECT * FROM read_text(''/etc/hosts'')')",
+    "SELECT * FROM json_deserialize_sql('{\"statements\":[]}')",
+    "SELECT * FROM read_csv_auto('/etc/passwd')",
+    "SELECT * FROM read_json_auto('/tmp/data.json')",
+    "SELECT * FROM read_json_objects('/tmp/data.json')",
+    "SELECT * FROM read_json_objects_auto('/tmp/data.json')",
+    "SELECT * FROM read_ndjson_auto('/tmp/data.ndjson')",
+    "SELECT * FROM read_ndjson_objects('/tmp/data.ndjson')",
+    "SELECT * FROM read_parquet('/tmp/data.parquet')",
+    "SELECT * FROM read_duckdb('/tmp/data.duckdb')",
+    "SELECT * FROM sniff_csv('/tmp/data.csv')",
+    "SELECT * FROM parquet_scan('/tmp/data.parquet')",
+    "SELECT * FROM glob('/Users/*')",
+  ])("rejects file-reading function: %s", (sql) => {
+    expect(checkSqlSafety(sql)).toContain("file-reading or dynamic SQL functions are not allowed");
+  });
+
+  it.each([
+    "SELECT * FROM '/Users/ym/DenchClaw/package.json'",
+    "SELECT * FROM '/tmp/local.csv'",
+    "SELECT t.* FROM safe_table s JOIN '/tmp/local.json' t ON true",
+    "SELECT * FROM (VALUES (1)) v, '/tmp/local.json' p LIMIT 1",
+    "WITH x AS (SELECT * FROM '/tmp/local.json') SELECT * FROM x",
+    "SELECT * FROM (SELECT * FROM '/tmp/local.json') nested",
+  ])("rejects DuckDB replacement file scan: %s", (sql) => {
+    expect(checkSqlSafety(sql)).toContain("file path scans are not allowed");
+  });
+
+  it("does not treat SELECT-list string literals as replacement file scans", () => {
+    expect(checkSqlSafety("SELECT 'a' AS one, '/tmp/not-a-table.json' AS two")).toBeNull();
+    expect(checkSqlSafety("SELECT * FROM safe_table WHERE label IN ('a', '/tmp/not-a-table.json')")).toBeNull();
+  });
+
+  it.each([
+    "SELECT * FROM query('SELECT * FROM read_text(''/etc/passwd'')')",
+    "SELECT * FROM query_table('internal_table')",
+  ])("rejects DuckDB dynamic SQL wrapper: %s", (sql) => {
+    expect(checkSqlSafety(sql)).toContain("file-reading or dynamic SQL functions are not allowed");
+  });
+
+  it.each([
+    'SELECT * FROM "read_text"(\'/etc/hosts\')',
+    'SELECT * FROM "glob"(\'/etc/host*\')',
+    'SELECT * FROM "query"(\'SELECT * FROM read_text(\'\'/etc/hosts\'\') LIMIT 1\')',
+    'SELECT "getenv"(\'ENMS_PG_CONNECTION\') AS leaked',
+  ])("rejects quoted DuckDB dangerous functions: %s", (sql) => {
+    expect(checkSqlSafety(sql)).toContain("file-reading or dynamic SQL functions are not allowed");
+  });
+
+  it("ignores file-reading function names inside string literals", () => {
+    expect(checkSqlSafety("SELECT 'read_csv_auto(' AS label")).toBeNull();
+    expect(checkSqlSafety("SELECT 'query(' AS label")).toBeNull();
+    expect(checkSqlSafety("SELECT 'getenv(' AS label")).toBeNull();
+  });
+
+  it("does not let quotes inside comments hide dangerous SQL", () => {
+    expect(checkSqlSafety("-- '\nSELECT getenv('ENMS_PG_CONNECTION')")).toContain(
+      "file-reading or dynamic SQL functions are not allowed",
+    );
+    expect(checkSqlSafety("SELECT 1 /* ' */; DROP TABLE users")).toContain(
+      "Only one SELECT query is allowed in reports",
+    );
+  });
+
+  it("does not treat comment markers inside string literals as real comments", () => {
+    expect(checkSqlSafety("SELECT '-- not a comment: DROP TABLE users' AS label")).toBeNull();
+    expect(checkSqlSafety("SELECT '/* not a comment */ getenv(' AS label")).toBeNull();
   });
 });

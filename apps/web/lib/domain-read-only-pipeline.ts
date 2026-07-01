@@ -158,6 +158,7 @@ export function buildDomainReadOnlyExecutionPlan(
     );
     const eligible =
       input.preflight.shouldRouteToEnms &&
+      base.blockedReason === null &&
       domainAdapterSupportsPhaseOneReadOnlyIntent("enms", input.preflight.intent);
     return eligible ? asEligible(base) : asIneligible(base);
   }
@@ -176,6 +177,7 @@ export function buildDomainReadOnlyExecutionPlan(
     );
     const eligible =
       input.preflight.shouldRouteToErp &&
+      base.blockedReason === null &&
       !looksLikeErpWriteRequest(input.userMessage) &&
       domainAdapterSupportsPhaseOneReadOnlyIntent("erp", input.preflight.intent);
     return eligible ? asEligible(base) : asIneligible(base);
@@ -184,6 +186,8 @@ export function buildDomainReadOnlyExecutionPlan(
   const ycrmBlockedReason =
     input.preflight.blockers.includes("auto_schema_missing")
       ? "auto_schema_missing"
+      : input.preflight.blockers.includes("cross_system_required")
+        ? "cross_system_required"
       : input.snapshot?.availability === "blocked"
         ? "source_of_truth_unavailable"
         : null;
@@ -198,6 +202,7 @@ export function buildDomainReadOnlyExecutionPlan(
   );
   const ycrmEligible =
     input.preflight.shouldRouteToYcrm &&
+    ycrmBase.blockedReason === null &&
     !input.preflight.crossSystem &&
     input.preflight.intent !== "product_help" &&
     domainAdapterSupportsPhaseOneReadOnlyIntent("ycrm", input.preflight.intent);
@@ -240,7 +245,7 @@ export function decorateMessageWithReadOnlyExecutionPlan(
 }
 
 export function buildReadOnlyExecutionBlockedReply(
-  plan: DomainReadOnlyExecutionPlan,
+  plan: DomainReadOnlyExecutionPlan | DomainReadOnlyExecutionIneligiblePlan,
 ): string | null {
   if (!plan.blockedReason) {
     return null;
@@ -249,13 +254,18 @@ export function buildReadOnlyExecutionBlockedReply(
   switch (plan.blockedReason) {
     case "auto_schema_missing":
       return [
-        `我判斷這題屬於 ${plan.displayName} 的唯讀查詢，但目前缺少對應 workspace 的 auto-schema，因此無法安全確認欄位與 join。`,
-        "我會先停在這裡，不會改用模型猜答案。請先補上對應 workspace 的 auto-schema 後再查詢。",
+        `我判斷這題屬於 ${plan.displayName} 的唯讀查詢，但目前缺少這個工作區的欄位對照資料（auto-schema），所以不能安全確認資料表、欄位與關聯。`,
+        "我會先停在這裡，不會改用模型猜答案。請維運或資料管理者重新產生該工作區的 schema reference；如果只是要總覽，也可以先改問已完成 schema 的工作區。",
       ].join("\n");
     case "source_of_truth_unavailable":
       return [
-        `我判斷這題屬於 ${plan.displayName} 的唯讀查詢，但目前 source-of-truth 無法使用或查詢被阻擋。`,
-        "我會先停在這裡，不會改用模型自由回答。請先確認資料來源、連線或必要資料表是否可讀。",
+        `我判斷這題屬於 ${plan.displayName} 的唯讀查詢，但目前主要資料來源尚未就緒或暫時無法讀取。`,
+        "我會先停在這裡，不會改用模型自由猜答案。請先通知維運確認資料連線設定與必要資料表狀態。",
+      ].join("\n");
+    case "cross_system_required":
+      return [
+        `我判斷這題需要跨系統資料，${plan.displayName} 只能提供其中一部分商務上下文。`,
+        "我會先停在這裡，不會只用單一系統或模型推測答案。請改走跨系統查詢流程，明確指定需要一起查的系統，例如 Y-CRM + ERP 或 Y-CRM + EnMS。",
       ].join("\n");
     default:
       return null;

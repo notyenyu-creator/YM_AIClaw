@@ -1,11 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+const TEST_ERP_CONNECTION =
+  "host=118.168.188.27 port=5433 dbname=ErpUAT_local user=test password=secret sslmode=disable";
+const ORIGINAL_ENV = { ...process.env };
+
 vi.mock("./workspace", () => ({
   duckdbQueryExternalPgAsyncDetailed: vi.fn(),
 }));
 
 describe("buildErpVerifiedDirectQueryAnswer", () => {
   beforeEach(() => {
+    process.env = { ...ORIGINAL_ENV };
+    process.env.ERP_PG_CONNECTION = TEST_ERP_CONNECTION;
     vi.resetModules();
     vi.clearAllMocks();
   });
@@ -28,6 +34,8 @@ describe("buildErpVerifiedDirectQueryAnswer", () => {
     expect(duckdbQueryExternalPgAsyncDetailed).toHaveBeenCalledTimes(1);
     expect(answer).toContain("目前共有 42 個客戶");
     expect(answer).toContain("```report-json");
+    expect(answer).toContain("\"sourceDomain\": \"erp\"");
+    expect(answer).toContain("\"sourceKind\": \"verified_direct\"");
     expect(answer).toContain("\"customer_count-bar\"");
     expect(answer).toContain("\"type\": \"bar\"");
   });
@@ -499,5 +507,24 @@ describe("buildErpVerifiedDirectQueryAnswer", () => {
       vi.mocked(duckdbQueryExternalPgAsyncDetailed).mock.calls[0]?.[1],
     ).toContain("WITH line_agg AS");
     expect(answer).toContain("訂單 SO20260101 的摘要如下");
+  });
+
+  it("returns a safe ERP unavailable reply when DB config is missing", async () => {
+    delete process.env.ERP_PG_CONNECTION;
+    delete process.env.OPENCLAW_ERP_PG_CONNECTION;
+    delete process.env.ERP_POSTGRES_CONNECTION;
+
+    const { duckdbQueryExternalPgAsyncDetailed } = await import("./workspace");
+    const { buildErpVerifiedDirectQueryAnswer } = await import(
+      "./erp-verified-direct-query"
+    );
+
+    const answer = await buildErpVerifiedDirectQueryAnswer({
+      userMessage: "可以幫我用圖表呈現一下 ERP 目前有多少客戶嗎？",
+    });
+
+    expect(duckdbQueryExternalPgAsyncDetailed).not.toHaveBeenCalled();
+    expect(answer).toContain("目前 ERP 資料連線尚未啟用");
+    expect(answer).not.toContain("password=");
   });
 });

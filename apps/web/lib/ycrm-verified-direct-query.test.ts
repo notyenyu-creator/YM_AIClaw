@@ -1,11 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+const TEST_YCRM_CONNECTION =
+  "dbname=default user=test password=secret host=localhost port=5432";
+const ORIGINAL_ENV = { ...process.env };
+
 vi.mock("./workspace", () => ({
   duckdbQueryExternalPgAsyncDetailed: vi.fn(),
 }));
 
 describe("buildYcrmVerifiedDirectQueryAnswer", () => {
   beforeEach(() => {
+    process.env = { ...ORIGINAL_ENV };
+    process.env.YCRM_PG_CONNECTION = TEST_YCRM_CONNECTION;
     vi.resetModules();
     vi.clearAllMocks();
   });
@@ -45,6 +51,8 @@ describe("buildYcrmVerifiedDirectQueryAnswer", () => {
     ).toContain('FROM ycrm."workspace_3joxkr9ofo5hlxjan164egffx"."company"');
     expect(answer).toContain("目前共有 23 家客戶公司");
     expect(answer).toContain("```report-json");
+    expect(answer).toContain("\"sourceDomain\": \"ycrm\"");
+    expect(answer).toContain("\"sourceKind\": \"verified_direct\"");
     expect(answer).toContain("\"company_count-bar\"");
   });
 
@@ -572,5 +580,39 @@ describe("buildYcrmVerifiedDirectQueryAnswer", () => {
     const sql = vi.mocked(duckdbQueryExternalPgAsyncDetailed).mock.calls[0]?.[1] ?? "";
     expect(sql).not.toContain("amountAmountMicros");
     expect(answer).toContain("核心資料查詢");
+  });
+
+  it("returns a safe Y-CRM unavailable reply when DB config is missing", async () => {
+    delete process.env.YCRM_PG_CONNECTION;
+    delete process.env.Y_CRM_PG_CONNECTION;
+    delete process.env.OPENCLAW_YCRM_PG_CONNECTION;
+    delete process.env.YCRM_POSTGRES_CONNECTION;
+
+    const { duckdbQueryExternalPgAsyncDetailed } = await import("./workspace");
+    const { buildYcrmVerifiedDirectQueryAnswer } = await import(
+      "./ycrm-verified-direct-query"
+    );
+
+    const answer = await buildYcrmVerifiedDirectQueryAnswer({
+      userMessage: "請用 Y-CRM 資料幫我用圖表呈現一下目前有多少客戶。",
+      planner: {
+        system: "ycrm",
+        updatedAt: Date.now(),
+        validationState: "heuristic",
+        intent: "entity_summary",
+        confidence: "high",
+        shouldRouteToYcrm: true,
+        workspaceId: "workspace_3joxkr9ofo5hlxjan164egffx",
+        needsWorkspaceValidation: false,
+        warnings: [],
+        blockers: [],
+        crossSystem: false,
+        targetSystems: [],
+      },
+    });
+
+    expect(duckdbQueryExternalPgAsyncDetailed).not.toHaveBeenCalled();
+    expect(answer).toContain("目前 Y-CRM 資料連線尚未啟用");
+    expect(answer).not.toContain("password=");
   });
 });

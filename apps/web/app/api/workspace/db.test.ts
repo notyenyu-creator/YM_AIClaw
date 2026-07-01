@@ -1,5 +1,13 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
+const TEST_ENMS_CONNECTION =
+  "host=118.168.188.27 port=55433 dbname=EnMS user=test password=secret sslmode=disable";
+const TEST_YCRM_CONNECTION =
+  "dbname=default user=test password=secret host=localhost port=5432";
+const TEST_ERP_CONNECTION =
+  "host=118.168.188.27 port=5433 dbname=ErpUAT_local user=test password=secret sslmode=disable";
+const ORIGINAL_ENV = { ...process.env };
+
 // Mock workspace (include ALL exports used by the routes)
 vi.mock("@/lib/workspace", () => ({
   safeResolvePath: vi.fn(() => null),
@@ -23,10 +31,26 @@ vi.mock("@/lib/report-filters", () => ({
   buildFilterClauses: vi.fn(() => []),
   injectFilters: vi.fn((sql: string) => sql),
   checkSqlSafety: vi.fn(() => null),
+  maskSqlLiteralsAndComments: vi.fn((sql: string) =>
+    sql
+      .replace(/'(?:''|[^'])*'/g, "''")
+      .replace(/"(?:""|[^"])*"/g, '""')
+      .replace(/--[^\n\r]*/g, "")
+      .replace(/\/\*[\s\S]*?\*\//g, ""),
+  ),
 }));
 
 describe("Workspace DB & Reports API", () => {
   beforeEach(() => {
+    process.env.ENMS_PG_CONNECTION = TEST_ENMS_CONNECTION;
+    process.env.YCRM_PG_CONNECTION = TEST_YCRM_CONNECTION;
+    process.env.ERP_PG_CONNECTION = TEST_ERP_CONNECTION;
+    delete process.env.OPENCLAW_ENMS_PG_CONNECTION;
+    delete process.env.ENMS_POSTGRES_CONNECTION;
+    delete process.env.OPENCLAW_YCRM_PG_CONNECTION;
+    delete process.env.YCRM_POSTGRES_CONNECTION;
+    delete process.env.OPENCLAW_ERP_PG_CONNECTION;
+    delete process.env.ERP_POSTGRES_CONNECTION;
     vi.resetModules();
     vi.mock("@/lib/workspace", () => ({
       safeResolvePath: vi.fn(() => null),
@@ -48,11 +72,19 @@ describe("Workspace DB & Reports API", () => {
       buildFilterClauses: vi.fn(() => []),
       injectFilters: vi.fn((sql: string) => sql),
       checkSqlSafety: vi.fn(() => null),
+      maskSqlLiteralsAndComments: vi.fn((sql: string) =>
+        sql
+          .replace(/'(?:''|[^'])*'/g, "''")
+          .replace(/"(?:""|[^"])*"/g, '""')
+          .replace(/--[^\n\r]*/g, "")
+          .replace(/\/\*[\s\S]*?\*\//g, ""),
+      ),
     }));
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
+    process.env = { ...ORIGINAL_ENV };
   });
 
   // ─── POST /api/workspace/db/query ───────────────────────────────
@@ -81,6 +113,8 @@ describe("Workspace DB & Reports API", () => {
     });
 
     it("rejects mutation queries with 403", async () => {
+      const { checkSqlSafety } = await import("@/lib/report-filters");
+      vi.mocked(checkSqlSafety).mockReturnValue("Only SELECT queries are allowed in reports");
       const { safeResolvePath } = await import("@/lib/workspace");
       vi.mocked(safeResolvePath).mockReturnValue("/ws/test.duckdb");
 
@@ -94,7 +128,33 @@ describe("Workspace DB & Reports API", () => {
       expect(res.status).toBe(403);
     });
 
+    it("uses shared SQL safety for DuckDB file queries", async () => {
+      const { checkSqlSafety } = await import("@/lib/report-filters");
+      vi.mocked(checkSqlSafety).mockReturnValue(
+        "Only approved report queries are allowed; file-reading or dynamic SQL functions are not allowed",
+      );
+      const { safeResolvePath, duckdbQueryOnFileAsync } = await import("@/lib/workspace");
+      vi.mocked(safeResolvePath).mockReturnValue("/ws/test.duckdb");
+      vi.mocked(duckdbQueryOnFileAsync).mockClear();
+
+      const { POST } = await import("./db/query/route.js");
+      const req = new Request("http://localhost/api/workspace/db/query", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          path: "test.duckdb",
+          sql: 'SELECT * FROM "read_text"(\'/etc/hosts\')',
+        }),
+      });
+      const res = await POST(req);
+      expect(res.status).toBe(403);
+      expect(checkSqlSafety).toHaveBeenCalledWith('SELECT * FROM "read_text"(\'/etc/hosts\')');
+      expect(duckdbQueryOnFileAsync).not.toHaveBeenCalled();
+    });
+
     it("executes query and returns rows", async () => {
+      const { checkSqlSafety } = await import("@/lib/report-filters");
+      vi.mocked(checkSqlSafety).mockReturnValue(null);
       const { safeResolvePath, duckdbQueryOnFileAsync } = await import("@/lib/workspace");
       vi.mocked(safeResolvePath).mockReturnValue("/ws/test.duckdb");
       vi.mocked(duckdbQueryOnFileAsync).mockResolvedValue([{ id: 1, name: "test" }]);
@@ -112,6 +172,8 @@ describe("Workspace DB & Reports API", () => {
     });
 
     it("returns empty rows for empty result", async () => {
+      const { checkSqlSafety } = await import("@/lib/report-filters");
+      vi.mocked(checkSqlSafety).mockReturnValue(null);
       const { safeResolvePath, duckdbQueryOnFileAsync } = await import("@/lib/workspace");
       vi.mocked(safeResolvePath).mockReturnValue("/ws/test.duckdb");
       vi.mocked(duckdbQueryOnFileAsync).mockResolvedValue([]);
@@ -209,18 +271,16 @@ describe("Workspace DB & Reports API", () => {
       expect(res.status).toBe(200);
       const json = await res.json();
       expect(json.rows).toEqual([{ count: 42 }]);
+      expect(json.sourceDomain).toBeNull();
+      expect(json.sourceKind).toBe("workspace_duckdb");
     });
 
-    it("routes ycrm-qualified report SQL to external postgres execution", async () => {
+    it("blocks Y-CRM-qualified report SQL from using ad-hoc external PostgreSQL execution", async () => {
       const { checkSqlSafety } = await import("@/lib/report-filters");
       vi.mocked(checkSqlSafety).mockReturnValue(null);
       const { duckdbQueryAsyncDetailed, duckdbQueryExternalPgAsyncDetailed } = await import("@/lib/workspace");
       vi.mocked(duckdbQueryAsyncDetailed).mockClear();
       vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockClear();
-      vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockResolvedValue({
-        rows: [{ stage: "需求確認", cnt: 9 }],
-        error: null,
-      });
 
       const { POST } = await import("./reports/execute/route.js");
       const req = new Request("http://localhost/api/workspace/reports/execute", {
@@ -231,21 +291,74 @@ describe("Workspace DB & Reports API", () => {
         }),
       });
       const res = await POST(req);
-      expect(res.status).toBe(200);
+      expect(res.status).toBe(400);
       const json = await res.json();
-      expect(json.rows).toEqual([{ stage: "需求確認", cnt: 9 }]);
-      expect(duckdbQueryExternalPgAsyncDetailed).toHaveBeenCalled();
+      expect(json.error).toContain("引用外部資料域");
+      expect(json.error).toContain("Y-CRM");
+      expect(json.error).toContain("verified direct query");
+      expect(json.sourceDomain).toBe("ycrm");
+      expect(json.sourceKind).toBe("blocked_external_postgres");
+      expect(duckdbQueryExternalPgAsyncDetailed).not.toHaveBeenCalled();
       expect(duckdbQueryAsyncDetailed).not.toHaveBeenCalled();
     });
 
-    it("routes erp-qualified report SQL to external postgres execution", async () => {
+    it("blocks Y-CRM-qualified report SQL before reading DB env config", async () => {
+      delete process.env.YCRM_PG_CONNECTION;
+      delete process.env.Y_CRM_PG_CONNECTION;
+      delete process.env.OPENCLAW_YCRM_PG_CONNECTION;
+      delete process.env.YCRM_POSTGRES_CONNECTION;
       const { checkSqlSafety } = await import("@/lib/report-filters");
       vi.mocked(checkSqlSafety).mockReturnValue(null);
-      const { duckdbQueryExternalPgAsyncDetailed } = await import("@/lib/workspace");
-      vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockResolvedValue({
-        rows: [{ customer_name: "OOCHAIN", cnt: 3 }],
-        error: null,
+
+      const { POST } = await import("./reports/execute/route.js");
+      const req = new Request("http://localhost/api/workspace/reports/execute", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sql: "SELECT * FROM ycrm.workspace_3joxkr9ofo5hlxjan164egffx.opportunity",
+        }),
       });
+      const res = await POST(req);
+      expect(res.status).toBe(400);
+      const json = await res.json();
+      expect(json.error).toContain("引用外部資料域");
+      expect(json.error).toContain("Y-CRM");
+      expect(json.error).not.toContain("YCRM_PG_CONNECTION");
+      expect(json.error).not.toContain("password=");
+    });
+
+    it("blocks quoted ERP-qualified report SQL from using ad-hoc external PostgreSQL execution", async () => {
+      const { checkSqlSafety } = await import("@/lib/report-filters");
+      vi.mocked(checkSqlSafety).mockReturnValue(null);
+      const { duckdbQueryExternalPgAsyncDetailed, duckdbQueryAsyncDetailed } = await import("@/lib/workspace");
+      vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockClear();
+      vi.mocked(duckdbQueryAsyncDetailed).mockClear();
+
+      const { POST } = await import("./reports/execute/route.js");
+      const req = new Request("http://localhost/api/workspace/reports/execute", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sql: 'SELECT customer_name, COUNT(*) AS cnt FROM "erp".public."SO" GROUP BY customer_name',
+        }),
+      });
+      const res = await POST(req);
+      expect(res.status).toBe(400);
+      const json = await res.json();
+      expect(json.error).toContain("引用外部資料域");
+      expect(json.error).toContain("ERP");
+      expect(json.sourceDomain).toBe("erp");
+      expect(json.sourceKind).toBe("blocked_external_postgres");
+      expect(duckdbQueryExternalPgAsyncDetailed).not.toHaveBeenCalled();
+      expect(duckdbQueryAsyncDetailed).not.toHaveBeenCalled();
+    });
+
+    it("blocks ERP-qualified report SQL from using ad-hoc external PostgreSQL execution", async () => {
+      const { checkSqlSafety } = await import("@/lib/report-filters");
+      vi.mocked(checkSqlSafety).mockReturnValue(null);
+      const { duckdbQueryExternalPgAsyncDetailed, duckdbQueryAsyncDetailed } = await import("@/lib/workspace");
+      vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockClear();
+      vi.mocked(duckdbQueryAsyncDetailed).mockClear();
 
       const { POST } = await import("./reports/execute/route.js");
       const req = new Request("http://localhost/api/workspace/reports/execute", {
@@ -256,24 +369,24 @@ describe("Workspace DB & Reports API", () => {
         }),
       });
       const res = await POST(req);
-      expect(res.status).toBe(200);
+      expect(res.status).toBe(400);
       const json = await res.json();
-      expect(json.rows).toEqual([{ customer_name: "OOCHAIN", cnt: 3 }]);
-      expect(duckdbQueryExternalPgAsyncDetailed).toHaveBeenCalledWith(
-        expect.stringContaining("ErpUAT_local"),
-        expect.any(String),
-        "erp",
-      );
+      expect(json.error).toContain("引用外部資料域");
+      expect(json.error).toContain("ERP");
+      expect(json.error).toContain("verified direct query");
+      expect(json.error).not.toContain("password=");
+      expect(json.sourceDomain).toBe("erp");
+      expect(json.sourceKind).toBe("blocked_external_postgres");
+      expect(duckdbQueryExternalPgAsyncDetailed).not.toHaveBeenCalled();
+      expect(duckdbQueryAsyncDetailed).not.toHaveBeenCalled();
     });
 
-    it("routes enms-qualified report SQL to external postgres execution", async () => {
+    it("blocks EnMS-qualified report SQL from using ad-hoc external PostgreSQL execution", async () => {
       const { checkSqlSafety } = await import("@/lib/report-filters");
       vi.mocked(checkSqlSafety).mockReturnValue(null);
-      const { duckdbQueryExternalPgAsyncDetailed } = await import("@/lib/workspace");
-      vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockResolvedValue({
-        rows: [{ RecordTime: "2026-05-28 16:00:00+08", MaxDemand: "0.0240" }],
-        error: null,
-      });
+      const { duckdbQueryExternalPgAsyncDetailed, duckdbQueryAsyncDetailed } = await import("@/lib/workspace");
+      vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockClear();
+      vi.mocked(duckdbQueryAsyncDetailed).mockClear();
 
       const { POST } = await import("./reports/execute/route.js");
       const req = new Request("http://localhost/api/workspace/reports/execute", {
@@ -284,14 +397,71 @@ describe("Workspace DB & Reports API", () => {
         }),
       });
       const res = await POST(req);
+      expect(res.status).toBe(400);
+      const json = await res.json();
+      expect(json.error).toContain("引用外部資料域");
+      expect(json.error).toContain("EnMS");
+      expect(json.error).toContain("verified direct query");
+      expect(json.sourceDomain).toBe("enms");
+      expect(json.sourceKind).toBe("blocked_external_postgres");
+      expect(duckdbQueryExternalPgAsyncDetailed).not.toHaveBeenCalled();
+      expect(duckdbQueryAsyncDetailed).not.toHaveBeenCalled();
+    });
+
+    it("blocks cross-domain report SQL with a user-facing explanation", async () => {
+      const { checkSqlSafety } = await import("@/lib/report-filters");
+      vi.mocked(checkSqlSafety).mockReturnValue(null);
+      const { duckdbQueryExternalPgAsyncDetailed, duckdbQueryAsyncDetailed } = await import("@/lib/workspace");
+      vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockClear();
+      vi.mocked(duckdbQueryAsyncDetailed).mockClear();
+
+      const { POST } = await import("./reports/execute/route.js");
+      const req = new Request("http://localhost/api/workspace/reports/execute", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sql:
+            'SELECT * FROM ycrm.workspace_3joxkr9ofo5hlxjan164egffx.opportunity o JOIN enms.public."DeviceDataSummaryView" v ON 1 = 1',
+        }),
+      });
+      const res = await POST(req);
+      expect(res.status).toBe(400);
+      const json = await res.json();
+      expect(json.error).toContain("引用外部資料域");
+      expect(json.error).toContain("Y-CRM");
+      expect(json.error).toContain("EnMS");
+      expect(json.sourceDomain).toBeNull();
+      expect(json.sourceKind).toBe("blocked_external_postgres");
+      expect(duckdbQueryExternalPgAsyncDetailed).not.toHaveBeenCalled();
+      expect(duckdbQueryAsyncDetailed).not.toHaveBeenCalled();
+    });
+
+    it("does not route domain names inside SQL literals or comments", async () => {
+      const { checkSqlSafety } = await import("@/lib/report-filters");
+      vi.mocked(checkSqlSafety).mockReturnValue(null);
+      const { duckdbQueryExternalPgAsyncDetailed, duckdbQueryAsyncDetailed } = await import("@/lib/workspace");
+      vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockClear();
+      vi.mocked(duckdbQueryAsyncDetailed).mockResolvedValue({
+        rows: [{ label: "ycrm.public.opportunity", note: "enms.public.sites" }],
+        error: null,
+      });
+
+      const { POST } = await import("./reports/execute/route.js");
+      const req = new Request("http://localhost/api/workspace/reports/execute", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sql:
+            "SELECT 'ycrm.public.opportunity' AS label, 'enms.public.sites' AS note -- erp.public.SO",
+        }),
+      });
+      const res = await POST(req);
       expect(res.status).toBe(200);
       const json = await res.json();
-      expect(json.rows).toEqual([{ RecordTime: "2026-05-28 16:00:00+08", MaxDemand: "0.0240" }]);
-      expect(duckdbQueryExternalPgAsyncDetailed).toHaveBeenCalledWith(
-        expect.stringContaining("dbname=EnMS"),
-        expect.any(String),
-        "enms",
-      );
+      expect(json.sourceDomain).toBeNull();
+      expect(json.sourceKind).toBe("workspace_duckdb");
+      expect(duckdbQueryAsyncDetailed).toHaveBeenCalled();
+      expect(duckdbQueryExternalPgAsyncDetailed).not.toHaveBeenCalled();
     });
 
     it("surfaces query errors instead of silently returning empty rows", async () => {
@@ -344,6 +514,31 @@ describe("Workspace DB & Reports API", () => {
     });
   });
 
+  // ─── POST /api/workspace/db/external-pg-query ──────────────────
+
+  describe("POST /api/workspace/db/external-pg-query", () => {
+    it("rejects all requests because the legacy endpoint is deprecated", async () => {
+      const { duckdbQueryExternalPgAsyncDetailed } = await import("@/lib/workspace");
+      vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockClear();
+      const { POST } = await import("./db/external-pg-query/route.js");
+      const req = new Request("http://localhost/api/workspace/db/external-pg-query", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          connectionString: "host=localhost password=secret",
+          domain: "ycrm",
+          sql: "SELECT 1",
+        }),
+      });
+      const res = await POST(req);
+      expect(res.status).toBe(410);
+      const json = await res.json();
+      expect(json.error).toContain("Deprecated internal route");
+      expect(json.error).not.toContain("password=secret");
+      expect(duckdbQueryExternalPgAsyncDetailed).not.toHaveBeenCalled();
+    });
+  });
+
   // ─── POST /api/workspace/query ─────────────────────────────────
 
   describe("POST /api/workspace/query", () => {
@@ -375,6 +570,8 @@ describe("Workspace DB & Reports API", () => {
     });
 
     it("rejects mutation SQL with 403", async () => {
+      const { checkSqlSafety } = await import("@/lib/report-filters");
+      vi.mocked(checkSqlSafety).mockReturnValue("Only SELECT queries are allowed in reports");
       const { POST } = await import("./query/route.js");
       const req = new Request("http://localhost/api/workspace/query", {
         method: "POST",
@@ -383,6 +580,50 @@ describe("Workspace DB & Reports API", () => {
       });
       const res = await POST(req);
       expect(res.status).toBe(403);
+    });
+
+    it("uses shared SQL safety for generic workspace queries", async () => {
+      const { checkSqlSafety } = await import("@/lib/report-filters");
+      vi.mocked(checkSqlSafety).mockReturnValue(
+        "Only approved report queries are allowed; file-reading or dynamic SQL functions are not allowed",
+      );
+      const { duckdbQueryAsync } = await import("@/lib/workspace");
+      vi.mocked(duckdbQueryAsync).mockClear();
+
+      const { POST } = await import("./query/route.js");
+      const req = new Request("http://localhost/api/workspace/query", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sql: "SELECT getenv('ENMS_PG_CONNECTION')" }),
+      });
+      const res = await POST(req);
+      expect(res.status).toBe(403);
+      expect(checkSqlSafety).toHaveBeenCalledWith("SELECT getenv('ENMS_PG_CONNECTION')");
+      expect(duckdbQueryAsync).not.toHaveBeenCalled();
+    });
+  });
+
+  // ─── POST /api/workspace/execute ───────────────────────────────
+
+  describe("POST /api/workspace/execute", () => {
+    it("uses shared SQL safety for generic execution", async () => {
+      const { checkSqlSafety } = await import("@/lib/report-filters");
+      vi.mocked(checkSqlSafety).mockReturnValue(
+        "Only approved report queries are allowed; file-reading or dynamic SQL functions are not allowed",
+      );
+      const { duckdbQueryAsync } = await import("@/lib/workspace");
+      vi.mocked(duckdbQueryAsync).mockClear();
+
+      const { POST } = await import("./execute/route.js");
+      const req = new Request("http://localhost/api/workspace/execute", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sql: 'SELECT "getenv"(\'ENMS_PG_CONNECTION\')' }),
+      });
+      const res = await POST(req);
+      expect(res.status).toBe(403);
+      expect(checkSqlSafety).toHaveBeenCalledWith('SELECT "getenv"(\'ENMS_PG_CONNECTION\')');
+      expect(duckdbQueryAsync).not.toHaveBeenCalled();
     });
   });
 });

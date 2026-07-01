@@ -113,6 +113,13 @@ function countMatches(message: string, keywords: string[]): {
   return { count: matched.length, matched };
 }
 
+function hasExplicitErpExclusion(message: string): boolean {
+  return (
+    /(不要查|不要看|不要用|不用|不查|不看|別查|勿查|排除|不要|別|勿)\s*(?:(?:Y-CRM|y-crm|EnMS|enms|能管|能源管理)\s*(?:或|\/|、|,|，)\s*)*(ERP|erp)(?=[\s,，。.!?]|$)/i.test(message) ||
+    /(ERP|erp)[\s,，]*(先)?(不要查|不要看|不要用|不用|不查|不看|別查|勿查|排除)(?=[,，。.!?]|$)/i.test(message)
+  );
+}
+
 export function detectErpIntent(message: string): {
   intent: ErpIntent;
   matchedKeywords: string[];
@@ -154,6 +161,7 @@ export function buildErpContext(
 
   const { intent, matchedKeywords, totalMatches } = detectErpIntent(message);
   const ycrmSignal = countMatches(message, YCRM_ONLY_KEYWORDS).count;
+  const explicitErpExclusion = hasExplicitErpExclusion(message);
 
   // Confidence and routing rules:
   // - Explicit "erp" hint → high confidence routing
@@ -164,7 +172,10 @@ export function buildErpContext(
   let shouldRouteToErp = false;
   const warnings: string[] = [];
 
-  if (hint === "erp") {
+  if (explicitErpExclusion) {
+    shouldRouteToErp = false;
+    warnings.push("erp_explicitly_excluded");
+  } else if (hint === "erp") {
     shouldRouteToErp = true;
     confidence = totalMatches >= 1 ? "high" : "medium";
   } else if (totalMatches >= 2 && totalMatches > ycrmSignal) {

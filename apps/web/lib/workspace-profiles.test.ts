@@ -31,6 +31,7 @@ vi.mock("node:fs", async (importOriginal) => {
 
 vi.mock("node:child_process", () => ({
   execSync: vi.fn(() => ""),
+  execFileSync: vi.fn(() => ""),
   exec: vi.fn(
     (
       _cmd: string,
@@ -38,6 +39,16 @@ vi.mock("node:child_process", () => ({
       cb: (err: Error | null, result: { stdout: string }) => void,
     ) => {
       cb(null, { stdout: "" });
+    },
+  ),
+  execFile: vi.fn(
+    (
+      _file: string,
+      _args: string[],
+      _opts: unknown,
+      cb: (err: Error | null, stdout: string, stderr: string) => void,
+    ) => {
+      cb(null, "", "");
     },
   ),
 }));
@@ -106,6 +117,7 @@ describe("workspace (flat workspace model)", () => {
     });
     vi.mock("node:child_process", () => ({
       execSync: vi.fn(() => ""),
+      execFileSync: vi.fn(() => ""),
       exec: vi.fn(
         (
           _cmd: string,
@@ -113,6 +125,16 @@ describe("workspace (flat workspace model)", () => {
           cb: (err: Error | null, result: { stdout: string }) => void,
         ) => {
           cb(null, { stdout: "" });
+        },
+      ),
+      execFile: vi.fn(
+        (
+          _file: string,
+          _args: string[],
+          _opts: unknown,
+          cb: (err: Error | null, stdout: string, stderr: string) => void,
+        ) => {
+          cb(null, "", "");
         },
       ),
     }));

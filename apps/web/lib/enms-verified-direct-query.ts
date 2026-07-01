@@ -1,7 +1,23 @@
-import { duckdbQueryExternalPgAsyncDetailed } from "./workspace";
+import {
+  getEnmsPostgresConnectionString,
+  redactDatabaseConnectionSecrets,
+} from "./enms-db-config";
+import { duckdbQueryExternalPgAsyncDetailed as duckdbQueryExternalPgAsyncDetailedRaw } from "./workspace";
 
-const ENMS_CONNECTION_STRING =
-  "host=118.168.188.27 port=55433 dbname=EnMS user=sa password=ym@mes42769778 sslmode=disable";
+async function duckdbQueryExternalPgAsyncDetailed<T>(
+  connectionString: string,
+  sql: string,
+  alias: string,
+) {
+  const result = await duckdbQueryExternalPgAsyncDetailedRaw<T>(
+    connectionString,
+    sql,
+    alias,
+  );
+  return result.error
+    ? { ...result, error: redactDatabaseConnectionSecrets(result.error) }
+    : result;
+}
 
 type DemandAlertCountRow = {
   demand_alert_count?: number | string;
@@ -277,7 +293,9 @@ function isAssetCountRequest(message: string) {
 
 function extractGregorianYear(message: string): number | null {
   const match = message.match(/\b(20\d{2})\b/);
-  if (!match) return null;
+  if (!match) {
+    return null;
+  }
   const year = Number(match[1]);
   return Number.isFinite(year) ? year : null;
 }
@@ -433,7 +451,9 @@ function isSiteBillRankingRequest(message: string) {
 
 function extractRecentBillPeriodWindow(message: string): number | null {
   const match = message.match(/(?:最近|近)\s*(\d{1,2})\s*期/);
-  if (!match) return null;
+  if (!match) {
+    return null;
+  }
   const periods = Number(match[1]);
   return Number.isFinite(periods) && periods > 0 ? periods : null;
 }
@@ -538,7 +558,9 @@ type TopLoadTarget = {
 
 function extractRecentDayWindow(message: string): number | null {
   const match = message.match(/(?:最近|近)\s*(\d{1,3})\s*(?:天|日)/);
-  if (!match) return null;
+  if (!match) {
+    return null;
+  }
   const days = Number(match[1]);
   return Number.isFinite(days) && days > 0 ? days : null;
 }
@@ -568,7 +590,7 @@ function normalizeIsoDateParts(year: number, month: number, day: number): string
 
 function extractIsoDateCandidates(message: string): string[] {
   const results: string[] = [];
-  for (const match of message.matchAll(/\b(20\d{2})[\/-](\d{1,2})[\/-](\d{1,2})\b/g)) {
+  for (const match of message.matchAll(/\b(20\d{2})[/-](\d{1,2})[/-](\d{1,2})\b/g)) {
     const normalized = normalizeIsoDateParts(
       Number(match[1]),
       Number(match[2]),
@@ -592,7 +614,7 @@ function detectTopLoadTarget(message: string): TopLoadTarget | null {
   const isoDateCandidates = extractIsoDateCandidates(message);
 
   if (isoDateCandidates.length >= 2) {
-    const [startDate, endDate] = isoDateCandidates.sort();
+    const [startDate, endDate] = isoDateCandidates.toSorted();
     return {
       label: `${scopeLabel} ${startDate} 到 ${endDate} 設備 / 迴路耗電排行`,
       scopeLabel,
@@ -681,7 +703,7 @@ function detectEnergyTrendTarget(message: string): EnergyTrendTarget | null {
 
   const isoDateCandidates = extractIsoDateCandidates(message);
   if (isoDateCandidates.length >= 2) {
-    const [startDate, endDate] = isoDateCandidates.sort();
+    const [startDate, endDate] = isoDateCandidates.toSorted();
     return {
       label: `${scopeLabel}${startDate} 到 ${endDate} 能源趨勢`,
       grain: "day",
@@ -778,7 +800,9 @@ function isQuickWinRequest(message: string) {
 }
 
 function toNumber(value: number | string | undefined): number {
-  if (typeof value === "number") return value;
+  if (typeof value === "number") {
+    return value;
+  }
   if (typeof value === "string") {
     const parsed = Number(value);
     return Number.isFinite(parsed) ? parsed : 0;
@@ -814,6 +838,12 @@ function round(value: number, digits = 2) {
 function formatTime(value: string | null | undefined) {
   return value && value.trim() ? value : "無資料";
 }
+
+const ENMS_REPORT_METADATA = {
+  sourceDomain: "enms",
+  sourceKind: "verified_direct",
+  verifiedBy: "enms-verified-direct-query",
+} as const;
 
 function buildTopLoadLine(row: TopLoadRow, index: number, requestedSite: string | null) {
   const totalKwh = toNumber(row.total_kwh);
@@ -857,6 +887,7 @@ function buildAssetCountReport(
     JSON.stringify(
       {
         version: 1,
+        ...ENMS_REPORT_METADATA,
         title: `目前 ${noun} 總數`,
         description: `本地 EnMS DB 查詢結果，${noun}總數為 ${formatNumber(totalCount)}。`,
         panels: [
@@ -890,12 +921,12 @@ function buildAlertTypeSummaryReport(rows: AlertTypeSummaryRow[]) {
     rows
       .map((row) => row.first_alert_time)
       .filter((value): value is string => Boolean(value))
-      .sort()[0] ?? null;
+      .toSorted()[0] ?? null;
   const latestAlertTime =
     rows
       .map((row) => row.latest_alert_time)
       .filter((value): value is string => Boolean(value))
-      .sort()
+      .toSorted()
       .at(-1) ?? null;
 
   if (totalCount === 0) {
@@ -924,6 +955,7 @@ function buildAlertTypeSummaryReport(rows: AlertTypeSummaryRow[]) {
     JSON.stringify(
       {
         version: 1,
+        ...ENMS_REPORT_METADATA,
         title: "最近 7 天 EnMS 告警類型筆數",
         description: `本地 EnMS DB 查詢結果，共 ${formatNumber(totalCount)} 筆。`,
         panels: [
@@ -1237,7 +1269,7 @@ function buildSiteBenchmarkReport(rows: SiteKpiRow[], userMessage: string) {
   }
 
   const asksWorstPf = userMessage.includes("功率因數最差") || userMessage.includes("功因最差");
-  const sortedByPf = [...rows].sort((a, b) => toNumber(a.avg_pf) - toNumber(b.avg_pf));
+  const sortedByPf = rows.toSorted((a, b) => toNumber(a.avg_pf) - toNumber(b.avg_pf));
 
   if (asksWorstPf) {
     const worst = sortedByPf[0];
@@ -1256,8 +1288,7 @@ function buildSiteBenchmarkReport(rows: SiteKpiRow[], userMessage: string) {
   ];
 
   rows
-    .slice()
-    .sort((a, b) => toNumber(b.total_kwh) - toNumber(a.total_kwh))
+    .toSorted((a, b) => toNumber(b.total_kwh) - toNumber(a.total_kwh))
     .forEach((row, index) => {
       lines.push(
         `${index + 1}. ${row.site_name ?? "未對應場域"}：總用電 ${formatKwh(toNumber(row.total_kwh))}，最大需量 ${formatKw(toNumber(row.peak_kw))}，平均功率因數 ${round(toNumber(row.avg_pf), 4)}，最低功率因數 ${round(toNumber(row.min_pf), 4)}，資料點數 ${formatNumber(toNumber(row.point_count))}。`,
@@ -1339,6 +1370,7 @@ function buildSiteBillRankingReport(rows: SavingsScenarioRow[], requestedSite: s
     JSON.stringify(
       {
         version: 1,
+        ...ENMS_REPORT_METADATA,
         title: `${latestYear > 0 ? `${latestYear} 年` : "最新年度"} EnMS 場域電費 / 用電排行`,
         description: "以本地 EnMS DB 的最新可用台電帳單年度 baseline 產出場域電費與用電排行。",
         panels: [
@@ -1412,6 +1444,7 @@ function buildBillTrendReport(target: BillTrendTarget, rows: BillTrendRow[]) {
     JSON.stringify(
       {
         version: 1,
+        ...ENMS_REPORT_METADATA,
         title: `EnMS ${target.label}`,
         description: "以本地 EnMS DB 的台電帳單資料呈現用電、電費與平均電價趨勢。",
         panels: [
@@ -1496,6 +1529,7 @@ function buildEnergyTrendReport(target: EnergyTrendTarget, rows: EnergyTrendRow[
     JSON.stringify(
       {
         version: 1,
+        ...ENMS_REPORT_METADATA,
         title: `EnMS ${target.scopeLabel}能源趨勢`,
         description: "以本地 EnMS summary layer 產生用電、需量與功率因數 time-series。",
         panels: [
@@ -1688,14 +1722,18 @@ function buildQuickWinReport(riskRows: ContractRiskRow[], topLoadRows: TopLoadRo
 }
 
 function detectKnownSiteName(message: string): string | null {
-  if (message.includes("阿里山")) return "阿里山";
-  if (message.includes("洋銘")) return "洋銘資訊";
+  if (message.includes("阿里山")) {
+    return "阿里山";
+  }
+  if (message.includes("洋銘")) {
+    return "洋銘資訊";
+  }
   return null;
 }
 
 async function queryRecentAlertGovernanceRows() {
   return duckdbQueryExternalPgAsyncDetailed<AlertGovernanceRow>(
-    ENMS_CONNECTION_STRING,
+    getEnmsPostgresConnectionString(),
     `
       SELECT
         "AccountNumber" AS account_number,
@@ -1718,7 +1756,7 @@ async function queryRecentAlertGovernanceRows() {
 
 async function queryContractRiskRows() {
   return duckdbQueryExternalPgAsyncDetailed<ContractRiskRow>(
-    ENMS_CONNECTION_STRING,
+    getEnmsPostgresConnectionString(),
     `
       SELECT
         COALESCE(s.site_name, '(未對應場域)') AS site_name,
@@ -1743,7 +1781,7 @@ async function queryContractRiskRows() {
 
 async function querySiteAccountsRows() {
   return duckdbQueryExternalPgAsyncDetailed<SiteAccountsRow>(
-    ENMS_CONNECTION_STRING,
+    getEnmsPostgresConnectionString(),
     `
       SELECT
         COALESCE(s.site_name, '(未對應場域)') AS site_name,
@@ -1775,7 +1813,7 @@ async function queryTopLoadRows(
 ) {
   const siteFilter = buildTopLoadSiteFilter(siteName);
   return duckdbQueryExternalPgAsyncDetailed<TopLoadRow>(
-    ENMS_CONNECTION_STRING,
+    getEnmsPostgresConnectionString(),
     `
       WITH meter_meta AS (
         SELECT
@@ -1817,7 +1855,7 @@ async function queryTopLoadAvailabilityRow(target: TopLoadTarget) {
   const siteFilter = buildTopLoadSiteFilter(target.siteName);
   if (!target.siteName) {
     return duckdbQueryExternalPgAsyncDetailed<TopLoadAvailabilityRow>(
-      ENMS_CONNECTION_STRING,
+      getEnmsPostgresConnectionString(),
       `
         SELECT
           CAST(${target.startSql} AS VARCHAR) AS requested_window_start,
@@ -1837,7 +1875,7 @@ async function queryTopLoadAvailabilityRow(target: TopLoadTarget) {
   }
 
   return duckdbQueryExternalPgAsyncDetailed<TopLoadAvailabilityRow>(
-    ENMS_CONNECTION_STRING,
+    getEnmsPostgresConnectionString(),
     `
       WITH meter_meta AS (
         SELECT
@@ -1881,7 +1919,7 @@ async function queryTopLoadAvailabilityRow(target: TopLoadTarget) {
 async function queryLatestAvailableTopLoadRows(siteName: string | null) {
   const siteFilter = buildTopLoadSiteFilter(siteName);
   return duckdbQueryExternalPgAsyncDetailed<TopLoadRow>(
-    ENMS_CONNECTION_STRING,
+    getEnmsPostgresConnectionString(),
     `
       WITH meter_meta AS (
         SELECT
@@ -1938,7 +1976,7 @@ async function queryLatestAvailableTopLoadRows(siteName: string | null) {
 async function queryRecentAnomalySummaryRows(siteName: string | null) {
   const siteFilter = siteName ? `AND s.site_name LIKE '%${siteName}%'` : "";
   return duckdbQueryExternalPgAsyncDetailed<AnomalySummaryRow>(
-    ENMS_CONNECTION_STRING,
+    getEnmsPostgresConnectionString(),
     `
       WITH meter_meta AS (
         SELECT
@@ -1979,7 +2017,7 @@ async function queryRecentAnomalySummaryRows(siteName: string | null) {
 async function queryRecentRawQualityRows(siteName: string | null) {
   const siteFilter = siteName ? `AND s.site_name LIKE '%${siteName}%'` : "";
   return duckdbQueryExternalPgAsyncDetailed<RawQualityRow>(
-    ENMS_CONNECTION_STRING,
+    getEnmsPostgresConnectionString(),
     `
       WITH meter_meta AS (
         SELECT
@@ -2019,7 +2057,7 @@ async function queryRecentRawQualityRows(siteName: string | null) {
 
 async function querySiteKpiRows() {
   return duckdbQueryExternalPgAsyncDetailed<SiteKpiRow>(
-    ENMS_CONNECTION_STRING,
+    getEnmsPostgresConnectionString(),
     `
       WITH meter_meta AS (
         SELECT
@@ -2055,7 +2093,7 @@ async function querySiteKpiRows() {
 
 async function queryPeakDemandRankingRows() {
   return duckdbQueryExternalPgAsyncDetailed<SitePeakDemandRow>(
-    ENMS_CONNECTION_STRING,
+    getEnmsPostgresConnectionString(),
     `
       WITH meter_meta AS (
         SELECT
@@ -2108,7 +2146,7 @@ async function queryPeakDemandRankingRows() {
 async function querySavingsScenarioRows(siteName: string | null) {
   const siteFilter = siteName ? `AND s.site_name LIKE '%${siteName}%'` : "";
   return duckdbQueryExternalPgAsyncDetailed<SavingsScenarioRow>(
-    ENMS_CONNECTION_STRING,
+    getEnmsPostgresConnectionString(),
     `
       WITH target_accounts AS (
         SELECT DISTINCT
@@ -2177,7 +2215,7 @@ async function queryBillTrendRows(target: BillTrendTarget) {
   const periodLimiter = target.year != null ? "" : `LIMIT ${Math.max(1, target.periodLimit)}`;
 
   return duckdbQueryExternalPgAsyncDetailed<BillTrendRow>(
-    ENMS_CONNECTION_STRING,
+    getEnmsPostgresConnectionString(),
     `
       WITH target_accounts AS (
         SELECT DISTINCT
@@ -2235,7 +2273,7 @@ async function queryEnergyTrendRows(target: EnergyTrendTarget) {
   const siteFilter = target.siteName ? `AND s.site_name LIKE '%${target.siteName}%'` : "";
   const periodFormat = target.grain === "month" ? "%Y-%m" : "%Y-%m-%d";
   return duckdbQueryExternalPgAsyncDetailed<EnergyTrendRow>(
-    ENMS_CONNECTION_STRING,
+    getEnmsPostgresConnectionString(),
     `
       WITH meter_meta AS (
         SELECT
@@ -2302,6 +2340,7 @@ function buildDemandAlertCountReport(
       JSON.stringify(
         {
           version: 1,
+          ...ENMS_REPORT_METADATA,
           title: `電號 ${accountNumber} 需量告警紀錄分布`,
           description: `本地 EnMS DB 查詢結果，共 ${formatNumber(totalCount)} 筆。`,
           panels: [
@@ -2371,6 +2410,7 @@ function buildRoiYearReport(year: number, rows: RoiYearRow[]) {
     JSON.stringify(
       {
         version: 1,
+        ...ENMS_REPORT_METADATA,
         title: `${year} 年節能 ROI 年度試算`,
         description: "以本地 EnMS DB 台電帳單為 baseline，呈現 5% 與 10% 節電情境的年度節省金額。",
         panels: [
@@ -2407,7 +2447,7 @@ export async function buildEnmsVerifiedDirectQueryAnswer(
     }
     try {
       const result = await duckdbQueryExternalPgAsyncDetailed<AssetCountRow>(
-        ENMS_CONNECTION_STRING,
+        getEnmsPostgresConnectionString(),
         `
           SELECT COUNT(*) AS total_count
           FROM enms.public."${target.tableName}"
@@ -2432,7 +2472,7 @@ export async function buildEnmsVerifiedDirectQueryAnswer(
     try {
       const alertTypeResult =
         await duckdbQueryExternalPgAsyncDetailed<AlertTypeSummaryRow>(
-          ENMS_CONNECTION_STRING,
+          getEnmsPostgresConnectionString(),
           `
             SELECT
               COALESCE("AlertType", 'Unknown') AS alert_type,
@@ -2464,7 +2504,7 @@ export async function buildEnmsVerifiedDirectQueryAnswer(
     try {
       const freshnessResult =
         await duckdbQueryExternalPgAsyncDetailed<LayerFreshnessRow>(
-          ENMS_CONNECTION_STRING,
+          getEnmsPostgresConnectionString(),
           `
             SELECT
               CAST((SELECT MAX(timestamp) FROM enms.public.mqtt_raw_data) AS VARCHAR) AS latest_raw_time,
@@ -2809,7 +2849,7 @@ export async function buildEnmsVerifiedDirectQueryAnswer(
     const rocYear = year - 1911;
     try {
       const roiResult = await duckdbQueryExternalPgAsyncDetailed<RoiYearRow>(
-        ENMS_CONNECTION_STRING,
+        getEnmsPostgresConnectionString(),
         `
           WITH site_accounts AS (
             SELECT DISTINCT
@@ -2875,7 +2915,7 @@ export async function buildEnmsVerifiedDirectQueryAnswer(
 
   try {
     const countResult = await duckdbQueryExternalPgAsyncDetailed<DemandAlertCountRow>(
-      ENMS_CONNECTION_STRING,
+      getEnmsPostgresConnectionString(),
       `
         SELECT
           COUNT(*) AS demand_alert_count,
@@ -2891,7 +2931,7 @@ export async function buildEnmsVerifiedDirectQueryAnswer(
     }
 
     const typeResult = await duckdbQueryExternalPgAsyncDetailed<DemandAlertTypeRow>(
-      ENMS_CONNECTION_STRING,
+      getEnmsPostgresConnectionString(),
       `
         SELECT
           COALESCE("AlertType", 'Unknown') AS alert_type,

@@ -329,6 +329,19 @@ describe("active-runs", () => {
 			expect(indexWrite?.[1]).toContain("\"requestedModelId\": \"gx10_hermes/hermes-agent\"");
 			expect(indexWrite?.[1]).toContain("\"domainId\": \"ycrm\"");
 			expect(indexWrite?.[1]).toContain("\"turnStartedAt\":");
+
+			const messageWrite = vi.mocked(writeFile).mock.calls
+				.filter(
+					([path, payload]) =>
+						path === "/tmp/mock-web-chat/s-direct.jsonl" &&
+						typeof payload === "string" &&
+						payload.includes("\"data-report-source\""),
+				)
+				.at(-1);
+			expect(messageWrite?.[1]).toContain("\"type\":\"data-report-source\"");
+			expect(messageWrite?.[1]).toContain("\"data\":{\"sourceKind\":\"verified_direct\"");
+			expect(messageWrite?.[1]).toContain("\"sourceDomain\":\"ycrm\"");
+			expect(messageWrite?.[1]).toContain("\"verifiedBy\":\"ycrm-verified-direct-query\"");
 		});
 
 		it("does not let an older completed turn overwrite newer answer metadata", async () => {
@@ -1744,7 +1757,7 @@ describe("active-runs", () => {
 		}
 
 		it("tracks multiple sessions independently", async () => {
-			const { childA, childB, prefix, startRun, abortRun, hasActiveRun, getActiveRun } =
+			const { prefix, startRun, abortRun, hasActiveRun, getActiveRun } =
 				await setupConcurrent();
 
 			const idA = `${prefix}-track-a`;
@@ -1763,7 +1776,7 @@ describe("active-runs", () => {
 		});
 
 		it("delivers events to the correct session without cross-contamination", async () => {
-			const { childA, childB, prefix, startRun, abortRun, subscribeToRun } =
+			const { childA, childB, prefix, startRun, subscribeToRun } =
 				await setupConcurrent();
 
 			const idA = `${prefix}-iso-a`;
@@ -1774,8 +1787,8 @@ describe("active-runs", () => {
 
 			const eventsA: SseEvent[] = [];
 			const eventsB: SseEvent[] = [];
-			subscribeToRun(idA, (e) => { if (e) eventsA.push(e); }, { replay: false });
-			subscribeToRun(idB, (e) => { if (e) eventsB.push(e); }, { replay: false });
+			subscribeToRun(idA, (e) => { if (e) {eventsA.push(e);} }, { replay: false });
+			subscribeToRun(idB, (e) => { if (e) {eventsB.push(e);} }, { replay: false });
 
 			childA._writeLine({
 				event: "agent", stream: "assistant",
@@ -1802,7 +1815,7 @@ describe("active-runs", () => {
 		});
 
 		it("completing one session does not affect the other", async () => {
-			const { childA, childB, prefix, startRun, abortRun, hasActiveRun, getActiveRun } =
+			const { childA, childB, prefix, startRun, hasActiveRun, getActiveRun } =
 				await setupConcurrent();
 
 			const idA = `${prefix}-comp-a`;
@@ -1858,7 +1871,7 @@ describe("active-runs", () => {
 			startRun({ sessionId: idB, message: "second", agentSessionId: idB });
 
 			const eventsB: SseEvent[] = [];
-			subscribeToRun(idB, (e) => { if (e) eventsB.push(e); }, { replay: false });
+			subscribeToRun(idB, (e) => { if (e) {eventsB.push(e);} }, { replay: false });
 
 			childA.stdout.end();
 			await new Promise((r) => setTimeout(r, 50));
@@ -1892,8 +1905,8 @@ describe("active-runs", () => {
 
 			const eventsA: SseEvent[] = [];
 			const eventsB: SseEvent[] = [];
-			subscribeToRun(idA, (e) => { if (e) eventsA.push(e); }, { replay: false });
-			subscribeToRun(idB, (e) => { if (e) eventsB.push(e); }, { replay: false });
+			subscribeToRun(idA, (e) => { if (e) {eventsA.push(e);} }, { replay: false });
+			subscribeToRun(idB, (e) => { if (e) {eventsB.push(e);} }, { replay: false });
 
 			childA._writeLine({
 				event: "agent", stream: "tool",

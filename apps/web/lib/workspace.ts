@@ -1,6 +1,6 @@
 import { existsSync, readFileSync, readdirSync, writeFileSync, mkdirSync } from "node:fs";
 import { access, readdir as readdirAsync } from "node:fs/promises";
-import { execSync, exec, execFile } from "node:child_process";
+import { execSync, execFileSync, execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
 import { join, resolve, normalize, relative, isAbsolute as isNodeAbsolute } from "node:path";
 import { homedir } from "node:os";
@@ -11,9 +11,22 @@ import {
   isHomeRelativePath,
   type WorkspacePathKind,
 } from "./workspace-paths";
+import { checkSqlSafety } from "./report-filters";
 
-const execAsync = promisify(exec);
 const execFileAsync = promisify(execFile);
+const SENSITIVE_DB_ENV_KEYS = [
+  "YCRM_PG_CONNECTION",
+  "Y_CRM_PG_CONNECTION",
+  "OPENCLAW_YCRM_PG_CONNECTION",
+  "YCRM_POSTGRES_CONNECTION",
+  "ERP_PG_CONNECTION",
+  "OPENCLAW_ERP_PG_CONNECTION",
+  "ERP_POSTGRES_CONNECTION",
+  "ENMS_PG_CONNECTION",
+  "OPENCLAW_ENMS_PG_CONNECTION",
+  "ENMS_POSTGRES_CONNECTION",
+  "ENMS_MONGO_URI",
+] as const;
 
 export type DuckdbQueryExecution<T = Record<string, unknown>> = {
   rows: T[];
@@ -33,7 +46,27 @@ function previewDuckdbDebugText(value: string, maxLength: number): string {
   if (!value) {
     return "";
   }
-  return value.length > maxLength ? `${value.slice(0, maxLength)}…` : value;
+  const redacted = redactDuckdbSensitiveText(value);
+  return redacted.length > maxLength ? `${redacted.slice(0, maxLength)}…` : redacted;
+}
+
+function redactDuckdbSensitiveText(value: string): string {
+  return value
+    .replace(
+      /ATTACH\s+'(?:''|[^'])*'\s+AS\s+([A-Za-z_][A-Za-z0-9_]*)/gi,
+      "ATTACH '<redacted-connection>' AS $1",
+    )
+    .replace(/((?:password|sslpassword|pgpassword)\s*=\s*)([^'"\s;]+)/gi, "$1<redacted>")
+    .replace(/((?:password|sslpassword|pgpassword)['"]?\s*[:=]\s*['"])([^'"]+)(['"])/gi, "$1<redacted>$3")
+    .replace(/:\/\/([^:\s/@]+):([^@\s]+)@/g, "://$1:<redacted>@");
+}
+
+function buildDuckdbChildEnv(): NodeJS.ProcessEnv {
+  const env = { ...process.env };
+  for (const key of SENSITIVE_DB_ENV_KEYS) {
+    delete env[key];
+  }
+  return env;
 }
 
 function extractDuckdbExecError(error: unknown): string {
@@ -45,19 +78,161 @@ function extractDuckdbExecError(error: unknown): string {
     };
     const stderr = typeof record.stderr === "string" ? record.stderr.trim() : "";
     if (stderr) {
-      return stderr;
+      return redactDuckdbSensitiveText(stderr);
     }
     const stdout = typeof record.stdout === "string" ? record.stdout.trim() : "";
     if (stdout) {
-      return stdout;
+      return redactDuckdbSensitiveText(stdout);
     }
     const message = typeof record.message === "string" ? record.message.trim() : "";
     if (message) {
-      return message;
+      return redactDuckdbSensitiveText(message);
     }
   }
 
-  return error instanceof Error ? error.message : "DuckDB query failed";
+  return error instanceof Error
+    ? redactDuckdbSensitiveText(error.message)
+    : "DuckDB query failed";
+}
+
+function duckdbExecFileJson<T>(
+  bin: string,
+  dbPath: string,
+  sql: string,
+  options?: { timeout?: number; maxBuffer?: number },
+): T[] {
+  const stdout = execFileSync(bin, ["-json", dbPath, sql], {
+    encoding: "utf-8",
+    timeout: options?.timeout ?? 10_000,
+    maxBuffer: options?.maxBuffer ?? 10 * 1024 * 1024,
+    env: buildDuckdbChildEnv(),
+  });
+  return parseDuckdbJsonRows<T>(stdout);
+}
+
+async function duckdbExecFileJsonAsync<T>(
+  bin: string,
+  dbPath: string,
+  sql: string,
+  options?: { timeout?: number; maxBuffer?: number },
+): Promise<T[]> {
+  const { stdout } = await execFileAsync(bin, ["-json", dbPath, sql], {
+    encoding: "utf-8",
+    timeout: options?.timeout ?? 10_000,
+    maxBuffer: options?.maxBuffer ?? 10 * 1024 * 1024,
+    env: buildDuckdbChildEnv(),
+  });
+  return parseDuckdbJsonRows<T>(stdout);
+}
+
+function duckdbExecFileStatement(
+  bin: string,
+  dbPath: string,
+  sql: string,
+  options?: { timeout?: number; maxBuffer?: number },
+): void {
+  execFileSync(bin, [dbPath, sql], {
+    encoding: "utf-8",
+    timeout: options?.timeout ?? 10_000,
+    maxBuffer: options?.maxBuffer,
+    env: buildDuckdbChildEnv(),
+  });
+}
+
+async function duckdbExecFileStatementAsync(
+  bin: string,
+  dbPath: string,
+  sql: string,
+  options?: { timeout?: number; maxBuffer?: number },
+): Promise<void> {
+  await execFileAsync(bin, [dbPath, sql], {
+    encoding: "utf-8",
+    timeout: options?.timeout ?? 10_000,
+    maxBuffer: options?.maxBuffer,
+    env: buildDuckdbChildEnv(),
+  });
+}
+
+async function execDuckdbWithStdin(
+  bin: string,
+  args: string[],
+  stdinSql: string,
+  options: {
+    encoding: BufferEncoding;
+    timeout: number;
+    maxBuffer: number;
+  },
+): Promise<{ stdout: string; stderr: string }> {
+  return new Promise((resolvePromise, rejectPromise) => {
+    const child = spawn(bin, args, {
+      stdio: ["pipe", "pipe", "pipe"],
+      env: buildDuckdbChildEnv(),
+    });
+    let stdout = "";
+    let stderr = "";
+    let settled = false;
+
+    const finish = (error: Error | null, result?: { stdout: string; stderr: string }) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      if (error) {
+        rejectPromise(error);
+        return;
+      }
+      resolvePromise(result ?? { stdout, stderr });
+    };
+
+    const timer = setTimeout(() => {
+      child.kill("SIGTERM");
+      const error = new Error("DuckDB query timed out");
+      Object.assign(error, { stdout, stderr });
+      finish(error);
+    }, options.timeout);
+
+    const appendOutput = (kind: "stdout" | "stderr", chunk: Buffer | string) => {
+      const text = Buffer.isBuffer(chunk)
+        ? chunk.toString(options.encoding)
+        : String(chunk);
+      if (kind === "stdout") {
+        stdout += text;
+      } else {
+        stderr += text;
+      }
+      if (stdout.length + stderr.length > options.maxBuffer) {
+        child.kill("SIGTERM");
+        const error = new Error("DuckDB query output exceeded maxBuffer");
+        Object.assign(error, { stdout, stderr });
+        finish(error);
+      }
+    };
+
+    child.stdout.setEncoding(options.encoding);
+    child.stderr.setEncoding(options.encoding);
+    child.stdout.on("data", (chunk) => appendOutput("stdout", chunk));
+    child.stderr.on("data", (chunk) => appendOutput("stderr", chunk));
+    child.stdin.on("error", (error) => {
+      if ((error as NodeJS.ErrnoException).code === "EPIPE") {
+        return;
+      }
+      finish(error);
+    });
+    child.on("error", (error) => finish(error));
+    child.on("close", (code, signal) => {
+      if (code === 0) {
+        finish(null, { stdout, stderr });
+        return;
+      }
+      const error = new Error(
+        stderr.trim() || `DuckDB exited with code ${code ?? "unknown"}${signal ? ` (${signal})` : ""}`,
+      );
+      Object.assign(error, { stdout, stderr });
+      finish(error);
+    });
+    child.stdin.end(stdinSql);
+  });
 }
 
 async function pathExistsAsync(path: string): Promise<boolean> {
@@ -849,18 +1024,7 @@ export function duckdbQuery<T = Record<string, unknown>>(
   if (!bin) {return [];}
 
   try {
-    // Escape single quotes in SQL for shell safety
-    const escapedSql = sql.replace(/'/g, "'\\''");
-    const result = execSync(`'${bin}' -json '${db}' '${escapedSql}'`, {
-      encoding: "utf-8",
-      timeout: 10_000,
-      maxBuffer: 10 * 1024 * 1024, // 10 MB
-      shell: "/bin/sh",
-    });
-
-    const trimmed = result.trim();
-    if (!trimmed || trimmed === "[]") {return [];}
-    return JSON.parse(trimmed) as T[];
+    return duckdbExecFileJson<T>(bin, db, sql);
   } catch {
     return [];
   }
@@ -898,15 +1062,8 @@ export async function duckdbQueryAsyncDetailed<T = Record<string, unknown>>(
   }
 
   try {
-    const escapedSql = sql.replace(/'/g, "'\\''");
-    const { stdout } = await execAsync(`'${bin}' -json '${db}' '${escapedSql}'`, {
-      encoding: "utf-8",
-      timeout: 10_000,
-      maxBuffer: 10 * 1024 * 1024,
-      shell: "/bin/sh",
-    });
     return {
-      rows: parseDuckdbJsonRows<T>(stdout),
+      rows: await duckdbExecFileJsonAsync<T>(bin, db, sql),
       error: null,
     };
   } catch (error) {
@@ -941,16 +1098,7 @@ export function duckdbQueryAll<T = Record<string, unknown>>(
 
   for (const db of dbPaths) {
     try {
-      const escapedSql = sql.replace(/'/g, "'\\''");
-      const result = execSync(`'${bin}' -json '${db}' '${escapedSql}'`, {
-        encoding: "utf-8",
-        timeout: 10_000,
-        maxBuffer: 10 * 1024 * 1024,
-        shell: "/bin/sh",
-      });
-      const trimmed = result.trim();
-      if (!trimmed || trimmed === "[]") {continue;}
-      const rows = JSON.parse(trimmed) as T[];
+      const rows = duckdbExecFileJson<T>(bin, db, sql);
       for (const row of rows) {
         if (dedupeKey) {
           const key = row[dedupeKey];
@@ -985,16 +1133,7 @@ export async function duckdbQueryAllAsync<T = Record<string, unknown>>(
 
   for (const db of dbPaths) {
     try {
-      const escapedSql = sql.replace(/'/g, "'\\''");
-      const { stdout } = await execAsync(`'${bin}' -json '${db}' '${escapedSql}'`, {
-        encoding: "utf-8",
-        timeout: 10_000,
-        maxBuffer: 10 * 1024 * 1024,
-        shell: "/bin/sh",
-      });
-      const trimmed = stdout.trim();
-      if (!trimmed || trimmed === "[]") {continue;}
-      const rows = JSON.parse(trimmed) as T[];
+      const rows = await duckdbExecFileJsonAsync<T>(bin, db, sql);
       for (const row of rows) {
         if (dedupeKey) {
           const key = row[dedupeKey];
@@ -1023,19 +1162,15 @@ export function findDuckDBForObject(objectName: string): string | null {
   const bin = resolveDuckdbBin();
   if (!bin) {return null;}
 
-  // Build the SQL then apply the same shell-escape as duckdbQuery:
-  // replace every ' with '\'' so the single-quoted shell arg stays valid.
   const sql = `SELECT id FROM objects WHERE name = '${objectName.replace(/'/g, "''")}' LIMIT 1`;
-  const escapedSql = sql.replace(/'/g, "'\\''");
 
   for (const db of dbPaths) {
     try {
-      const result = execSync(
-        `'${bin}' -json '${db}' '${escapedSql}'`,
-        { encoding: "utf-8", timeout: 5_000, maxBuffer: 1024 * 1024, shell: "/bin/sh" },
-      );
-      const trimmed = result.trim();
-      if (trimmed && trimmed !== "[]") {return db;}
+      const rows = duckdbExecFileJson<{ id: string }>(bin, db, sql, {
+        timeout: 5_000,
+        maxBuffer: 1024 * 1024,
+      });
+      if (rows.length > 0) {return db;}
     } catch {
       // continue to next DB
     }
@@ -1053,16 +1188,14 @@ export async function findDuckDBForObjectAsync(objectName: string): Promise<stri
   if (!bin) {return null;}
 
   const sql = `SELECT id FROM objects WHERE name = '${objectName.replace(/'/g, "''")}' LIMIT 1`;
-  const escapedSql = sql.replace(/'/g, "'\\''");
 
   for (const db of dbPaths) {
     try {
-      const { stdout } = await execAsync(
-        `'${bin}' -json '${db}' '${escapedSql}'`,
-        { encoding: "utf-8", timeout: 5_000, maxBuffer: 1024 * 1024, shell: "/bin/sh" },
-      );
-      const trimmed = stdout.trim();
-      if (trimmed && trimmed !== "[]") {return db;}
+      const rows = await duckdbExecFileJsonAsync<{ id: string }>(bin, db, sql, {
+        timeout: 5_000,
+        maxBuffer: 1024 * 1024,
+      });
+      if (rows.length > 0) {return db;}
     } catch {
       // continue to next DB
     }
@@ -1097,12 +1230,7 @@ export function duckdbExecOnFile(dbFilePath: string, sql: string): boolean {
   if (!bin) {return false;}
 
   try {
-    const escapedSql = sql.replace(/'/g, "'\\''");
-    execSync(`'${bin}' '${dbFilePath}' '${escapedSql}'`, {
-      encoding: "utf-8",
-      timeout: 10_000,
-      shell: "/bin/sh",
-    });
+    duckdbExecFileStatement(bin, dbFilePath, sql);
     return true;
   } catch {
     return false;
@@ -1115,12 +1243,7 @@ export async function duckdbExecOnFileAsync(dbFilePath: string, sql: string): Pr
   if (!bin) {return false;}
 
   try {
-    const escapedSql = sql.replace(/'/g, "'\\''");
-    await execAsync(`'${bin}' '${dbFilePath}' '${escapedSql}'`, {
-      encoding: "utf-8",
-      timeout: 10_000,
-      shell: "/bin/sh",
-    });
+    await duckdbExecFileStatementAsync(bin, dbFilePath, sql);
     return true;
   } catch {
     return false;
@@ -1178,17 +1301,10 @@ export function duckdbQueryOnFile<T = Record<string, unknown>>(
   if (!bin) {return [];}
 
   try {
-    const escapedSql = sql.replace(/'/g, "'\\''");
-    const result = execSync(`'${bin}' -json '${dbFilePath}' '${escapedSql}'`, {
-      encoding: "utf-8",
+    return duckdbExecFileJson<T>(bin, dbFilePath, sql, {
       timeout: 15_000,
       maxBuffer: 10 * 1024 * 1024,
-      shell: "/bin/sh",
     });
-
-    const trimmed = result.trim();
-    if (!trimmed || trimmed === "[]") {return [];}
-    return JSON.parse(trimmed) as T[];
   } catch {
     return [];
   }
@@ -1203,17 +1319,10 @@ export async function duckdbQueryOnFileAsync<T = Record<string, unknown>>(
   if (!bin) {return [];}
 
   try {
-    const escapedSql = sql.replace(/'/g, "'\\''");
-    const { stdout } = await execAsync(`'${bin}' -json '${dbFilePath}' '${escapedSql}'`, {
-      encoding: "utf-8",
+    return await duckdbExecFileJsonAsync<T>(bin, dbFilePath, sql, {
       timeout: 15_000,
       maxBuffer: 10 * 1024 * 1024,
-      shell: "/bin/sh",
     });
-
-    const trimmed = stdout.trim();
-    if (!trimmed || trimmed === "[]") {return [];}
-    return JSON.parse(trimmed) as T[];
   } catch {
     return [];
   }
@@ -1250,19 +1359,25 @@ export async function duckdbQueryExternalPgAsyncDetailed<T = Record<string, unkn
     };
   }
 
-  const upperSql = sql.trimStart().toUpperCase();
-  const allowed = ["SELECT", "WITH", "SHOW", "DESCRIBE", "EXPLAIN", "PRAGMA"];
-  if (!allowed.some((kw) => upperSql.startsWith(kw))) {
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(alias)) {
     return {
       rows: [],
-      error: "Only read-only queries are allowed for external PostgreSQL scans.",
+      error: "Invalid external PostgreSQL alias.",
+    };
+  }
+
+  const safetyError = checkSqlSafety(sql);
+  if (safetyError) {
+    return {
+      rows: [],
+      error: safetyError,
     };
   }
 
   try {
     const escapedConn = connectionString.replace(/'/g, "''");
     const fullSql = `INSTALL postgres_scanner; LOAD postgres_scanner; ATTACH '${escapedConn}' AS ${alias} (TYPE postgres_scanner, READ_ONLY); ${sql}`;
-    const { stdout, stderr } = await execFileAsync(bin, ["-json", ":memory:", fullSql], {
+    const { stdout, stderr } = await execDuckdbWithStdin(bin, ["-json", ":memory:"], fullSql, {
       encoding: "utf-8",
       timeout: 15_000,
       maxBuffer: 10 * 1024 * 1024,

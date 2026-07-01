@@ -2,6 +2,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const WEB_CHAT_DIR = "/virtual/webchat";
 const OPENCLAW_DIR = "/virtual/openclaw";
+const TEST_ENMS_CONNECTION =
+	"host=118.168.188.27 port=55433 dbname=EnMS user=test password=secret sslmode=disable";
+const TEST_YCRM_CONNECTION =
+	"dbname=default user=test password=secret host=localhost port=5432";
+const TEST_ERP_CONNECTION =
+	"host=118.168.188.27 port=5433 dbname=ErpUAT_local user=test password=secret sslmode=disable";
+const ORIGINAL_ENV = { ...process.env };
 
 const fileStore = new Map<string, string>();
 const dirStore = new Set<string>();
@@ -103,15 +110,21 @@ vi.mock("node:fs", () => ({
 	}),
 }));
 
-vi.mock("@/lib/workspace", () => ({
-	duckdbQueryExternalPgAsync: vi.fn(async () => []),
-	duckdbQueryExternalPgAsyncDetailed: vi.fn(async () => ({ rows: [], error: null })),
-	resolveActiveAgentId: vi.fn(() => "main"),
-	resolveAgentWorkspacePrefix: vi.fn(() => null),
-	resolveOpenClawStateDir: vi.fn(() => OPENCLAW_DIR),
-	resolveWorkspaceRoot: vi.fn(() => "/virtual/workspace"),
-	resolveWebChatDir: vi.fn(() => WEB_CHAT_DIR),
-}));
+vi.mock("@/lib/workspace", () => {
+	const duckdbQueryExternalPgAsync = vi.fn(async () => []);
+	return {
+		duckdbQueryExternalPgAsync,
+		duckdbQueryExternalPgAsyncDetailed: vi.fn(async (connectionString: string, sql: string, alias?: string) => ({
+			rows: await duckdbQueryExternalPgAsync(connectionString, sql, alias),
+			error: null,
+		})),
+		resolveActiveAgentId: vi.fn(() => "main"),
+		resolveAgentWorkspacePrefix: vi.fn(() => null),
+		resolveOpenClawStateDir: vi.fn(() => OPENCLAW_DIR),
+		resolveWorkspaceRoot: vi.fn(() => "/virtual/workspace"),
+		resolveWebChatDir: vi.fn(() => WEB_CHAT_DIR),
+	};
+});
 
 vi.mock("@/lib/active-runs", () => ({
 	startRun: vi.fn(),
@@ -156,17 +169,121 @@ function seedSession(sessionId: string) {
 	fileStore.set(normalizePath(`${WEB_CHAT_DIR}/${sessionId}.jsonl`), "");
 }
 
+type DetailedQueryMock = {
+	mockImplementation: (
+		fn: (
+			connectionString: string,
+			sql: string,
+			alias?: string,
+		) => Promise<{ rows: Record<string, unknown>[]; error: null }>,
+	) => unknown;
+};
+
+function mockEnmsDetailedQueryWithBootstrap(
+	detailedQueryMock: DetailedQueryMock,
+	targetRows: Record<string, unknown>[],
+) {
+	detailedQueryMock.mockImplementation(async (_connectionString, sql) => {
+		const text = String(sql);
+		if (text.includes("information_schema.columns")) {
+			return {
+				rows: [
+					{ table_name: "DeviceDataSummaryView", column_name: "RecordTime" },
+					{ table_name: "DeviceDataSummaryView", column_name: "TotalConsumption" },
+					{ table_name: "ElectricityMeter", column_name: "PowerAccountId" },
+					{ table_name: "PowerAccounts", column_name: "AccountId" },
+					{ table_name: "sites", column_name: "site_id" },
+					{ table_name: "TaipowerBills", column_name: "BillingMonth" },
+				],
+				error: null,
+			};
+		}
+		if (text.includes("AS site_count") && text.includes("AS meter_count")) {
+			return {
+				rows: [
+					{
+						site_count: 2,
+						gateway_count: 2,
+						meter_count: 128,
+						power_account_count: 2,
+						demand_alert_count: 1,
+						company_count: 1,
+						taipower_bill_count: 12,
+						price_plan_count: 1,
+						price_rate_count: 4,
+						latest_summary_time: "2026-06-15 01:45:00+08",
+						latest_raw_time: "2026-06-15 01:45:00+08",
+					},
+				],
+				error: null,
+			};
+		}
+		return { rows: targetRows, error: null };
+	});
+}
+
+function mockErpDetailedQueryWithBootstrap(
+	detailedQueryMock: DetailedQueryMock,
+	targetRows: Record<string, unknown>[],
+) {
+	detailedQueryMock.mockImplementation(async (_connectionString, sql) => {
+		const text = String(sql);
+		if (text.includes("information_schema.columns")) {
+			return {
+				rows: [
+					{ table_name: "B_COMPANY", column_name: "company_id" },
+					{ table_name: "B_SITE", column_name: "site_id" },
+					{ table_name: "B_CUSTOMER", column_name: "customer_name" },
+					{ table_name: "SO", column_name: "so_id" },
+					{ table_name: "SO", column_name: "order_status" },
+					{ table_name: "SO", column_name: "delivery_date" },
+					{ table_name: "INVENTORY", column_name: "available_qty" },
+				],
+				error: null,
+			};
+		}
+		if (text.includes("AS company_count") && text.includes("AS inventory_count")) {
+			return {
+				rows: [
+					{
+						company_count: 1,
+						site_count: 1,
+						customer_count: 42,
+						so_count: 13,
+						inventory_count: 4,
+					},
+				],
+				error: null,
+			};
+		}
+		return {
+			rows: targetRows,
+			error: null,
+		};
+	});
+}
+
 describe("Chat session planner persistence integration", () => {
 	beforeEach(() => {
 		fileStore.clear();
 		dirStore.clear();
 		dirStore.add("/");
+		process.env.ENMS_PG_CONNECTION = TEST_ENMS_CONNECTION;
+		process.env.YCRM_PG_CONNECTION = TEST_YCRM_CONNECTION;
+		process.env.ERP_PG_CONNECTION = TEST_ERP_CONNECTION;
+		delete process.env.OPENCLAW_ENMS_PG_CONNECTION;
+		delete process.env.ENMS_POSTGRES_CONNECTION;
+		delete process.env.OPENCLAW_YCRM_PG_CONNECTION;
+		delete process.env.YCRM_POSTGRES_CONNECTION;
+		delete process.env.OPENCLAW_ERP_PG_CONNECTION;
+		delete process.env.ERP_POSTGRES_CONNECTION;
 		vi.resetModules();
 		vi.clearAllMocks();
 	});
 
 	afterEach(() => {
 		vi.restoreAllMocks();
+		process.env = { ...ORIGINAL_ENV };
 	});
 
 	it("persists Y-CRM planner metadata and reads it back through the session route", async () => {
@@ -623,7 +740,7 @@ describe("Chat session planner persistence integration", () => {
 		seedSession("s-ycrm-cross");
 
 		const { POST } = await import("./route.js");
-		const { startRun } = await import("@/lib/active-runs");
+		const { startRun, createSyntheticCompletedRun } = await import("@/lib/active-runs");
 
 		await POST(new Request("http://localhost/api/chat", {
 			method: "POST",
@@ -646,7 +763,8 @@ describe("Chat session planner persistence integration", () => {
 		}));
 
 		const payload = vi.mocked(startRun).mock.calls.at(-1)?.[0];
-		expect(payload?.message).not.toContain("[Unified Read-Only Execution Plan]");
+		const directReply = vi.mocked(createSyntheticCompletedRun).mock.calls.at(-1)?.[0]?.text;
+		expect(payload?.message ?? directReply).not.toContain("[Unified Read-Only Execution Plan]");
 	});
 
 	it("returns a blocked ERP reply without starting the generic run when source-of-truth is unavailable", async () => {
@@ -682,7 +800,7 @@ describe("Chat session planner persistence integration", () => {
 		expect(createSyntheticCompletedRun).toHaveBeenCalledTimes(1);
 		expect(
 			vi.mocked(createSyntheticCompletedRun).mock.calls[0]?.[0]?.text,
-		).toContain("source-of-truth 無法使用");
+		).toContain("主要資料來源尚未就緒");
 	});
 
 	it("handles ERP company-count chart questions as direct DB-first replies", async () => {
@@ -708,10 +826,10 @@ describe("Chat session planner persistence integration", () => {
 			return [];
 		});
 		vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockReset();
-		vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockResolvedValueOnce({
-			rows: [{ total_count: 7 }],
-			error: null,
-		});
+		mockErpDetailedQueryWithBootstrap(
+			vi.mocked(duckdbQueryExternalPgAsyncDetailed),
+			[{ total_count: 7 }],
+		);
 
 		await POST(new Request("http://localhost/api/chat", {
 			method: "POST",
@@ -765,10 +883,10 @@ describe("Chat session planner persistence integration", () => {
 			return [];
 		});
 		vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockReset();
-		vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockResolvedValueOnce({
-			rows: [{ total_count: 7 }],
-			error: null,
-		});
+		mockErpDetailedQueryWithBootstrap(
+			vi.mocked(duckdbQueryExternalPgAsyncDetailed),
+			[{ total_count: 7 }],
+		);
 
 		await POST(new Request("http://localhost/api/chat", {
 			method: "POST",
@@ -854,10 +972,10 @@ describe("Chat session planner persistence integration", () => {
 			return [];
 		});
 		vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockReset();
-		vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockResolvedValueOnce({
-			rows: [{ total_count: 7 }],
-			error: null,
-		});
+		mockErpDetailedQueryWithBootstrap(
+			vi.mocked(duckdbQueryExternalPgAsyncDetailed),
+			[{ total_count: 7 }],
+		);
 		vi.mocked(startRun).mockClear();
 		vi.mocked(createSyntheticCompletedRun).mockClear();
 
@@ -929,10 +1047,10 @@ describe("Chat session planner persistence integration", () => {
 		const { duckdbQueryExternalPgAsyncDetailed } = await import("@/lib/workspace");
 
 		vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockReset();
-		vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockResolvedValueOnce({
-			rows: [{ total_count: 128 }],
-			error: null,
-		});
+		mockEnmsDetailedQueryWithBootstrap(
+			vi.mocked(duckdbQueryExternalPgAsyncDetailed),
+			[{ total_count: 128 }],
+		);
 
 		await POST(new Request("http://localhost/api/chat", {
 			method: "POST",
@@ -996,8 +1114,9 @@ describe("Chat session planner persistence integration", () => {
 			return [];
 		});
 		vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockReset();
-		vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockResolvedValueOnce({
-			rows: [
+		mockErpDetailedQueryWithBootstrap(
+			vi.mocked(duckdbQueryExternalPgAsyncDetailed),
+			[
 				{
 					company_id: "C01",
 					site_id: "S01",
@@ -1023,8 +1142,7 @@ describe("Chat session planner persistence integration", () => {
 					shipment_progress_bucket: "PARTIALLY_SHIPPED",
 				},
 			],
-			error: null,
-		});
+		);
 
 		await POST(new Request("http://localhost/api/chat", {
 			method: "POST",
@@ -1077,8 +1195,9 @@ describe("Chat session planner persistence integration", () => {
 			return [];
 		});
 		vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockReset();
-		vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockResolvedValueOnce({
-			rows: [
+		mockErpDetailedQueryWithBootstrap(
+			vi.mocked(duckdbQueryExternalPgAsyncDetailed),
+			[
 				{
 					item_name: "A100 測試品",
 					available_qty: 150,
@@ -1092,8 +1211,7 @@ describe("Chat session planner persistence integration", () => {
 					reserved_qty: 5,
 				},
 			],
-			error: null,
-		});
+		);
 
 		await POST(new Request("http://localhost/api/chat", {
 			method: "POST",
@@ -1146,13 +1264,13 @@ describe("Chat session planner persistence integration", () => {
 			return [];
 		});
 		vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockReset();
-		vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockResolvedValueOnce({
-			rows: [
+		mockErpDetailedQueryWithBootstrap(
+			vi.mocked(duckdbQueryExternalPgAsyncDetailed),
+			[
 				{ customer_name: "OOCHAIN", order_count: 8, total_amt: 15230 },
 				{ customer_name: "MAODING", order_count: 5, total_amt: 9200 },
 			],
-			error: null,
-		});
+		);
 
 		await POST(new Request("http://localhost/api/chat", {
 			method: "POST",
@@ -1205,13 +1323,13 @@ describe("Chat session planner persistence integration", () => {
 			return [];
 		});
 		vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockReset();
-		vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockResolvedValueOnce({
-			rows: [
+		mockErpDetailedQueryWithBootstrap(
+			vi.mocked(duckdbQueryExternalPgAsyncDetailed),
+			[
 				{ status_code: "10", total_count: 8 },
 				{ status_code: "20", total_count: 5 },
 			],
-			error: null,
-		});
+		);
 
 		await POST(new Request("http://localhost/api/chat", {
 			method: "POST",
@@ -1264,13 +1382,13 @@ describe("Chat session planner persistence integration", () => {
 			return [];
 		});
 		vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockReset();
-		vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockResolvedValueOnce({
-			rows: [
+		mockErpDetailedQueryWithBootstrap(
+			vi.mocked(duckdbQueryExternalPgAsyncDetailed),
+			[
 				{ due_status: "已逾期", total_count: 6 },
 				{ due_status: "未逾期", total_count: 9 },
 			],
-			error: null,
-		});
+		);
 
 		await POST(new Request("http://localhost/api/chat", {
 			method: "POST",
@@ -1323,8 +1441,9 @@ describe("Chat session planner persistence integration", () => {
 			return [];
 		});
 		vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockReset();
-		vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockResolvedValueOnce({
-			rows: [
+		mockErpDetailedQueryWithBootstrap(
+			vi.mocked(duckdbQueryExternalPgAsyncDetailed),
+			[
 				{
 					company_id: "C01",
 					site_id: "S01",
@@ -1340,8 +1459,7 @@ describe("Chat session planner persistence integration", () => {
 					days_overdue: 7,
 				},
 			],
-			error: null,
-		});
+		);
 
 		await POST(new Request("http://localhost/api/chat", {
 			method: "POST",
@@ -1394,13 +1512,13 @@ describe("Chat session planner persistence integration", () => {
 			return [];
 		});
 		vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockReset();
-		vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockResolvedValueOnce({
-			rows: [
+		mockErpDetailedQueryWithBootstrap(
+			vi.mocked(duckdbQueryExternalPgAsyncDetailed),
+			[
 				{ status_code: "READY", total_count: 5 },
 				{ status_code: "PICKED", total_count: 3 },
 			],
-			error: null,
-		});
+		);
 
 		await POST(new Request("http://localhost/api/chat", {
 			method: "POST",
@@ -1453,13 +1571,13 @@ describe("Chat session planner persistence integration", () => {
 			return [];
 		});
 		vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockReset();
-		vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockResolvedValueOnce({
-			rows: [
+		mockErpDetailedQueryWithBootstrap(
+			vi.mocked(duckdbQueryExternalPgAsyncDetailed),
+			[
 				{ status_code: "PENDING", total_count: 4 },
 				{ status_code: "ISSUED", total_count: 2 },
 			],
-			error: null,
-		});
+		);
 
 		await POST(new Request("http://localhost/api/chat", {
 			method: "POST",
@@ -1519,7 +1637,7 @@ describe("Chat session planner persistence integration", () => {
 		expect(createSyntheticCompletedRun).toHaveBeenCalledTimes(1);
 		expect(
 			vi.mocked(createSyntheticCompletedRun).mock.calls[0]?.[0]?.text,
-		).toMatch(/auto-schema|source-of-truth/);
+		).toMatch(/auto-schema|主要資料來源尚未就緒/);
 	});
 
 	it("handles Y-CRM customer-count chart questions as direct DB-first replies", async () => {
@@ -2049,10 +2167,10 @@ describe("Chat session planner persistence integration", () => {
 		const { duckdbQueryExternalPgAsyncDetailed } = await import("@/lib/workspace");
 
 		vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockReset();
-		vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockResolvedValueOnce({
-			rows: [{ total_count: 128 }],
-			error: null,
-		});
+		mockEnmsDetailedQueryWithBootstrap(
+			vi.mocked(duckdbQueryExternalPgAsyncDetailed),
+			[{ total_count: 128 }],
+		);
 
 		await POST(new Request("http://localhost/api/chat", {
 			method: "POST",
@@ -2082,6 +2200,85 @@ describe("Chat session planner persistence integration", () => {
 		).toContain("目前共有 128 個電表");
 	});
 
+	it("returns a blocked EnMS reply without starting the generic run when DB config is missing", async () => {
+		seedSession("s-enms-missing-config");
+		delete process.env.ENMS_PG_CONNECTION;
+		delete process.env.OPENCLAW_ENMS_PG_CONNECTION;
+		delete process.env.ENMS_POSTGRES_CONNECTION;
+
+		const { POST } = await import("./route.js");
+		const { startRun, createSyntheticCompletedRun } = await import("@/lib/active-runs");
+
+		await POST(new Request("http://localhost/api/chat", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				sessionId: "s-enms-missing-config",
+				currentSystemHint: "enms",
+				messages: [
+					{
+						id: "m1",
+						role: "user",
+						parts: [
+							{
+								type: "text",
+								text: "請找最近 7 天最耗電的設備或迴路。",
+							},
+						],
+					},
+				],
+			}),
+		}));
+
+		expect(startRun).not.toHaveBeenCalled();
+		expect(createSyntheticCompletedRun).toHaveBeenCalledTimes(1);
+		expect(
+			vi.mocked(createSyntheticCompletedRun).mock.calls[0]?.[0]?.text,
+		).toContain("主要資料來源尚未就緒");
+	});
+
+	it("returns a blocked EnMS reply without starting the generic run when live introspection fails", async () => {
+		seedSession("s-enms-introspection-fails");
+
+		const { POST } = await import("./route.js");
+		const { startRun, createSyntheticCompletedRun } = await import("@/lib/active-runs");
+		const { duckdbQueryExternalPgAsyncDetailed } = await import("@/lib/workspace");
+
+		vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockReset();
+		vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockResolvedValueOnce({
+			rows: [],
+			error:
+				"ATTACH 'host=118.168.188.27 port=55433 dbname=EnMS user=sa password=secret sslmode=disable' AS enms failed",
+		});
+
+		await POST(new Request("http://localhost/api/chat", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				sessionId: "s-enms-introspection-fails",
+				currentSystemHint: "enms",
+				messages: [
+					{
+						id: "m1",
+						role: "user",
+						parts: [
+							{
+								type: "text",
+								text: "請找最近 7 天最耗電的設備或迴路。",
+							},
+						],
+					},
+				],
+			}),
+		}));
+
+		expect(startRun).not.toHaveBeenCalled();
+		expect(createSyntheticCompletedRun).toHaveBeenCalledTimes(1);
+		const reply = vi.mocked(createSyntheticCompletedRun).mock.calls[0]?.[0]?.text ?? "";
+		expect(reply).toContain("主要資料來源尚未就緒");
+		expect(reply).not.toContain("password=secret");
+	});
+
 	it("handles EnMS site-bill ranking questions as direct DB-first replies", async () => {
 		seedSession("s-enms-bill-ranking");
 
@@ -2090,8 +2287,9 @@ describe("Chat session planner persistence integration", () => {
 		const { duckdbQueryExternalPgAsyncDetailed } = await import("@/lib/workspace");
 
 		vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockReset();
-		vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockResolvedValueOnce({
-			rows: [
+		mockEnmsDetailedQueryWithBootstrap(
+			vi.mocked(duckdbQueryExternalPgAsyncDetailed),
+			[
 				{
 					site_name: "阿里山",
 					gregorian_year: 2025,
@@ -2117,8 +2315,7 @@ describe("Chat session planner persistence integration", () => {
 					savings_10pct_ntd: 5763.8,
 				},
 			],
-			error: null,
-		});
+		);
 
 		await POST(new Request("http://localhost/api/chat", {
 			method: "POST",
@@ -2156,8 +2353,9 @@ describe("Chat session planner persistence integration", () => {
 		const { duckdbQueryExternalPgAsyncDetailed } = await import("@/lib/workspace");
 
 		vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockReset();
-		vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockResolvedValueOnce({
-			rows: [
+		mockEnmsDetailedQueryWithBootstrap(
+			vi.mocked(duckdbQueryExternalPgAsyncDetailed),
+			[
 				{
 					period: "2026-01",
 					bill_count: 1,
@@ -2175,8 +2373,7 @@ describe("Chat session planner persistence integration", () => {
 					avg_rate: 3.6273,
 				},
 			],
-			error: null,
-		});
+		);
 
 		await POST(new Request("http://localhost/api/chat", {
 			method: "POST",
@@ -2214,14 +2411,14 @@ describe("Chat session planner persistence integration", () => {
 		const { duckdbQueryExternalPgAsyncDetailed } = await import("@/lib/workspace");
 
 		vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockReset();
-		vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockResolvedValueOnce({
-			rows: [
+		mockEnmsDetailedQueryWithBootstrap(
+			vi.mocked(duckdbQueryExternalPgAsyncDetailed),
+			[
 				{ period: "2026-01", total_kwh: 5707.52, peak_kw: 57, avg_pf: 0.9821 },
 				{ period: "2026-02", total_kwh: 5696.46, peak_kw: 55, avg_pf: 0.9784 },
 				{ period: "2026-03", total_kwh: 6033.12, peak_kw: 58, avg_pf: 0.9812 },
 			],
-			error: null,
-		});
+		);
 
 		await POST(new Request("http://localhost/api/chat", {
 			method: "POST",
@@ -2259,13 +2456,13 @@ describe("Chat session planner persistence integration", () => {
 		const { duckdbQueryExternalPgAsyncDetailed } = await import("@/lib/workspace");
 
 		vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockReset();
-		vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockResolvedValueOnce({
-			rows: [
+		mockEnmsDetailedQueryWithBootstrap(
+			vi.mocked(duckdbQueryExternalPgAsyncDetailed),
+			[
 				{ period: "2026-01-01", total_kwh: 5707.52, peak_kw: 57, avg_pf: 0.9821 },
 				{ period: "2026-01-02", total_kwh: 5696.46, peak_kw: 55, avg_pf: 0.9784 },
 			],
-			error: null,
-		});
+		);
 
 		await POST(new Request("http://localhost/api/chat", {
 			method: "POST",

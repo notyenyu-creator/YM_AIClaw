@@ -85,6 +85,17 @@ describe("buildErpContext", () => {
     expect(result.confidence).toBe("medium");
   });
 
+  it("lets explicit ERP exclusion override an ERP tab hint", () => {
+    const result = buildErpContext({
+      request: {
+        user_message: "ERP 先不要查，改看 EnMS 最近 7 天耗電排行。",
+        current_system_hint: "erp",
+      },
+    });
+    expect(result.shouldRouteToErp).toBe(false);
+    expect(result.warnings).toContain("erp_explicitly_excluded");
+  });
+
   it("does not route on unrelated questions", () => {
     const result = buildErpContext({
       request: { user_message: "今天天氣如何？" },

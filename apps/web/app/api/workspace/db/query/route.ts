@@ -1,4 +1,6 @@
 import { safeResolvePath, duckdbQueryOnFileAsync } from "@/lib/workspace";
+import { redactDatabaseConnectionSecrets } from "@/lib/enms-db-config";
+import { checkSqlSafety } from "@/lib/report-filters";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -27,18 +29,10 @@ export async function POST(request: Request) {
     );
   }
 
-  // Basic safety: only allow SELECT-like statements
-  const trimmedSql = sql.trim().toUpperCase();
-  if (
-    !trimmedSql.startsWith("SELECT") &&
-    !trimmedSql.startsWith("PRAGMA") &&
-    !trimmedSql.startsWith("DESCRIBE") &&
-    !trimmedSql.startsWith("SHOW") &&
-    !trimmedSql.startsWith("EXPLAIN") &&
-    !trimmedSql.startsWith("WITH")
-  ) {
+  const safetyError = checkSqlSafety(sql);
+  if (safetyError) {
     return Response.json(
-      { error: "Only read-only queries (SELECT, DESCRIBE, SHOW, EXPLAIN, WITH) are allowed" },
+      { error: safetyError },
       { status: 403 },
     );
   }
@@ -51,6 +45,17 @@ export async function POST(request: Request) {
     );
   }
 
-	const rows = await duckdbQueryOnFileAsync(absPath, sql);
-  return Response.json({ rows, sql });
+  try {
+    const rows = await duckdbQueryOnFileAsync(absPath, sql);
+    return Response.json({ rows, sql });
+  } catch (err) {
+    return Response.json(
+      {
+        error: redactDatabaseConnectionSecrets(
+          err instanceof Error ? err.message : "Query failed",
+        ),
+      },
+      { status: 500 },
+    );
+  }
 }

@@ -14,20 +14,26 @@ metadata: { "openclaw": { "always": true, "emoji": "{{EMOJI}}" } }
 
 ## 最重要的規則
 
-1. **絕對禁止編造資料** — 涉及任何業務數據時，必須先執行 duckdb 命令查詢真實資料，嚴禁自行虛構數字或範例。
-2. **畫圖表的流程** — 先用 duckdb 查資料 → 拿到真實結果 → 用 `report-json` 格式輸出圖表（見下方範例）。
-3. **資料庫已預設連線** — PostgreSQL 在 `localhost:{{PG_PORT}}`，帳密 `{{DB_USER}}/{{DB_PASS}}`，資料庫 `{{DB_NAME}}`，直接用下方 duckdb 命令即可。
-4. **先探查再查詢** — NEVER assume a table or column exists，always use `information_schema` discover first。
+1. **絕對禁止編造資料** — 涉及任何業務數據時，必須透過 DenchClaw 受控查詢流程取得真實資料，嚴禁自行虛構數字或範例。
+2. **畫圖表的流程** — 先取得 verified rows（已驗證資料列）→ 確認有資料 → 用 `report-json` 或 inline chart data 輸出圖表（見下方範例）。
+3. **不要直連 PostgreSQL** — 不要在技能指令中硬寫 host、user、password、connection string，也不要讓 client 傳 raw connection string。
+4. **資料入口由 DenchClaw 控制** — {{SYSTEM_DISPLAY_NAME}} 查詢應走 server-side env config、domain verified direct query、context builder 或受控 tool，不在回答中自行組 `ATTACH postgres_scanner`。
+5. **先探查再查詢** — NEVER assume a table or column exists，always use schema reference、context pack 或受控 schema scan 結果確認。
 
 ---
 
 ## 資料庫查詢（讀取）
 
-### 連線命令（只改 SELECT 部分）
+### 查詢入口
 
-```bash
-duckdb -json ':memory:' "INSTALL postgres_scanner; LOAD postgres_scanner; ATTACH 'dbname={{DB_NAME}} user={{DB_USER}} password={{DB_PASS}} host=localhost port={{PG_PORT}}' AS {{ALIAS}} (TYPE postgres_scanner, READ_ONLY); <YOUR_SELECT_HERE>"
-```
+{{SYSTEM_DISPLAY_NAME}} 的正式查詢入口由 DenchClaw runtime 管理：
+
+- **server-side env config**：DB host / user / password 只放在部署環境變數，不寫進 skill。
+- **domain verified direct query**：常見查詢由 domain pipeline 產生 SQL、執行、驗證資料列與來源。
+- **context builder / context pack**：回答前先載入已驗證 schema、欄位語意、常用查詢與資料邊界。
+- **report-json / inline chart data**：只有在 verified rows 有資料時才輸出圖表，不輸出空圖誤導使用者。
+
+如果目前 domain pipeline 尚未支援某個問題，應明確回覆需要補查詢模板或 schema reference，不要自行改走 raw PostgreSQL connection。
 
 ### 查詢規則
 
@@ -54,16 +60,16 @@ duckdb -json ':memory:' "INSTALL postgres_scanner; LOAD postgres_scanner; ATTACH
 
 ```sql
 -- 列出 schemas
-SELECT schema_name FROM {{ALIAS}}.information_schema.schemata
+SELECT schema_name FROM information_schema.schemata
 WHERE schema_name NOT IN ('information_schema', 'pg_catalog', 'pg_toast')
 ORDER BY schema_name;
 
 -- 探查表
-SELECT table_name FROM {{ALIAS}}.information_schema.tables
+SELECT table_name FROM information_schema.tables
 WHERE table_schema = '<SCHEMA>' AND table_name NOT LIKE '\_%' ESCAPE '\' ORDER BY table_name;
 
 -- 探查欄位
-SELECT column_name, data_type FROM {{ALIAS}}.information_schema.columns
+SELECT column_name, data_type FROM information_schema.columns
 WHERE table_schema = '<SCHEMA>' AND table_name = '<TABLE>' ORDER BY ordinal_position;
 ```
 
@@ -82,7 +88,7 @@ WHERE table_schema = '<SCHEMA>' AND table_name = '<TABLE>' ORDER BY ordinal_posi
 
 ## 圖表輸出格式（report-json）
 
-使用者要求圖表時，在回覆中直接輸出以下格式（用 ```report-json 程式碼區塊包裹），DenchClaw UI 會自動渲染：
+使用者要求圖表時，先由 DenchClaw domain pipeline 取得 verified rows（已驗證資料列）。確認資料不為空後，在回覆中直接輸出以下格式（用 ```report-json 程式碼區塊包裹），DenchClaw UI 會自動渲染：
 
 ```report-json
 {
@@ -93,7 +99,10 @@ WHERE table_schema = '<SCHEMA>' AND table_name = '<TABLE>' ORDER BY ordinal_posi
       "id": "unique_id",
       "title": "面板標題",
       "type": "pie",
-      "sql": "SELECT category AS name, COUNT(*) AS value FROM {{ALIAS}}.<SCHEMA>.<TABLE> WHERE \"deletedAt\" IS NULL GROUP BY category",
+      "rows": [
+        { "name": "分類 A", "value": 12 },
+        { "name": "分類 B", "value": 8 }
+      ],
       "mapping": { "nameKey": "name", "valueKey": "value" },
       "size": "half"
     }
@@ -108,7 +117,6 @@ WHERE table_schema = '<SCHEMA>' AND table_name = '<TABLE>' ORDER BY ordinal_posi
 | `pie` | 圓餅圖（比例分布） | `{ "nameKey": "name", "valueKey": "value" }` |
 | `bar` | 長條圖（比較） | `{ "xAxis": "category", "yAxis": ["value"] }` |
 | `line` | 折線圖（趨勢） | `{ "xAxis": "month", "yAxis": ["total"] }` |
-| `gauge` | 儀表（單一數值） | `{ "valueKey": "value", "maxKey": "max" }` |
 
 ### 圖表規則
 
@@ -116,32 +124,33 @@ WHERE table_schema = '<SCHEMA>' AND table_name = '<TABLE>' ORDER BY ordinal_posi
 - **panels 可放多個**面板在同一張報告裡
 - **金額欄位**：如果是 micros 單位，SQL 裡除以 1000000 轉元
 - **先查資料確認有結果**，再輸出 report-json（避免空圖表）
+- **不要在 report-json 放外部 PostgreSQL SQL**；Y-CRM / ERP / EnMS / 其他外部系統圖表必須由 verified direct query 產生 rows。
 - 更多模板請 read `reference/analysis-templates.md`
 
 ---
 
 ## REST API 寫入（新增/修改/刪除）
 
-讀取用 postgres_scanner，寫入用 REST API。
+讀取走 DenchClaw 受控 query runtime；寫入或控制類操作走受控 REST API / control bridge，並需要使用者確認與權限檢查。
 
-**Base URL**: `http://localhost:{{API_PORT}}`
-**API Key**: `{{API_KEY}}`
-**Auth Header**: `Authorization: Bearer {{API_KEY}}`
+**Base URL**: 由部署環境或受控 runtime config 提供，不寫在 skill 內。
+**API Key**: 由 server-side secret 管理，不寫在 skill 內。
+**Auth Header**: 由後端服務注入，不在回答中顯示 token。
 
 ```bash
 # 建立
-curl -X POST http://localhost:{{API_PORT}}/api/{{RESOURCE}} \
+curl -X POST <CONTROLLED_API_BASE>/api/{{RESOURCE}} \
   -H "Authorization: Bearer ${{ENV_VAR_TOKEN}}" \
   -H "Content-Type: application/json" \
   -d '{ {{CREATE_EXAMPLE}} }'
 
 # 更新
-curl -X PATCH http://localhost:{{API_PORT}}/api/{{RESOURCE}}/<id> \
+curl -X PATCH <CONTROLLED_API_BASE>/api/{{RESOURCE}}/<id> \
   -H "Authorization: Bearer ${{ENV_VAR_TOKEN}}" \
   -d '{ {{UPDATE_EXAMPLE}} }'
 
 # 刪除
-curl -X DELETE http://localhost:{{API_PORT}}/api/{{RESOURCE}}/<id> \
+curl -X DELETE <CONTROLLED_API_BASE>/api/{{RESOURCE}}/<id> \
   -H "Authorization: Bearer ${{ENV_VAR_TOKEN}}"
 ```
 
@@ -178,7 +187,7 @@ curl -X DELETE http://localhost:{{API_PORT}}/api/{{RESOURCE}}/<id> \
 
 | 使用者問題類型 | 你的行動 |
 |---------------|---------|
-| 查詢業務資料 | 用 DuckDB postgres_scanner 查詢 |
+| 查詢業務資料 | 走 DenchClaw domain verified direct query / context builder |
 | 畫圖表/分析報告 | 先查資料 → 用 report-json 渲染 |
 | 某表有哪些欄位 | 用 information_schema 或讀 `reference/db-schema-cheatsheet.md` |
 | 功能怎麼用 | 讀 `reference/feature-guide.md` 回答 |

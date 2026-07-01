@@ -14,7 +14,6 @@ import {
 	readFileSync,
 	writeFileSync,
 	existsSync,
-	mkdirSync,
 } from "node:fs";
 import {
 	access,
@@ -63,6 +62,14 @@ type SubscribeToRunOptions = {
 type AccumulatedPart =
 	| { type: "reasoning"; text: string }
 	| {
+			type: "data-report-source";
+			data: {
+				sourceKind: "verified_direct";
+				sourceDomain: "enms" | "erp" | "ycrm";
+				verifiedBy?: string;
+			};
+		}
+	| {
 			type: "tool-invocation";
 			toolCallId: string;
 			toolName: string;
@@ -85,6 +92,25 @@ type SessionExecutionTraceSeed = {
 	domainId?: SessionExecutionTrace["domainId"];
 	executionStrategy?: SessionExecutionTrace["executionStrategy"];
 };
+
+function buildVerifiedDirectReportSourcePart(
+	trace: SessionExecutionTraceSeed | undefined,
+): Extract<AccumulatedPart, { type: "data-report-source" }> | null {
+	if (
+		trace?.answerMode !== "verified_direct" ||
+		(trace.domainId !== "enms" && trace.domainId !== "erp" && trace.domainId !== "ycrm")
+	) {
+		return null;
+	}
+	return {
+		type: "data-report-source",
+		data: {
+			sourceKind: "verified_direct",
+			sourceDomain: trace.domainId,
+			verifiedBy: `${trace.domainId}-verified-direct-query`,
+		},
+	};
+}
 
 export type ActiveRun = {
 	sessionId: string;
@@ -745,10 +771,12 @@ export async function createSyntheticCompletedRun(params: {
 	if (existing) {cleanupRun(sessionId);}
 
 	const textId = `text-${Date.now()}-1`;
+	const reportSourcePart = buildVerifiedDirectReportSourcePart(completionTrace);
 	const run: ActiveRun = {
 		sessionId,
 		childProcess: createNoopProcessHandle(),
 		eventBuffer: [
+			...(reportSourcePart ? [reportSourcePart] : []),
 			{ type: "text-start", id: textId },
 			{ type: "text-delta", id: textId, delta: text },
 			{ type: "text-end", id: textId },
@@ -757,7 +785,10 @@ export async function createSyntheticCompletedRun(params: {
 		accumulated: {
 			id: `assistant-${sessionId}-${Date.now()}`,
 			role: "assistant",
-			parts: [{ type: "text", text }],
+			parts: [
+				...(reportSourcePart ? [reportSourcePart] : []),
+				{ type: "text", text },
+			],
 		},
 		status: "completed",
 		startedAt: Date.now(),
@@ -962,7 +993,7 @@ function readLatestTranscriptAssistantTurn(
 		const details = asRecord(msg.details);
 		const result: Record<string, unknown> = {
 			...(text ? { text: text.slice(0, 500) } : {}),
-			...(details ?? {}),
+			...details,
 		};
 		if (Object.keys(result).length === 0) {
 			continue;
@@ -1018,7 +1049,6 @@ function wireSubscribeOnlyProcess(
 	let currentStatusReasoningLabel: string | null = null;
 	let textStarted = false;
 	let reasoningStarted = false;
-	let everSentResponseActivity = false;
 	let statusReasoningActive = false;
 	let agentErrorReported = false;
 	const liveStats = {
@@ -1237,9 +1267,8 @@ function wireSubscribeOnlyProcess(
 	if (ev.event === "agent" && ev.stream === "tool") {
 		const phase = typeof ev.data?.phase === "string" ? ev.data.phase : undefined;
 		const toolCallId = typeof ev.data?.toolCallId === "string" ? ev.data.toolCallId : "";
-		const toolName = typeof ev.data?.name === "string" ? ev.data.name : "";
+			const toolName = typeof ev.data?.name === "string" ? ev.data.name : "";
 			if (phase === "start") {
-				everSentResponseActivity = true;
 				liveStats.toolStartCount += 1;
 				closeReasoning();
 				closeText();
@@ -1251,12 +1280,10 @@ function wireSubscribeOnlyProcess(
 			} else if (phase === "update") {
 				const partialResult = extractToolResult(ev.data?.partialResult);
 				if (partialResult) {
-					everSentResponseActivity = true;
 					const output = buildToolOutput(partialResult);
 					emit({ type: "tool-output-partial", toolCallId, output });
 				}
 			} else if (phase === "result") {
-				everSentResponseActivity = true;
 				const isError = ev.data?.isError === true;
 				const result = extractToolResult(ev.data?.result);
 				if (isError) {

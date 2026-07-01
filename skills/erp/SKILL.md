@@ -47,18 +47,20 @@ metadata: { "openclaw": { "always": true, "emoji": "🏭" } }
 
 ## 連線方式
 
-### UAT 連線資訊（已可用）
+### UAT 連線資訊（由 runtime secrets 提供）
 
 ```
 類型：PostgreSQL 17.9
 Host：118.168.188.27
 Port：5433
 Database：ErpUAT_local
-Username：erp_local
-Password：erp_local
+Username：<ERP_PG_CONNECTION 提供>
+Password：<ERP_PG_CONNECTION 提供>
 Schema：public（單一 schema，108 張表）
 Web UI：http://118.168.188.27:5173/
 ```
+
+正式查詢時不可把帳密寫進 prompt、wiki 或 source code；DenchClaw 會由伺服器端 `ERP_PG_CONNECTION` / `OPENCLAW_ERP_PG_CONNECTION` / `ERP_POSTGRES_CONNECTION` 注入唯讀連線。
 
 ### 讀取通道（生產建議）
 
@@ -66,14 +68,7 @@ Web UI：http://118.168.188.27:5173/
 - 模式：`:memory:` + `READ_ONLY`（**必須**）
 - 範例命令：
 
-```bash
-duckdb -json ':memory:' "
-INSTALL postgres_scanner;
-LOAD postgres_scanner;
-ATTACH 'host=118.168.188.27 port=5433 dbname=ErpUAT_local user=erp_local password=erp_local' AS erp (TYPE postgres, READ_ONLY);
-SELECT customer_id, customer_name FROM erp.public.\"B_CUSTOMER\" LIMIT 10;
-"
-```
+查詢由 DenchClaw runtime 代入伺服器端連線；skill 文件只提供 schema 與 SQL 原則，不提供可複製貼上的帳密或 `ATTACH` 字串。
 
 ### 寫入通道
 

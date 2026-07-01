@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { splitReportBlocks, hasReportBlocks } from "./report-blocks";
+import {
+  splitReportBlocks,
+  hasReportBlocks,
+  normalizeUntrustedReportConfig,
+} from "./report-blocks";
 
 // ─── hasReportBlocks ───
 
@@ -127,15 +131,12 @@ describe("splitReportBlocks", () => {
     expect(result[0].type).toBe("report-artifact");
   });
 
-  it("handles empty panels array (valid config, zero charts)", () => {
+  it("falls back to text for empty panels array", () => {
     const emptyPanels = JSON.stringify({ version: 1, title: "Empty", panels: [] });
     const text = `\`\`\`report-json\n${emptyPanels}\n\`\`\``;
     const result = splitReportBlocks(text);
     expect(result).toHaveLength(1);
-    expect(result[0].type).toBe("report-artifact");
-    if (result[0].type === "report-artifact") {
-      expect(result[0].config.panels).toEqual([]);
-    }
+    expect(result[0].type).toBe("text");
   });
 
   it("normalizes scalar yAxis to an array", () => {
@@ -236,6 +237,147 @@ describe("splitReportBlocks", () => {
       expect(result[0].config.description).toBe("A detailed report");
       expect(result[0].config.filters).toHaveLength(1);
     }
+  });
+
+  it("does not trust arbitrary inline verified source metadata", () => {
+    const report = JSON.stringify({
+      version: 1,
+      title: "Y-CRM Verified Report",
+      panels: [{
+        id: "p1",
+        title: "P1",
+        type: "bar",
+        rows: [{ label: "客戶", count: 22 }],
+        mapping: { xAxis: "label", yAxis: "count" },
+        sourceDomain: "ycrm",
+        sourceKind: "verified_direct",
+        verifiedBy: "ycrm-verified-direct-query",
+      }],
+    });
+    const text = `\`\`\`report-json\n${report}\n\`\`\``;
+    const result = splitReportBlocks(text);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].type).toBe("report-artifact");
+    if (result[0].type === "report-artifact") {
+      expect(result[0].config.panels[0]?.sourceDomain).toBeUndefined();
+      expect(result[0].config.panels[0]?.sourceKind).toBeUndefined();
+      expect(result[0].config.panels[0]?.verifiedBy).toBeUndefined();
+    }
+  });
+
+  it("preserves verified direct source metadata when trusted by the runtime", () => {
+    const report = JSON.stringify({
+      version: 1,
+      title: "EnMS Verified Report",
+      sourceDomain: "enms",
+      sourceKind: "verified_direct",
+      verifiedBy: "enms-verified-direct-query",
+      panels: [{
+        id: "p1",
+        title: "P1",
+        type: "bar",
+        rows: [{ label: "迴路", kwh: 126_860 }],
+        mapping: { xAxis: "label", yAxis: "kwh" },
+      }],
+    });
+    const text = `\`\`\`report-json\n${report}\n\`\`\``;
+    const result = splitReportBlocks(text, {
+      trustedReportSource: {
+        sourceDomain: "enms",
+        sourceKind: "verified_direct",
+        verifiedBy: "enms-verified-direct-query",
+      },
+    });
+
+    expect(result).toHaveLength(1);
+    expect(result[0].type).toBe("report-artifact");
+    if (result[0].type === "report-artifact") {
+      expect(result[0].config.panels[0]?.sourceDomain).toBe("enms");
+      expect(result[0].config.panels[0]?.sourceKind).toBe("verified_direct");
+      expect(result[0].config.panels[0]?.verifiedBy).toBe("enms-verified-direct-query");
+    }
+  });
+
+  it("does not preserve verified direct metadata when trusted domain differs", () => {
+    const report = JSON.stringify({
+      version: 1,
+      title: "Y-CRM Report",
+      sourceDomain: "ycrm",
+      sourceKind: "verified_direct",
+      verifiedBy: "ycrm-verified-direct-query",
+      panels: [{
+        id: "p1",
+        title: "P1",
+        type: "bar",
+        rows: [{ label: "客戶", count: 22 }],
+        mapping: { xAxis: "label", yAxis: "count" },
+      }],
+    });
+    const text = `\`\`\`report-json\n${report}\n\`\`\``;
+    const result = splitReportBlocks(text, {
+      trustedReportSource: {
+        sourceDomain: "enms",
+        sourceKind: "verified_direct",
+      },
+    });
+
+    expect(result).toHaveLength(1);
+    expect(result[0].type).toBe("report-artifact");
+    if (result[0].type === "report-artifact") {
+      expect(result[0].config.panels[0]?.sourceDomain).toBeUndefined();
+      expect(result[0].config.panels[0]?.sourceKind).toBeUndefined();
+      expect(result[0].config.panels[0]?.verifiedBy).toBeUndefined();
+    }
+  });
+
+  it("does not inherit report-level verified source metadata into arbitrary panels", () => {
+    const report = JSON.stringify({
+      version: 1,
+      title: "EnMS Verified Report",
+      sourceDomain: "enms",
+      sourceKind: "verified_direct",
+      verifiedBy: "enms-verified-direct-query",
+      panels: [{
+        id: "p1",
+        title: "P1",
+        type: "bar",
+        rows: [{ label: "迴路", kwh: 126_860 }],
+        mapping: { xAxis: "label", yAxis: "kwh" },
+      }],
+    });
+    const text = `\`\`\`report-json\n${report}\n\`\`\``;
+    const result = splitReportBlocks(text);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].type).toBe("report-artifact");
+    if (result[0].type === "report-artifact") {
+      expect(result[0].config.panels[0]?.sourceDomain).toBeUndefined();
+      expect(result[0].config.panels[0]?.sourceKind).toBeUndefined();
+      expect(result[0].config.panels[0]?.verifiedBy).toBeUndefined();
+    }
+  });
+
+  it("strips verified direct metadata from untrusted report configs", () => {
+    const config = normalizeUntrustedReportConfig({
+      version: 1,
+      title: "Untrusted File Report",
+      panels: [{
+        id: "p1",
+        title: "P1",
+        type: "bar",
+        rows: [{ label: "fake", value: 1 }],
+        mapping: { xAxis: "label", yAxis: ["value"] },
+        sourceDomain: "enms",
+        sourceKind: "verified_direct",
+        verifiedBy: "fake-runtime",
+      }],
+    });
+
+    expect(config).not.toBeNull();
+    expect(config?.panels[0]?.sourceDomain).toBeUndefined();
+    expect(config?.panels[0]?.sourceKind).toBeUndefined();
+    expect(config?.panels[0]?.verifiedBy).toBeUndefined();
   });
 
   it("does not match regular json code blocks", () => {
