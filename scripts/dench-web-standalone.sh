@@ -2,6 +2,11 @@
 
 set -euo pipefail
 
+if [[ "$-" == *x* ]]; then
+  set +x
+  echo "[dench-web] xtrace disabled to avoid leaking runtime secrets."
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 APP_DIR="$ROOT_DIR/apps/web"
@@ -47,6 +52,128 @@ EOF
 die() {
   echo "error: $*" >&2
   exit 1
+}
+
+load_env_file() {
+  local file="$1"
+  if [[ -f "$file" ]]; then
+    local line key value
+    if [[ "$-" == *x* ]]; then
+      set +x
+      echo "[dench-web] xtrace disabled while loading env to avoid leaking runtime secrets."
+    fi
+
+    while IFS= read -r line || [[ -n "$line" ]]; do
+      line="${line%$'\r'}"
+      line="${line#"${line%%[![:space:]]*}"}"
+      line="${line%"${line##*[![:space:]]}"}"
+
+      [[ -z "$line" || "$line" == \#* ]] && continue
+
+      if [[ "$line" =~ ^export[[:space:]]+(.+)$ ]]; then
+        line="${BASH_REMATCH[1]}"
+      fi
+
+      [[ "$line" == *=* ]] || continue
+      key="${line%%=*}"
+      value="${line#*=}"
+      key="${key//[[:space:]]/}"
+      value="${value#"${value%%[![:space:]]*}"}"
+      value="${value%"${value##*[![:space:]]}"}"
+
+      [[ "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
+
+      if [[ ${#value} -ge 2 ]]; then
+        if [[ "${value:0:1}" == '"' && "${value: -1}" == '"' ]]; then
+          value="${value:1:${#value}-2}"
+        elif [[ "${value:0:1}" == "'" && "${value: -1}" == "'" ]]; then
+          value="${value:1:${#value}-2}"
+        fi
+      fi
+
+      export "$key=$value"
+    done < "$file"
+
+    echo "[dench-web] loaded env: ${file#$ROOT_DIR/}"
+  fi
+}
+
+load_runtime_env() {
+  local script_port="$PORT"
+  local script_host="$HOST"
+  local script_mode="$MODE"
+  local script_run_style="$RUN_STYLE"
+  local script_skip_build="$SKIP_BUILD"
+  load_env_file "$ROOT_DIR/.env"
+  load_env_file "$ROOT_DIR/.env.local"
+  load_env_file "$APP_DIR/.env"
+  load_env_file "$APP_DIR/.env.local"
+  PORT="$script_port"
+  HOST="$script_host"
+  MODE="$script_mode"
+  RUN_STYLE="$script_run_style"
+  SKIP_BUILD="$script_skip_build"
+  PID_FILE="/tmp/denchclaw-web-${PORT}.pid"
+  LOG_FILE="/tmp/denchclaw-web-${PORT}.log"
+  SCREEN_NAME="denchclaw-web-${PORT}"
+}
+
+has_any_env_key() {
+  local key
+  for key in "$@"; do
+    if [[ -n "${!key:-}" ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+warn_missing_db_runtime_env() {
+  local missing=()
+  if ! has_any_env_key YCRM_PG_CONNECTION Y_CRM_PG_CONNECTION OPENCLAW_YCRM_PG_CONNECTION YCRM_POSTGRES_CONNECTION; then
+    missing+=("Y-CRM")
+  fi
+  if ! has_any_env_key ERP_PG_CONNECTION OPENCLAW_ERP_PG_CONNECTION ERP_POSTGRES_CONNECTION; then
+    missing+=("ERP")
+  fi
+  if ! has_any_env_key ENMS_PG_CONNECTION OPENCLAW_ENMS_PG_CONNECTION ENMS_POSTGRES_CONNECTION; then
+    missing+=("EnMS")
+  fi
+  if [[ ${#missing[@]} -gt 0 ]]; then
+    echo "[dench-web] warning: DB runtime env missing for ${missing[*]}; affected domain queries will fail closed instead of guessing."
+  fi
+  if has_any_env_key ENMS_PG_CONNECTION OPENCLAW_ENMS_PG_CONNECTION ENMS_POSTGRES_CONNECTION; then
+    if ! has_any_env_key ENMS_PG_ALLOWED_HOST || ! has_any_env_key ENMS_PG_ALLOWED_PORT || ! has_any_env_key ENMS_PG_ALLOWED_DATABASE; then
+      echo "[dench-web] warning: EnMS DB env is present but ENMS_PG_ALLOWED_HOST / ENMS_PG_ALLOWED_PORT / ENMS_PG_ALLOWED_DATABASE is incomplete."
+    fi
+  fi
+}
+
+validate_runtime_args() {
+  if [[ ! "$PORT" =~ ^[0-9]+$ ]] || ((PORT < 1 || PORT > 65535)); then
+    die "--port must be a number between 1 and 65535"
+  fi
+
+  if [[ ! "$HOST" =~ ^[A-Za-z0-9_.:-]+$ ]]; then
+    die "--host contains unsupported characters"
+  fi
+}
+
+redact_sensitive_log() {
+  sed -E \
+    -e 's#(postgres(ql)?|mongodb)://[^[:space:];]+#\1://[REDACTED]#g' \
+    -e 's/((host|hostaddr|port|dbname|database|user|password)[[:space:]]*=[[:space:]]*)('\''([^'\''\\]|\\.)*'\''|"([^"\\]|\\.)*"|(\\.|[^[:space:];])+)/\1[REDACTED]/g' \
+    -e 's/(password[[:space:]]*=[[:space:]]*).*/\1[REDACTED]/g' \
+    -e 's/(host ")[^"]+/\1[REDACTED]/g' \
+    -e 's/(user ")[^"]+/\1[REDACTED]/g' \
+    -e 's/(database ")[^"]+/\1[REDACTED]/g' \
+    -e 's/(host name ")[^"]+/\1[REDACTED]/g' \
+    -e 's/(server at ")[^"]+/\1[REDACTED]/g' \
+    -e 's/(, port )[0-9]+/\1[REDACTED]/g' \
+    -e 's/\(([0-9]{1,3}\.){3}[0-9]{1,3}\)/([REDACTED_IP])/g' \
+    -e 's/\(([0-9A-Fa-f:]{2,})\)/([REDACTED_IP])/g' \
+    -e 's#(://[^:/@[:space:]]+):[^@/[:space:]]+@#\1:[REDACTED]@#g' \
+    -e 's/(Authorization:[[:space:]]*Bearer[[:space:]]+)[^[:space:]]+/\1[REDACTED]/g'
 }
 
 parse_args() {
@@ -176,6 +303,7 @@ stop_server() {
 start_detached() {
   local server_entry="$APP_DIR/.next/standalone/apps/web/server.js"
 
+  warn_missing_db_runtime_env
   : >"$LOG_FILE"
 
   if command -v screen >/dev/null 2>&1; then
@@ -191,7 +319,7 @@ start_detached() {
 
   if ! wait_for_http; then
     echo "[dench-web] startup log:" >&2
-    sed -n '1,120p' "$LOG_FILE" >&2 || true
+    sed -n '1,120p' "$LOG_FILE" | redact_sensitive_log >&2 || true
     die "standalone server did not become healthy on port $PORT"
   fi
 
@@ -207,6 +335,7 @@ start_detached() {
 start_foreground() {
   local server_entry="$APP_DIR/.next/standalone/apps/web/server.js"
 
+  warn_missing_db_runtime_env
   echo "[dench-web] starting in foreground on http://127.0.0.1:${PORT}"
   echo "[dench-web] press Ctrl+C to stop"
   cd "$APP_DIR"
@@ -243,9 +372,12 @@ status_server() {
 }
 
 main() {
-  parse_args "$@"
+parse_args "$@"
+validate_runtime_args
+load_runtime_env
+validate_runtime_args
 
-  case "$MODE" in
+case "$MODE" in
     build)
       build_bundle
       ;;

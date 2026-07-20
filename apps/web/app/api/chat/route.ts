@@ -242,6 +242,26 @@ function isLikelyChartRequest(userText: string): boolean {
   ].some((keyword) => current.includes(keyword.toLowerCase()));
 }
 
+function isLikelyWeatherRequest(userText: string): boolean {
+  const current = userText.trim().toLowerCase();
+  if (!current) {
+    return false;
+  }
+
+  return [
+    "天氣",
+    "氣溫",
+    "溫度",
+    "降雨",
+    "下雨",
+    "濕度",
+    "weather",
+    "forecast",
+    "rain",
+    "humidity",
+  ].some((keyword) => current.includes(keyword.toLowerCase()));
+}
+
 function decorateMessageWithGenericChartGuardrail(
   userMessage: string,
   options?: { compact?: boolean },
@@ -249,18 +269,11 @@ function decorateMessageWithGenericChartGuardrail(
   const compact = options?.compact ?? false;
   const lines = compact
     ? [
-        "[Generic Chart Guardrail]",
-        "If you emit report-json, every panel must include valid sql or inline rows/data.",
-        "If you cannot form a valid chart payload, answer in plain text instead of emitting a broken chart.",
-        "[/Generic Chart Guardrail]",
+        "Chart safety: if no verified numeric data is available, answer in plain text and do not emit report-json.",
       ]
     : [
-        "[Generic Chart Guardrail]",
-        "If you render a report-json block, each panel must contain either a valid sql string or inline rows/data.",
-        "If this is only a chart-render test, prefer inline rows/data or a VALUES-based sql block with 2-5 sample rows.",
-        "Do not emit a report-json panel with missing sql and missing rows/data.",
-        "If you cannot form a valid chart payload, explain the limitation in plain text instead of emitting a broken chart.",
-        "[/Generic Chart Guardrail]",
+        "Chart safety: for non Y-CRM / ERP / EnMS answers, only emit report-json when you have inline numeric rows/data; do not use SQL.",
+        "If no verified numeric data is available, answer in plain text and do not emit report-json.",
       ];
 
   return `${userMessage}\n\n${lines.join("\n")}`;
@@ -659,6 +672,7 @@ export async function POST(req: Request) {
     // source-of-truth systems in explicitly.
     let routedToErp = false;
     let routedToEnms = false;
+    let suppressReportBlocks = false;
 
     if (!ycrmClaimed) {
       const erpPreflight = buildErpContext({
@@ -754,6 +768,7 @@ export async function POST(req: Request) {
       ) {
         routedToEnms = true;
         const enmsContextPack = buildEnmsContextPack(enmsPreflight);
+        suppressReportBlocks = enmsContextPack.presentation.chart_render_allowed === false;
         updateSessionEnmsPlannerPreflight(sessionId, enmsPreflight);
         updateSessionEnmsPlannerContextPack(sessionId, enmsContextPack);
         invalidateSessionErpPlannerArtifacts(sessionId, {
@@ -842,9 +857,19 @@ export async function POST(req: Request) {
       !routedToErp &&
       !routedToEnms
     ) {
-      agentMessage = decorateMessageWithGenericChartGuardrail(agentMessage, {
-        compact: useCompactLocalModelContext,
-      });
+      if (isLikelyWeatherRequest(userText)) {
+        directAssistantReply = [
+          "目前 DenchClaw 尚未接入正式天氣資料來源，因此不會把天氣問題標成 Workspace DB，也不會產生未驗證的天氣圖表。",
+          "",
+          "如果要讓天氣圖表可用，需要先接入可驗證的天氣 API 或資料表；在那之前，我可以用文字說明查詢限制，或協助規劃天氣資料來源接入方式。",
+        ].join("\n");
+        directAnswerMode = "system_direct";
+        suppressReportBlocks = true;
+      } else {
+        agentMessage = decorateMessageWithGenericChartGuardrail(agentMessage, {
+          compact: useCompactLocalModelContext,
+        });
+      }
     }
 
     const routedDomainId = routedToEnms
@@ -855,7 +880,10 @@ export async function POST(req: Request) {
           ? "ycrm"
           : null;
     const traceRequestedModelId =
-      normalizedModelOverride ?? getAgentSession(sessionId)?.model ?? null;
+      normalizedModelOverride ??
+      getAgentSession(gatewayThreadId)?.model ??
+      getAgentSession(sessionId)?.model ??
+      null;
 
     if (directAssistantReply) {
       await createSyntheticCompletedRun({
@@ -865,6 +893,7 @@ export async function POST(req: Request) {
           answerMode: directAnswerMode ?? "system_direct",
           requestedModelId: traceRequestedModelId,
           domainId: routedDomainId,
+          suppressReportBlocks,
         },
       });
     } else {
@@ -891,6 +920,7 @@ export async function POST(req: Request) {
             answerMode: "model_run",
             requestedModelId: traceRequestedModelId,
             domainId: routedDomainId,
+            suppressReportBlocks,
           },
           imageAttachments:
             imageAttachments.length > 0 ? imageAttachments : undefined,

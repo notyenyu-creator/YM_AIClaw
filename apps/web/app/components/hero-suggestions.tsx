@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { BarChart3, Database, ShieldCheck, Sparkles, Users, Zap } from "lucide-react";
+import { useEffect, useId, useMemo, useState } from "react";
+import { BarChart3, ChevronDown, ChevronUp, Database, ShieldCheck, Sparkles, Users, Zap } from "lucide-react";
 import { PROMPT_SUGGESTIONS, type PromptSuggestion } from "@/lib/prompt-suggestions";
 
 const VISIBLE_COUNT = 6;
@@ -332,11 +332,17 @@ export function HeroSuggestions({
 	enablePresetTabs?: boolean;
 }) {
 	const [preset, setPreset] = useState<HeroSuggestionPreset>(defaultPreset);
+	const [domainHintsExpanded, setDomainHintsExpanded] = useState(!compact);
 	const [seed] = useState(0);
+	const domainHintPanelId = useId();
 
 	useEffect(() => {
 		setPreset(defaultPreset);
 	}, [defaultPreset]);
+
+	useEffect(() => {
+		setDomainHintsExpanded(!compact);
+	}, [compact]);
 
 	const visible = useMemo(
 		() => pickRandom(VISIBLE_COUNT),
@@ -350,6 +356,18 @@ export function HeroSuggestions({
 	const activeSystemHint: HeroSuggestionSystemHint | null =
 		preset === "generic" ? null : preset;
 	const theme = PRESET_THEME[preset];
+	const handlePresetClick = (nextPreset: HeroSuggestionPreset) => {
+		setPreset(nextPreset);
+		if (compact) {
+			setDomainHintsExpanded(false);
+		}
+	};
+	const handleDomainHintClick = (prompt: string, systemHint?: HeroSuggestionSystemHint) => {
+		onPromptClick(prompt, systemHint);
+		if (compact) {
+			setDomainHintsExpanded(false);
+		}
+	};
 
 	return (
 		<div
@@ -363,7 +381,8 @@ export function HeroSuggestions({
 							<button
 								key={key}
 								type="button"
-								onClick={() => setPreset(key)}
+								onClick={() => handlePresetClick(key)}
+								aria-pressed={isActive}
 								className="rounded-full px-4 py-2 text-xs font-semibold border transition-all duration-200 shadow-sm"
 								style={{
 									background: isActive ? PRESET_THEME[key].accent : "color-mix(in srgb, var(--color-surface) 92%, transparent)",
@@ -378,7 +397,8 @@ export function HeroSuggestions({
 					})}
 					<button
 						type="button"
-						onClick={() => setPreset("generic")}
+						onClick={() => handlePresetClick("generic")}
+						aria-pressed={preset === "generic"}
 						className="rounded-full px-4 py-2 text-xs font-semibold border transition-all duration-200 shadow-sm"
 						style={{
 							background: preset === "generic" ? PRESET_THEME.generic.accent : "color-mix(in srgb, var(--color-surface) 92%, transparent)",
@@ -394,7 +414,11 @@ export function HeroSuggestions({
 
 			{activeDomainPreset ? (
 				compact ? (
+				domainHintsExpanded ? (
 				<div
+					id={domainHintPanelId}
+					role="region"
+					aria-label={`${activeDomainPreset.label} 問題提示`}
 					className="rounded-[22px] border px-3.5 py-3.5 shadow-[0_10px_28px_rgba(15,23,42,0.06)]"
 					style={{
 						background: "color-mix(in srgb, var(--color-surface) 90%, white 10%)",
@@ -428,17 +452,34 @@ export function HeroSuggestions({
 								</p>
 							</div>
 						</div>
-						<span
-							className="inline-flex shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-semibold"
-							style={{
-								background: "rgba(255,255,255,0.72)",
-								borderColor: theme.panelBorder,
-								color: theme.accent,
-							}}
-						>
-							<Database className="h-3.5 w-3.5" />
-							資料優先
-						</span>
+						<div className="flex shrink-0 items-center gap-2">
+							<span
+								className="hidden sm:inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-semibold"
+								style={{
+									background: "rgba(255,255,255,0.72)",
+									borderColor: theme.panelBorder,
+									color: theme.accent,
+								}}
+							>
+								<Database className="h-3.5 w-3.5" />
+								資料優先
+							</span>
+							<button
+								type="button"
+								onClick={() => setDomainHintsExpanded(false)}
+								aria-expanded="true"
+								aria-controls={domainHintPanelId}
+								className="inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-semibold transition-all hover:-translate-y-0.5"
+								style={{
+									background: "rgba(255,255,255,0.78)",
+									borderColor: theme.panelBorder,
+									color: "var(--color-text-secondary)",
+								}}
+							>
+								<ChevronUp className="h-3.5 w-3.5" />
+								收合
+							</button>
+						</div>
 					</div>
 
 					<p
@@ -453,7 +494,7 @@ export function HeroSuggestions({
 							<button
 								key={hint.id}
 								type="button"
-								onClick={() => onPromptClick(hint.prompt, activeSystemHint ?? undefined)}
+								onClick={() => handleDomainHintClick(hint.prompt, activeSystemHint ?? undefined)}
 								aria-label={hint.label}
 								className="group inline-flex min-w-0 max-w-full items-center gap-2 rounded-full border px-3 py-2 text-left transition-all duration-200 hover:-translate-y-0.5"
 								style={{
@@ -479,6 +520,61 @@ export function HeroSuggestions({
 						))}
 					</div>
 				</div>
+				) : (
+				<div
+					className="rounded-[20px] border px-3 py-2.5 shadow-[0_8px_22px_rgba(15,23,42,0.05)]"
+					style={{
+						background: "color-mix(in srgb, var(--color-surface) 92%, white 8%)",
+						borderColor: theme.panelBorder,
+					}}
+				>
+					<button
+						type="button"
+						onClick={() => setDomainHintsExpanded(true)}
+						aria-expanded="false"
+						aria-controls={domainHintPanelId}
+						className="flex w-full items-center justify-between gap-3 text-left"
+					>
+						<div className="flex min-w-0 items-center gap-2.5">
+							<div
+								className="flex h-8 w-8 shrink-0 items-center justify-center rounded-2xl border"
+								style={{
+									background: theme.accentSoft,
+									borderColor: theme.panelBorder,
+									color: theme.accent,
+								}}
+							>
+								<activeDomainPreset.icon className="h-4 w-4" />
+							</div>
+							<div className="min-w-0">
+								<p
+									className="truncate text-xs font-semibold"
+									style={{ color: "var(--color-text)" }}
+								>
+									{activeDomainPreset.label} 問題提示已收合
+								</p>
+								<p
+									className="truncate text-[11px]"
+									style={{ color: "var(--color-text-muted)" }}
+								>
+									需要範例題型時再展開，不會擋住輸入內容。
+								</p>
+							</div>
+						</div>
+						<span
+							className="inline-flex shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-semibold"
+							style={{
+								background: theme.accentSoft,
+								borderColor: theme.panelBorder,
+								color: theme.accent,
+							}}
+						>
+							<ChevronDown className="h-3.5 w-3.5" />
+							顯示提示
+						</span>
+					</button>
+				</div>
+				)
 				) : (
 				<div
 					className={`border ${compact ? "rounded-[24px] px-4 py-4" : "rounded-[32px] px-5 py-5 md:px-6 md:py-6"} shadow-[0_24px_80px_rgba(15,23,42,0.08)]`}
@@ -570,7 +666,7 @@ export function HeroSuggestions({
 							<button
 								key={hint.id}
 								type="button"
-								onClick={() => onPromptClick(hint.prompt, activeSystemHint ?? undefined)}
+								onClick={() => handleDomainHintClick(hint.prompt, activeSystemHint ?? undefined)}
 								aria-label={hint.label}
 								className="group text-left rounded-[22px] border px-4 py-3.5 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-[0_20px_40px_rgba(15,23,42,0.08)]"
 								style={{

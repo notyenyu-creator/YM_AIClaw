@@ -1,8 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const TEST_ENMS_CONNECTION =
-  "host=118.168.188.27 port=55433 dbname=EnMS user=test password=secret sslmode=disable";
+  "host=enms-db.internal port=55433 dbname=EnMS user=test password=secret sslmode=disable";
 const ORIGINAL_ENV = { ...process.env };
+
+function configureEnmsAllowlist() {
+  process.env.ENMS_PG_ALLOWED_HOST = "enms-db.internal";
+  process.env.ENMS_PG_ALLOWED_PORT = "55433";
+  process.env.ENMS_PG_ALLOWED_DATABASE = "EnMS";
+}
 
 vi.mock("./workspace", () => ({
   duckdbQueryExternalPgAsyncDetailed: vi.fn(),
@@ -13,6 +19,7 @@ describe("buildEnmsVerifiedDirectQueryAnswer", () => {
     vi.resetModules();
     vi.clearAllMocks();
     process.env.ENMS_PG_CONNECTION = TEST_ENMS_CONNECTION;
+    configureEnmsAllowlist();
     delete process.env.OPENCLAW_ENMS_PG_CONNECTION;
     delete process.env.ENMS_POSTGRES_CONNECTION;
   });
@@ -86,7 +93,7 @@ describe("buildEnmsVerifiedDirectQueryAnswer", () => {
     vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockResolvedValueOnce({
       rows: [],
       error:
-        "Catalog Error near ATTACH 'host=118.168.188.27 port=55433 dbname=EnMS user=sa password=secret sslmode=disable' AS enms",
+        "Catalog Error near ATTACH 'host=enms-redaction.internal port=55433 dbname=EnMS user=sa password=secret sslmode=disable' AS enms",
     });
 
     const { buildEnmsVerifiedDirectQueryAnswer } = await import(
@@ -470,6 +477,47 @@ describe("buildEnmsVerifiedDirectQueryAnswer", () => {
     expect(answer).toContain("最新可用 7 天（2026-06-08 01:45:00+08 至 2026-06-15 01:45:00+08）");
     expect(answer).toContain("主電錶");
     expect(answer).toContain("請查 2026-06-01 到 2026-06-15 的設備 / 迴路耗電排行");
+  });
+
+  it("does not render unknown scoped top-load availability as an invalid time range", async () => {
+    const { duckdbQueryExternalPgAsyncDetailed } = await import("./workspace");
+    vi.mocked(duckdbQueryExternalPgAsyncDetailed)
+      .mockResolvedValueOnce({
+        rows: [],
+        error: null,
+      })
+      .mockResolvedValueOnce({
+        rows: [
+          {
+            requested_window_start: "2026-06-16 15:10:00+08",
+            requested_window_end: "2026-06-23 15:10:00+08",
+            earliest_summary_time: null,
+            latest_summary_time: null,
+            fallback_window_start: null,
+            fallback_window_end: null,
+            summary_rows_requested_window: 0,
+          },
+        ],
+        error: null,
+      })
+      .mockResolvedValueOnce({
+        rows: [],
+        error: null,
+      });
+
+    const { buildEnmsVerifiedDirectQueryAnswer } = await import(
+      "./enms-verified-direct-query"
+    );
+
+    const answer = await buildEnmsVerifiedDirectQueryAnswer({
+      userMessage: "阿里山最近 7 天的設備耗電排行如何？請列出 Top 5。",
+    });
+
+    expect(duckdbQueryExternalPgAsyncDetailed).toHaveBeenCalledTimes(3);
+    expect(answer).toContain("實際查詢區間：2026-06-16 15:10:00+08 至 2026-06-23 15:10:00+08");
+    expect(answer).toContain("目前「阿里山」也沒有可補查的 summary 資料時間帶");
+    expect(answer).toContain("補查「阿里山」最新可用資料後，仍沒有可用的耗電排行資料");
+    expect(answer).not.toContain("無資料 至 無資料");
   });
 
   it("answers top-load ranking with explicit date ranges", async () => {

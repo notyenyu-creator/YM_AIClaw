@@ -185,6 +185,75 @@ describe("Web Sessions API", () => {
       expect(json.sessions[0].plannerLearningDraft?.writeback?.review_reason).toBe("Needs manual merge");
       expect(json.sessions[1].filePath).toBe("docs/demo.md");
     });
+
+    it("returns compact sidebar metadata when summary=true", async () => {
+      const { readFileSync: mockReadFile, existsSync: mockExists } = await import("node:fs");
+      vi.mocked(mockExists).mockReturnValue(true);
+      const sessions = [
+        {
+          id: "s-heavy",
+          title: "Heavy session",
+          createdAt: 10,
+          updatedAt: 20,
+          messageCount: 6,
+          plannerPreflight: {
+            system: "ycrm",
+            updatedAt: 12,
+            intent: "entity_summary",
+            confidence: "high",
+            shouldRouteToYcrm: true,
+            workspaceId: "workspace_3jox",
+            needsWorkspaceValidation: false,
+            warnings: [],
+            blockers: [],
+            crossSystem: false,
+            targetSystems: ["ycrm"],
+          },
+          plannerContextPack: {
+            workspaceId: "workspace_3jox",
+            evidence: Array.from({ length: 50 }, (_, index) => ({ id: `heavy-${index}` })),
+          },
+          plannerLearningDraft: {
+            writeback: {
+              status: "promotion_conflicted",
+              reviewer_actor: "qa-reviewer",
+              review_reason: "Needs manual merge",
+            },
+            evidence: {
+              latest_user_message: "整理 Calleen Hong 的客戶背景",
+              live_query_steps: ["read_real_data", "resolve_workspace_member_fk"],
+            },
+            drafts: {
+              wiki: [{ path: "wiki/ycrm/heavy.md", content: "large draft" }],
+              playbooks: [],
+              memory: [],
+            },
+          },
+          lastAnswerMeta: {
+            answerMode: "verified_direct",
+            modelClass: "none",
+            dataDomain: "ycrm",
+          },
+        },
+      ];
+      vi.mocked(mockReadFile).mockReturnValue(JSON.stringify(sessions) as never);
+
+      const { GET } = await import("./route.js");
+      const req = new Request("http://localhost/api/web-sessions?includeAll=true&summary=true");
+      const res = await GET(req);
+      const json = await res.json();
+
+      expect(json.sessions).toHaveLength(1);
+      expect(json.sessions[0].id).toBe("s-heavy");
+      expect(json.sessions[0].plannerPreflight?.workspaceId).toBe("workspace_3jox");
+      expect(json.sessions[0].lastAnswerMeta?.answerMode).toBe("verified_direct");
+      expect(json.sessions[0].plannerLearningDraft?.writeback?.status).toBe("promotion_conflicted");
+      expect(json.sessions[0].plannerLearningDraft?.writeback?.reviewer_actor).toBe("qa-reviewer");
+      expect(json.sessions[0].plannerLearningDraft?.writeback?.review_reason).toBe("Needs manual merge");
+      expect(json.sessions[0].plannerContextPack).toBeUndefined();
+      expect(json.sessions[0].plannerLearningDraft?.evidence).toBeUndefined();
+      expect(json.sessions[0].plannerLearningDraft?.drafts).toBeUndefined();
+    });
   });
 
   // ─── POST /api/web-sessions ────────────────────────────────────

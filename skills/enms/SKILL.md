@@ -23,9 +23,10 @@ metadata: { "openclaw": { "always": true, "emoji": "⚡" } }
 
 ## 最高優先級原則
 
-1. **只連 `.27`**
-   - 目前只允許使用 `118.168.188.27`
-   - **禁止使用 `.29`**
+1. **只連部署環境授權的 EnMS 資料來源**
+   - 只能使用 server-side runtime secrets 提供的 EnMS PostgreSQL 連線資訊
+   - 正式 runtime 必須由 `ENMS_PG_ALLOWED_HOST` / `ENMS_PG_ALLOWED_PORT` / `ENMS_PG_ALLOWED_DATABASE` 鎖定正式資料來源
+   - **禁止**自行切換到未授權主機、備援主機或本機預設資料庫
 
 2. **先讀 PostgreSQL / TimescaleDB，不先讀 Mongo**
    - EnMS 現階段的分析主線在 PostgreSQL / TimescaleDB
@@ -37,7 +38,7 @@ metadata: { "openclaw": { "always": true, "emoji": "⚡" } }
    - 不假設 schema / table / column 一定存在
 
 4. **禁止猜測 EnMS 連線資訊**
-   - 需要使用 DuckDB `postgres_scanner` 時，只能使用伺服器環境變數提供的 `.27 / EnMS` 連線資訊
+   - 需要使用 DuckDB `postgres_scanner` 時，只能使用伺服器環境變數提供的 EnMS 正式連線資訊
    - **禁止**自行改寫成 `dbname=enms_27`
    - **禁止**改寫成 `host=localhost port=5432`
    - **禁止**改寫成任何自行猜測的本機預設帳號或密碼
@@ -156,17 +157,17 @@ EnMS 目前除了 planner / context / learning / review 骨架，也有第一版
 
 ```
 類型：PostgreSQL / TimescaleDB
-Host：118.168.188.27
-Port：55433
-Database：EnMS
-Username：sa
+Host：由 `ENMS_PG_CONNECTION` 與必填 `ENMS_PG_ALLOWED_HOST` 控制
+Port：由 `ENMS_PG_CONNECTION` 與必填 `ENMS_PG_ALLOWED_PORT` 控制
+Database：由 `ENMS_PG_CONNECTION` 與必填 `ENMS_PG_ALLOWED_DATABASE` 控制
+Username：由部署環境變數提供
 Password：由部署環境變數提供，不寫在文件或 prompt 內
 SSL：disable
 ```
 
 ### 非 AI runtime 的維運診斷 Host
 
-DenchClaw / EnClaw 的 EnMS AI runtime 固定只使用 `118.168.188.27:55433/EnMS`。
+DenchClaw / EnClaw 的 EnMS AI runtime 固定只使用部署環境授權的 EnMS 來源。
 若 DBA 或維運人員在資料庫主機內部手動診斷，可能會看到 `localhost:55433`
 或 Docker network 的 `postgresql:5432`，但這些不是 AI runtime 可以自行切換的資料來源。
 
@@ -197,15 +198,14 @@ SQL
 
 這支 script 已經固定：
 
-- `.27 / EnMS`
-- `port=55433`
-- `user=sa`
+- EnMS PostgreSQL host / port / database / user 由 server-side runtime secrets 提供
+- 必填的 `ENMS_PG_ALLOWED_HOST` / `ENMS_PG_ALLOWED_PORT` / `ENMS_PG_ALLOWED_DATABASE` 用來鎖定允許連線目標
 - `password` 由 `ENMS_PG_CONNECTION` / `OPENCLAW_ENMS_PG_CONNECTION` / `ENMS_POSTGRES_CONNECTION` 提供
 - alias = `enms`
 - `READ_ONLY`
 
 ```bash
-export ENMS_PG_CONNECTION='host=118.168.188.27 port=55433 dbname=EnMS user=sa password=<由部署環境提供> sslmode=disable'
+export ENMS_PG_CONNECTION='host=<ENMS_PG_HOST> port=<ENMS_PG_PORT> dbname=<ENMS_PG_DATABASE> user=<ENMS_PG_USER> password=<由部署環境提供> sslmode=disable'
 bash skills/enms/scripts/query_enms.sh "SELECT version();"
 ```
 
@@ -225,7 +225,7 @@ Mongo 只作為補充，不當 phase-1 主資料源：
 
 ```text
 由部署環境變數提供 Mongo URI；不要把帳號密碼寫進文件或 prompt。
-例如：ENMS_MONGO_URI=mongodb://<user>:<secret>@118.168.188.27:27018/enms_mongo?authSource=admin
+例如：ENMS_MONGO_URI=mongodb://<ENMS_MONGO_USER>:<secret>@<ENMS_MONGO_HOST>:<ENMS_MONGO_PORT>/<ENMS_MONGO_DATABASE>?authSource=admin
 ```
 
 ---

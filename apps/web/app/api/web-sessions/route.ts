@@ -13,14 +13,98 @@ export { type WebSessionMeta };
 
 export const dynamic = "force-dynamic";
 
+type LearningDraftWithWriteback = {
+  writeback?: {
+    status?: string;
+    reviewer_actor?: string | null;
+    review_reason?: string | null;
+    approved_via?: string | null;
+  };
+};
+
+type LearningDraftListSummary = {
+  writeback?: {
+    status?: string;
+    reviewer_actor?: string | null;
+    review_reason?: string | null;
+    approved_via?: string | null;
+  };
+};
+
+type WebSessionListItem = Omit<
+  WebSessionMeta,
+  | "plannerContextPack"
+  | "plannerLearningDraft"
+  | "erpPlannerContextPack"
+  | "erpPlannerLearningDraft"
+  | "enmsPlannerContextPack"
+  | "enmsPlannerLearningDraft"
+> & {
+  plannerLearningDraft?: LearningDraftListSummary;
+  erpPlannerLearningDraft?: LearningDraftListSummary;
+  enmsPlannerLearningDraft?: LearningDraftListSummary;
+};
+
+function compactLearningDraft<T extends LearningDraftWithWriteback | undefined>(
+  draft: T,
+): LearningDraftListSummary | undefined {
+  if (!draft?.writeback) {
+    return undefined;
+  }
+
+  const { status, reviewer_actor, review_reason, approved_via } = draft.writeback;
+  return {
+    writeback: {
+      ...(status ? { status } : {}),
+      ...(reviewer_actor ? { reviewer_actor } : {}),
+      ...(review_reason ? { review_reason } : {}),
+      ...(approved_via ? { approved_via } : {}),
+    },
+  };
+}
+
+function compactSessionForList(session: WebSessionMeta): WebSessionListItem {
+  return {
+    id: session.id,
+    title: session.title,
+    createdAt: session.createdAt,
+    updatedAt: session.updatedAt,
+    messageCount: session.messageCount,
+    ...(session.filePath ? { filePath: session.filePath } : {}),
+    ...(session.workspaceName ? { workspaceName: session.workspaceName } : {}),
+    ...(session.workspaceRoot ? { workspaceRoot: session.workspaceRoot } : {}),
+    ...(session.workspaceAgentId ? { workspaceAgentId: session.workspaceAgentId } : {}),
+    ...(session.chatAgentId ? { chatAgentId: session.chatAgentId } : {}),
+    ...(session.gatewaySessionKey ? { gatewaySessionKey: session.gatewaySessionKey } : {}),
+    ...(session.gatewaySessionId ? { gatewaySessionId: session.gatewaySessionId } : {}),
+    ...(session.agentMode ? { agentMode: session.agentMode } : {}),
+    ...(session.lastActiveAt ? { lastActiveAt: session.lastActiveAt } : {}),
+    ...(session.plannerPreflight ? { plannerPreflight: session.plannerPreflight } : {}),
+    ...(session.enmsPlannerPreflight ? { enmsPlannerPreflight: session.enmsPlannerPreflight } : {}),
+    ...(session.erpPlannerPreflight ? { erpPlannerPreflight: session.erpPlannerPreflight } : {}),
+    ...(session.lastAnswerMeta ? { lastAnswerMeta: session.lastAnswerMeta } : {}),
+    ...(session.plannerLearningDraft
+      ? { plannerLearningDraft: compactLearningDraft(session.plannerLearningDraft) }
+      : {}),
+    ...(session.erpPlannerLearningDraft
+      ? { erpPlannerLearningDraft: compactLearningDraft(session.erpPlannerLearningDraft) }
+      : {}),
+    ...(session.enmsPlannerLearningDraft
+      ? { enmsPlannerLearningDraft: compactLearningDraft(session.enmsPlannerLearningDraft) }
+      : {}),
+  };
+}
+
 /** GET /api/web-sessions — list web chat sessions.
  *  ?filePath=... → returns only sessions scoped to that file.
  *  ?includeAll=true → returns all sessions (including file-scoped).
+ *  ?summary=true → returns compact metadata for sidebar lists.
  *  No filePath   → returns only global (non-file) sessions. */
 export async function GET(req: Request) {
   const url = new URL(req.url);
   const filePath = url.searchParams.get("filePath");
   const includeAll = url.searchParams.get("includeAll") === "true";
+  const summary = url.searchParams.get("summary") === "true";
 
   const all = readIndex();
   const sessions = includeAll
@@ -29,7 +113,7 @@ export async function GET(req: Request) {
       ? all.filter((s) => s.filePath === filePath)
       : all.filter((s) => !s.filePath);
 
-  return Response.json({ sessions });
+  return Response.json({ sessions: summary ? sessions.map(compactSessionForList) : sessions });
 }
 
 /** POST /api/web-sessions — create a new web chat session */

@@ -890,7 +890,7 @@ function WorkspacePageInner() {
   const fetchSessions = useCallback(async () => {
     setSessionsLoading(true);
     try {
-      const res = await fetch("/api/web-sessions?includeAll=true");
+      const res = await fetch("/api/web-sessions?includeAll=true&summary=true");
       const data = await res.json();
       const all: Array<WebSession & { filePath?: string }> = data.sessions ?? [];
       setSessions(all.filter((s) => !s.filePath));

@@ -32,7 +32,7 @@ describe("buildEnmsContextPack", () => {
     expect(pack.execution_hints.join(" ")).toContain(
       "server-side EnMS DB connector",
     );
-    expect(pack.execution_hints.join(" ")).not.toContain("ym@mes42769778");
+    expect(pack.execution_hints.join(" ")).not.toContain("legacy-prod-password");
     expect(pack.execution_hints.join(" ")).toContain(
       "runtime-configured server-side connector",
     );

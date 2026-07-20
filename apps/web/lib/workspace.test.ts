@@ -638,6 +638,9 @@ describe("workspace utilities", () => {
       process.env.YCRM_PG_CONNECTION = "password=ycrm-secret";
       process.env.ERP_PG_CONNECTION = "password=erp-secret";
       process.env.ENMS_PG_CONNECTION = "password=enms-secret";
+      process.env.ENMS_PG_ALLOWED_HOST = "enms-db.internal";
+      process.env.ENMS_PG_ALLOWED_PORT = "55433";
+      process.env.ENMS_PG_ALLOWED_DATABASE = "EnMS";
       mockExists.mockImplementation((p) => String(p) === "/opt/homebrew/bin/duckdb");
       const child = makeMockSpawnProcess({
           stdout: '[{"opportunity":"全家安-報修及派工系統","amount_million":2000000}]',
@@ -667,6 +670,9 @@ describe("workspace utilities", () => {
       expect(childEnv).not.toHaveProperty("YCRM_PG_CONNECTION");
       expect(childEnv).not.toHaveProperty("ERP_PG_CONNECTION");
       expect(childEnv).not.toHaveProperty("ENMS_PG_CONNECTION");
+      expect(childEnv).not.toHaveProperty("ENMS_PG_ALLOWED_HOST");
+      expect(childEnv).not.toHaveProperty("ENMS_PG_ALLOWED_PORT");
+      expect(childEnv).not.toHaveProperty("ENMS_PG_ALLOWED_DATABASE");
       expect(child.stdin.end).toHaveBeenCalledWith(
         expect.stringContaining("password=postgres"),
       );
@@ -678,7 +684,7 @@ describe("workspace utilities", () => {
       mockSpawn.mockReturnValue(makeMockSpawnProcess({ stdout: "[{]\n" }) as never);
 
       const result = await duckdbQueryExternalPgAsync(
-        "host=118.168.188.27 port=55433 dbname=EnMS user=sa password=secret sslmode=disable",
+        "host=enms-db.internal port=55433 dbname=EnMS user=sa password=secret sslmode=disable",
         'SELECT * FROM enms.public."DeviceDataSummaryView" WHERE "RecordTime" >= NOW() - INTERVAL \'7 days\'',
         "enms",
       );
@@ -706,23 +712,23 @@ describe("workspace utilities", () => {
       mockSpawn.mockReturnValue(
         makeMockSpawnProcess({
           stderr:
-            "Catalog Error near ATTACH 'host=118.168.188.27 port=55433 dbname=EnMS user=sa password=plain sslpassword=ssl-secret pgpassword=pg-secret' AS enms failed",
+            "Catalog Error near ATTACH 'host=enms-redaction.internal port=55433 dbname=EnMS user=sa password=test-secret sslpassword=test-ssl-secret pgpassword=test-pg-secret' AS enms failed",
           code: 1,
         }) as never,
       );
 
       const result = await duckdbQueryExternalPgAsyncDetailed(
-        "host=118.168.188.27 port=55433 dbname=EnMS user=sa password=plain sslpassword=ssl-secret pgpassword=pg-secret",
+        "host=enms-redaction.internal port=55433 dbname=EnMS user=sa password=test-secret sslpassword=test-ssl-secret pgpassword=test-pg-secret",
         "SELECT * FROM enms.public.sites",
         "enms",
       );
 
       expect(result.rows).toEqual([]);
       expect(result.error).toContain("ATTACH '<redacted-connection>' AS enms");
-      expect(result.error).not.toContain("118.168.188.27");
-      expect(result.error).not.toContain("plain");
-      expect(result.error).not.toContain("ssl-secret");
-      expect(result.error).not.toContain("pg-secret");
+      expect(result.error).not.toContain("enms-redaction.internal");
+      expect(result.error).not.toContain("test-secret");
+      expect(result.error).not.toContain("test-ssl-secret");
+      expect(result.error).not.toContain("test-pg-secret");
     });
 
     it("rejects unsafe external postgres aliases before spawning DuckDB", async () => {

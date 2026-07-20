@@ -4,11 +4,16 @@ const ENMS_CONNECTION_ENV_KEYS = [
   "ENMS_POSTGRES_CONNECTION",
 ] as const;
 
-const REQUIRED_ENMS_HOST = "118.168.188.27";
-const REQUIRED_ENMS_PORT = "55433";
-const REQUIRED_ENMS_DB_NAME = "EnMS";
+const ENMS_ALLOWED_TARGET_ENV_KEYS = {
+  host: "ENMS_PG_ALLOWED_HOST",
+  port: "ENMS_PG_ALLOWED_PORT",
+  dbname: "ENMS_PG_ALLOWED_DATABASE",
+} as const;
+
 const USER_FACING_UNAVAILABLE_MESSAGE =
   "目前 EnMS 資料連線尚未啟用，已停止查詢以避免推測；請通知維運確認伺服器端連線設定。";
+const USER_FACING_TARGET_GUARD_MESSAGE =
+  "目前 EnMS 資料來源尚未通過授權目標檢查，已停止查詢以避免使用錯誤資料源；請通知維運確認伺服器端 allowlist 設定。";
 
 export class EnmsDbConfigurationError extends Error {
   constructor(message: string) {
@@ -39,16 +44,43 @@ function parseConnectionParts(connectionString: string): Record<string, string> 
   return parts;
 }
 
+function getExpectedEnmsTarget(): Partial<Record<keyof typeof ENMS_ALLOWED_TARGET_ENV_KEYS, string>> {
+  return {
+    host: process.env[ENMS_ALLOWED_TARGET_ENV_KEYS.host]?.trim(),
+    port: process.env[ENMS_ALLOWED_TARGET_ENV_KEYS.port]?.trim(),
+    dbname: process.env[ENMS_ALLOWED_TARGET_ENV_KEYS.dbname]?.trim(),
+  };
+}
+
+function allowUnscopedEnmsDbForTests() {
+  return process.env.DENCHCLAW_ALLOW_UNSCOPED_ENMS_DB === "1";
+}
+
 function assertOfficialEnmsConnection(connectionString: string) {
   const parts = parseConnectionParts(connectionString);
-  if (
-    parts.host !== REQUIRED_ENMS_HOST ||
-    parts.port !== REQUIRED_ENMS_PORT ||
-    parts.dbname !== REQUIRED_ENMS_DB_NAME
-  ) {
+
+  if (!parts.host || !parts.port || !parts.dbname) {
     throw new EnmsDbConfigurationError(
       USER_FACING_UNAVAILABLE_MESSAGE,
     );
+  }
+
+  const expected = getExpectedEnmsTarget();
+  if (!expected.host || !expected.port || !expected.dbname) {
+    if (allowUnscopedEnmsDbForTests()) {
+      return;
+    }
+    throw new EnmsDbConfigurationError(
+      USER_FACING_TARGET_GUARD_MESSAGE,
+    );
+  }
+
+  for (const key of ["host", "port", "dbname"] as const) {
+    if (parts[key] !== expected[key]) {
+      throw new EnmsDbConfigurationError(
+        USER_FACING_TARGET_GUARD_MESSAGE,
+      );
+    }
   }
 }
 
@@ -65,7 +97,7 @@ export function getEnmsPostgresConnectionString(): string {
 }
 
 export function describeEnmsPostgresConnectionConfig(): string {
-  return ENMS_CONNECTION_ENV_KEYS.join(" / ");
+  return `${ENMS_CONNECTION_ENV_KEYS.join(" / ")}; required allowlist: ${Object.values(ENMS_ALLOWED_TARGET_ENV_KEYS).join(" / ")}`;
 }
 
 export function redactDatabaseConnectionSecrets(message: string): string {

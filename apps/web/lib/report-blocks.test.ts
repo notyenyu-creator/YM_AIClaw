@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   splitReportBlocks,
   hasReportBlocks,
+  stripReportBlocksFromText,
   normalizeUntrustedReportConfig,
 } from "./report-blocks";
 
@@ -22,6 +23,31 @@ describe("hasReportBlocks", () => {
 
   it("returns true for partial/streaming content with marker", () => {
     expect(hasReportBlocks("Some text ```report-json")).toBe(true);
+  });
+});
+
+// ─── stripReportBlocksFromText ───
+
+describe("stripReportBlocksFromText", () => {
+  it("keeps plain text unchanged", () => {
+    expect(stripReportBlocksFromText("純文字回答")).toBe("純文字回答");
+  });
+
+  it("removes report-json fenced blocks and keeps surrounding text", () => {
+    const text = [
+      "前段說明",
+      "```report-json",
+      "{\"version\":1,\"title\":\"Bad\",\"panels\":[]}",
+      "```",
+      "後段說明",
+    ].join("\n");
+
+    const result = stripReportBlocksFromText(text, "\n[removed]\n");
+
+    expect(result).toContain("前段說明");
+    expect(result).toContain("[removed]");
+    expect(result).toContain("後段說明");
+    expect(result).not.toContain("```report-json");
   });
 });
 

@@ -839,6 +839,22 @@ function formatTime(value: string | null | undefined) {
   return value && value.trim() ? value : "無資料";
 }
 
+function formatTimeOrNull(value: string | null | undefined) {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : null;
+}
+
+function formatTimeRangeOrNull(
+  start: string | null | undefined,
+  end: string | null | undefined,
+) {
+  const normalizedStart = formatTimeOrNull(start);
+  const normalizedEnd = formatTimeOrNull(end);
+  return normalizedStart && normalizedEnd
+    ? `${normalizedStart} 至 ${normalizedEnd}`
+    : null;
+}
+
 const ENMS_REPORT_METADATA = {
   sourceDomain: "enms",
   sourceKind: "verified_direct",
@@ -1141,23 +1157,34 @@ function buildTopLoadNoRecentDataReport(
   availability: TopLoadAvailabilityRow | undefined,
   fallbackRows: TopLoadRow[],
 ) {
-  const requestedWindowStart = formatTime(availability?.requested_window_start);
-  const requestedWindowEnd = formatTime(availability?.requested_window_end);
-  const latestSummaryTime = formatTime(availability?.latest_summary_time);
-  const earliestSummaryTime = formatTime(availability?.earliest_summary_time);
-  const fallbackWindowStart = formatTime(availability?.fallback_window_start);
-  const fallbackWindowEnd = formatTime(availability?.fallback_window_end);
+  const requestedRange =
+    formatTimeRangeOrNull(
+      availability?.requested_window_start,
+      availability?.requested_window_end,
+    ) ?? "目前無法判定查詢區間";
+  const availableSummaryRange = formatTimeRangeOrNull(
+    availability?.earliest_summary_time,
+    availability?.latest_summary_time,
+  );
+  const fallbackRange = formatTimeRangeOrNull(
+    availability?.fallback_window_start,
+    availability?.fallback_window_end,
+  );
 
   const lines = [
     `你要求的查詢條件是 ${target.label}。`,
-    `實際查詢區間：${requestedWindowStart} 至 ${requestedWindowEnd}。`,
-    `但本地 EnMS summary layer 在這個區間內沒有可統計的設備 / 迴路耗電資料；目前這個範圍可見的 summary 資料時間帶為 ${earliestSummaryTime} 至 ${latestSummaryTime}。`,
+    `實際查詢區間：${requestedRange}。`,
+    availableSummaryRange
+      ? `但本地 EnMS summary layer 在這個區間內沒有可統計的設備 / 迴路耗電資料；目前這個範圍可見的 summary 資料時間帶為 ${availableSummaryRange}。`
+      : `但本地 EnMS summary layer 在這個區間內沒有可統計的設備 / 迴路耗電資料；目前${target.siteName ? `「${target.siteName}」` : "這個查詢範圍"}也沒有可補查的 summary 資料時間帶。`,
   ];
 
   if (fallbackRows.length > 0) {
     lines.push(
       "",
-      `我先改用最新可用 7 天（${fallbackWindowStart} 至 ${fallbackWindowEnd}）整理出設備 / 迴路耗電 Top ${Math.min(fallbackRows.length, 5)}：`,
+      fallbackRange
+        ? `我先改用最新可用 7 天（${fallbackRange}）整理出設備 / 迴路耗電 Top ${Math.min(fallbackRows.length, 5)}：`
+        : `我先改用目前可查到的最新資料整理出設備 / 迴路耗電 Top ${Math.min(fallbackRows.length, 5)}：`,
       "",
     );
     fallbackRows.slice(0, 5).forEach((row, index) => {
@@ -1166,7 +1193,9 @@ function buildTopLoadNoRecentDataReport(
   } else {
     lines.push(
       "",
-      `補查最新可用 7 天（${fallbackWindowStart} 至 ${fallbackWindowEnd}）後，仍沒有可用的耗電排行資料。`,
+      fallbackRange
+        ? `補查最新可用 7 天（${fallbackRange}）後，仍沒有可用的耗電排行資料。`
+        : `補查${target.siteName ? `「${target.siteName}」` : "目前範圍"}最新可用資料後，仍沒有可用的耗電排行資料。`,
     );
   }
 

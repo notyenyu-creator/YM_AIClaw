@@ -1,4 +1,7 @@
-import { getErpPostgresConnectionString } from "./domain-db-config";
+import {
+  getErpPostgresConnectionString,
+  redactDomainDatabaseConnectionSecrets,
+} from "./domain-db-config";
 import { duckdbQueryExternalPgAsyncDetailed } from "./workspace";
 
 type ErpCountRow = {
@@ -71,6 +74,12 @@ type ErpSalesOrderSummaryRow = {
 export type ErpVerifiedDirectQueryInput = {
   userMessage: string;
 };
+
+function formatErpDbError(error: unknown) {
+  const message =
+    error instanceof Error ? error.message : "unknown ERP DB query error";
+  return redactDomainDatabaseConnectionSecrets(message);
+}
 
 type ErpCountTarget = {
   label: string;
@@ -1000,8 +1009,7 @@ export async function buildErpVerifiedDirectQueryAnswer(
 
       return buildErpSalesOrderSummaryReport(salesOrderSummaryTarget, result.rows[0]);
     } catch (error) {
-      const message =
-        error instanceof Error ? error.message : "unknown ERP DB query error";
+      const message = formatErpDbError(error);
       return [
         `我判斷這是 ERP ${salesOrderSummaryTarget.soId} 的銷售訂單摘要查詢，已優先查本地 ERP DB，但查詢時發生錯誤：${message}`,
         "因此我不會改用外部網路資料或推測答案。請先確認 SO / SO_LINE / B_CUSTOMER 是否可讀。",
@@ -1032,8 +1040,7 @@ export async function buildErpVerifiedDirectQueryAnswer(
 
       return buildErpStatusSummaryReport(statusSummaryTarget, result.rows);
     } catch (error) {
-      const message =
-        error instanceof Error ? error.message : "unknown ERP DB query error";
+      const message = formatErpDbError(error);
       return [
         `我判斷這是 ERP ${statusSummaryTarget.label}查詢，已優先查本地 ERP DB，但查詢時發生錯誤：${message}`,
       "因此我不會改用外部網路資料或推測答案。請先確認 SO 表與對應狀態欄位是否可讀。",
@@ -1069,8 +1076,7 @@ export async function buildErpVerifiedDirectQueryAnswer(
 
       return buildErpOverdueSummaryReport(overdueSummaryTarget, result.rows);
     } catch (error) {
-      const message =
-        error instanceof Error ? error.message : "unknown ERP DB query error";
+      const message = formatErpDbError(error);
       return [
         `我判斷這是 ERP ${overdueSummaryTarget.label}查詢，已優先查本地 ERP DB，但查詢時發生錯誤：${message}`,
         "因此我不會改用外部網路資料或推測答案。請先確認 SO.delivery_date / shipping_status 是否可讀。",
@@ -1131,8 +1137,7 @@ export async function buildErpVerifiedDirectQueryAnswer(
 
       return buildErpOverdueExceptionReport(overdueExceptionTarget, result.rows);
     } catch (error) {
-      const message =
-        error instanceof Error ? error.message : "unknown ERP DB query error";
+      const message = formatErpDbError(error);
       return [
         `我判斷這是 ERP ${overdueExceptionTarget.label}查詢，已優先查本地 ERP DB，但查詢時發生錯誤：${message}`,
         "因此我不會改用外部網路資料或推測答案。請先確認 SO / SO_LINE / B_CUSTOMER / delivery_date / shipping_status 是否可讀。",
@@ -1168,8 +1173,7 @@ export async function buildErpVerifiedDirectQueryAnswer(
 
       return buildErpCustomerOrderRankingReport(customerOrderRankingTarget, result.rows);
     } catch (error) {
-      const message =
-        error instanceof Error ? error.message : "unknown ERP DB query error";
+      const message = formatErpDbError(error);
       return [
         `我判斷這是 ERP ${customerOrderRankingTarget.label}查詢，已優先查本地 ERP DB，但查詢時發生錯誤：${message}`,
         "因此我不會改用外部網路資料或推測答案。請先確認 SO / B_CUSTOMER 是否可讀。",
@@ -1203,8 +1207,7 @@ export async function buildErpVerifiedDirectQueryAnswer(
 
       return buildErpInventoryRankingReport(inventoryRankingTarget, result.rows);
     } catch (error) {
-      const message =
-        error instanceof Error ? error.message : "unknown ERP DB query error";
+      const message = formatErpDbError(error);
       return [
         `我判斷這是 ERP ${inventoryRankingTarget.label}查詢，已優先查本地 ERP DB，但查詢時發生錯誤：${message}`,
         "因此我不會改用外部網路資料或推測答案。請先確認 INVENTORY / B_ITEM 是否可讀，以及 available_qty 欄位是否存在。",
@@ -1234,8 +1237,7 @@ export async function buildErpVerifiedDirectQueryAnswer(
 
     return buildErpCountReport(target, result.rows[0]);
   } catch (error) {
-    const message =
-      error instanceof Error ? error.message : "unknown ERP DB query error";
+    const message = formatErpDbError(error);
     return [
       `我判斷這是 ERP ${target.label}總數查詢，已優先查本地 ERP DB，但查詢時發生錯誤：${message}`,
       `因此我不會改用外部網路資料或推測答案。請先確認 ${target.tableName} 表是否可讀。`,

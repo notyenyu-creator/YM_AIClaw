@@ -1,5 +1,8 @@
 import type { YcrmPlannerPreflight } from "./ycrm-context-builder";
-import { getYcrmPostgresConnectionString } from "./domain-db-config";
+import {
+  getYcrmPostgresConnectionString,
+  redactDomainDatabaseConnectionSecrets,
+} from "./domain-db-config";
 import { duckdbQueryExternalPgAsyncDetailed } from "./workspace";
 
 type YcrmCountRow = {
@@ -52,6 +55,12 @@ export type YcrmVerifiedDirectQueryInput = {
   userMessage: string;
   planner: YcrmPlannerPreflight;
 };
+
+function formatYcrmDbError(error: unknown) {
+  const message =
+    error instanceof Error ? error.message : "unknown Y-CRM DB query error";
+  return redactDomainDatabaseConnectionSecrets(message);
+}
 
 type YcrmCountTarget = {
   label: string;
@@ -1125,8 +1134,7 @@ export async function buildYcrmVerifiedDirectQueryAnswer(
         result.rows,
       );
     } catch (error) {
-      const message =
-        error instanceof Error ? error.message : "unknown Y-CRM DB query error";
+      const message = formatYcrmDbError(error);
       return [
         `我判斷這是 Y-CRM ${opportunityAmountTrendTarget.label}查詢，已優先查本地 Y-CRM DB，但查詢時發生錯誤：${message}`,
         `因此我不會改用外部網路資料或推測答案。請先確認 ycrm.${input.planner.workspaceId}.opportunity 的 createdAt / amountAmountMicros 是否可讀。`,
@@ -1177,8 +1185,7 @@ export async function buildYcrmVerifiedDirectQueryAnswer(
         result.rows,
       );
     } catch (error) {
-      const message =
-        error instanceof Error ? error.message : "unknown Y-CRM DB query error";
+      const message = formatYcrmDbError(error);
       return [
         `我判斷這是 Y-CRM ${opportunityStageAmountTarget.label}查詢，已優先查本地 Y-CRM DB，但查詢時發生錯誤：${message}`,
         `因此我不會改用外部網路資料或推測答案。請先確認 ycrm.${input.planner.workspaceId}.opportunity 的 stage / amountAmountMicros / amountCurrencyCode 是否可讀。`,
@@ -1232,8 +1239,7 @@ export async function buildYcrmVerifiedDirectQueryAnswer(
         result.rows,
       );
     } catch (error) {
-      const message =
-        error instanceof Error ? error.message : "unknown Y-CRM DB query error";
+      const message = formatYcrmDbError(error);
       return [
         `我判斷這是 Y-CRM ${taskDueTarget.label}查詢，已優先查本地 Y-CRM DB，但查詢時發生錯誤：${message}`,
         `因此我不會改用外部網路資料或推測答案。請先確認 ycrm.${input.planner.workspaceId}.task 的 dueAt / status 是否可讀。`,
@@ -1282,8 +1288,7 @@ export async function buildYcrmVerifiedDirectQueryAnswer(
         result.rows,
       );
     } catch (error) {
-      const message =
-        error instanceof Error ? error.message : "unknown Y-CRM DB query error";
+      const message = formatYcrmDbError(error);
       return [
         `我判斷這是 Y-CRM ${taskStatusTarget.label}查詢，已優先查本地 Y-CRM DB，但查詢時發生錯誤：${message}`,
         `因此我不會改用外部網路資料或推測答案。請先確認 ycrm.${input.planner.workspaceId}.task 是否可讀。`,
@@ -1332,8 +1337,7 @@ export async function buildYcrmVerifiedDirectQueryAnswer(
         result.rows,
       );
     } catch (error) {
-      const message =
-        error instanceof Error ? error.message : "unknown Y-CRM DB query error";
+      const message = formatYcrmDbError(error);
       return [
         `我判斷這是 Y-CRM ${opportunityStageTarget.label}查詢，已優先查本地 Y-CRM DB，但查詢時發生錯誤：${message}`,
         `因此我不會改用外部網路資料或推測答案。請先確認 ycrm.${input.planner.workspaceId}.opportunity 是否可讀。`,
@@ -1387,8 +1391,7 @@ export async function buildYcrmVerifiedDirectQueryAnswer(
         result.rows,
       );
     } catch (error) {
-      const message =
-        error instanceof Error ? error.message : "unknown Y-CRM DB query error";
+      const message = formatYcrmDbError(error);
       return [
         `我判斷這是 Y-CRM ${overviewTarget.label}查詢，已優先查本地 Y-CRM DB，但查詢時發生錯誤：${message}`,
         `因此我不會改用外部網路資料或推測答案。請先確認 ycrm.${input.planner.workspaceId}.person / company / opportunity / task 是否可讀。`,
@@ -1429,8 +1432,7 @@ export async function buildYcrmVerifiedDirectQueryAnswer(
 
     return buildYcrmCountReport(input.planner.workspaceId, target, result.rows[0]);
   } catch (error) {
-    const message =
-      error instanceof Error ? error.message : "unknown Y-CRM DB query error";
+    const message = formatYcrmDbError(error);
     return [
       `我判斷這是 Y-CRM ${target.label}總數查詢，已優先查本地 Y-CRM DB，但查詢時發生錯誤：${message}`,
       `因此我不會改用外部網路資料或推測答案。請先確認 ycrm.${input.planner.workspaceId}.${target.tableName} 是否可讀。`,

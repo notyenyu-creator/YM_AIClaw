@@ -76,3 +76,19 @@ export function getUserFacingDomainDbUnavailableMessage(
 export function describeDomainDbConnectionConfig(domain: ExternalDomainDb): string {
   return DOMAIN_DB_CONFIG[domain].envKeys.join(" / ");
 }
+
+export function redactDomainDatabaseConnectionSecrets(message: string): string {
+  return message
+    .replace(
+      /ATTACH\s+'(?:''|[^'])*'\s+AS\s+([A-Za-z_][A-Za-z0-9_]*)/gi,
+      "ATTACH '<redacted-connection>' AS $1",
+    )
+    .replace(
+      /((?:password|sslpassword|pgpassword)\s*=\s*)(?:'(?:''|[^'])*'|"[^"]*"|[^\s'";)]+)/gi,
+      "$1<redacted>",
+    )
+    .replace(
+      /([a-z][a-z0-9+.-]*:\/\/)([^:/@\s]+):([^@\s]+)@/gi,
+      "$1<user>:<redacted>@",
+    );
+}

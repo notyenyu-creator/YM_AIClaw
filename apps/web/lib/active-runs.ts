@@ -30,6 +30,7 @@ import {
 	type SessionAnswerMode,
 	type SessionExecutionTrace,
 } from "./chat-execution-trace";
+import { stripReportBlocksFromText } from "./report-blocks";
 import {
 	type AgentProcessHandle,
 	type AgentEvent,
@@ -91,6 +92,7 @@ type SessionExecutionTraceSeed = {
 	requestedModelId?: string | null;
 	domainId?: SessionExecutionTrace["domainId"];
 	executionStrategy?: SessionExecutionTrace["executionStrategy"];
+	suppressReportBlocks?: boolean;
 };
 
 function buildVerifiedDirectReportSourcePart(
@@ -772,13 +774,16 @@ export async function createSyntheticCompletedRun(params: {
 
 	const textId = `text-${Date.now()}-1`;
 	const reportSourcePart = buildVerifiedDirectReportSourcePart(completionTrace);
+	const safeText = completionTrace?.suppressReportBlocks
+		? stripReportBlocksFromText(text)
+		: text;
 	const run: ActiveRun = {
 		sessionId,
 		childProcess: createNoopProcessHandle(),
 		eventBuffer: [
 			...(reportSourcePart ? [reportSourcePart] : []),
 			{ type: "text-start", id: textId },
-			{ type: "text-delta", id: textId, delta: text },
+			{ type: "text-delta", id: textId, delta: safeText },
 			{ type: "text-end", id: textId },
 		],
 		subscribers: new Set(),
@@ -787,7 +792,7 @@ export async function createSyntheticCompletedRun(params: {
 			role: "assistant",
 			parts: [
 				...(reportSourcePart ? [reportSourcePart] : []),
-				{ type: "text", text },
+				{ type: "text", text: safeText },
 			],
 		},
 		status: "completed",
@@ -1109,8 +1114,16 @@ function wireSubscribeOnlyProcess(
 	const closeText = () => {
 		if (textStarted) {
 			const lastPart = run.accumulated.parts[accTextIdx];
-			if (lastPart?.type === "text" && isLeakedSilentReplyToken(lastPart.text)) {
-				run.accumulated.parts.splice(accTextIdx, 1);
+			if (lastPart?.type === "text") {
+				if (isLeakedSilentReplyToken(lastPart.text)) {
+					run.accumulated.parts.splice(accTextIdx, 1);
+				} else if (run.pendingCompletionTrace?.suppressReportBlocks) {
+					const safeText = stripReportBlocksFromText(lastPart.text);
+					lastPart.text = safeText;
+					if (safeText) {
+						emit({ type: "text-delta", id: currentTextId, delta: safeText });
+					}
+				}
 			}
 			emit({ type: "text-end", id: currentTextId });
 			textStarted = false;
@@ -1236,7 +1249,9 @@ function wireSubscribeOnlyProcess(
 					emit({ type: "text-start", id: currentTextId });
 					textStarted = true;
 				}
-				emit({ type: "text-delta", id: currentTextId, delta: chunk });
+				if (!run.pendingCompletionTrace?.suppressReportBlocks) {
+					emit({ type: "text-delta", id: currentTextId, delta: chunk });
+				}
 				accAppendText(chunk);
 			}
 			const mediaUrls = ev.data?.mediaUrls;
@@ -1801,6 +1816,12 @@ function wireChildProcess(run: ActiveRun): void {
 					for (const [k, v] of accToolMap) {
 						if (v > accTextIdx) { accToolMap.set(k, v - 1); }
 					}
+				} else if (run.pendingCompletionTrace?.suppressReportBlocks) {
+					const safeText = stripReportBlocksFromText(part.text);
+					part.text = safeText;
+					if (safeText) {
+						emit({ type: "text-delta", id: currentTextId, delta: safeText });
+					}
 				}
 			}
 			emit({ type: "text-end", id: currentTextId });
@@ -1844,6 +1865,12 @@ function wireChildProcess(run: ActiveRun): void {
 		if (!text) {
 			return;
 		}
+		const safeText = run.pendingCompletionTrace?.suppressReportBlocks
+			? stripReportBlocksFromText(text)
+			: text;
+		if (!safeText) {
+			return;
+		}
 		closeReasoning();
 		if (!textStarted) {
 			currentTextId = nextId("text");
@@ -1851,8 +1878,8 @@ function wireChildProcess(run: ActiveRun): void {
 			textStarted = true;
 		}
 		everSentResponseActivity = true;
-		emit({ type: "text-delta", id: currentTextId, delta: text });
-		accAppendText(text);
+		emit({ type: "text-delta", id: currentTextId, delta: safeText });
+		accAppendText(safeText);
 		closeText();
 	};
 
@@ -2038,7 +2065,9 @@ function wireChildProcess(run: ActiveRun): void {
 					textStarted = true;
 				}
 				everSentResponseActivity = true;
-				emit({ type: "text-delta", id: currentTextId, delta: chunk });
+				if (!run.pendingCompletionTrace?.suppressReportBlocks) {
+					emit({ type: "text-delta", id: currentTextId, delta: chunk });
+				}
 				accAppendText(chunk);
 			}
 			// Media URLs
@@ -2362,7 +2391,7 @@ function wireChildProcess(run: ActiveRun): void {
 
 	// ── Child process exit ──
 
-	child.on("close", (code) => {
+	child.on("close", async (code) => {
 		// If already finalized (e.g. by abortRun), just record the exit code.
 		if (run.status !== "running") {
 			run.exitCode = code;
@@ -2465,8 +2494,8 @@ function wireChildProcess(run: ActiveRun): void {
 			triggerAutoEnmsLearningDraftIfEligible(run.sessionId);
 		}
 
-		// Final persistence flush (removes _streaming flag).
-		flushPersistence(run).catch(() => {});
+		// Final persistence flush (removes _streaming flag and writes answer metadata).
+		await flushPersistence(run);
 
 		// Signal completion to all subscribers.
 		for (const sub of run.subscribers) {
@@ -2602,18 +2631,18 @@ function finalizeWaitingRun(run: ActiveRun): void {
 	triggerAutoErpLearningDraftIfEligible(run.sessionId);
 	triggerAutoEnmsLearningDraftIfEligible(run.sessionId);
 
-	flushPersistence(run).catch(() => {});
-
-	for (const sub of run.subscribers) {
-		try { sub(null); } catch { /* ignore */ }
-	}
-	run.subscribers.clear();
-
-	setTimeout(() => {
-		if (activeRuns.get(run.sessionId) === run) {
-			cleanupRun(run.sessionId);
+	void flushPersistence(run).finally(() => {
+		for (const sub of run.subscribers) {
+			try { sub(null); } catch { /* ignore */ }
 		}
-	}, CLEANUP_GRACE_MS);
+		run.subscribers.clear();
+
+		setTimeout(() => {
+			if (activeRuns.get(run.sessionId) === run) {
+				cleanupRun(run.sessionId);
+			}
+		}, CLEANUP_GRACE_MS);
+	});
 }
 
 function clearWaitingFinalizeTimer(run: ActiveRun): void {
@@ -2678,9 +2707,19 @@ async function flushPersistence(run: ActiveRun) {
 	}
 
 	// Filter out leaked silent-reply text fragments before persisting.
-	const cleanParts = parts.filter((p) =>
-		p.type !== "text" || !isLeakedSilentReplyToken((p as { text: string }).text),
-	);
+	const cleanParts = parts
+		.filter((p) =>
+			p.type !== "text" || !isLeakedSilentReplyToken((p as { text: string }).text),
+		)
+		.map((p) => {
+			if (p.type !== "text" || !run.pendingCompletionTrace?.suppressReportBlocks) {
+				return p;
+			}
+			return {
+				...p,
+				text: stripReportBlocksFromText(p.text),
+			};
+		});
 
 	// Build content text from text parts for the backwards-compatible
 	// content field (used when parts are not available).

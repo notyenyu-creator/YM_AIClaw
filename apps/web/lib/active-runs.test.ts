@@ -302,6 +302,71 @@ describe("active-runs", () => {
 			expect(indexWrite?.[1]).toContain("\"turnStartedAt\":");
 		});
 
+		it("suppresses report-json blocks from the live stream when charts are not allowed", async () => {
+			const { child, startRun, subscribeToRun } = await setup();
+			const events: SseEvent[] = [];
+
+			startRun({
+				sessionId: "s-report-suppress",
+				message: "hello",
+				agentSessionId: "s-report-suppress",
+				completionTrace: {
+					answerMode: "model_run",
+					requestedModelId: "gx10_hermes/hermes-agent",
+					domainId: "enms",
+					suppressReportBlocks: true,
+				},
+			});
+
+			subscribeToRun(
+				"s-report-suppress",
+				(event) => {
+					if (event) {events.push(event);}
+				},
+				{ replay: false },
+			);
+
+			child._writeLine({
+				event: "agent",
+				stream: "assistant",
+				data: { delta: "前段說明\n```report-json\n" },
+			});
+			child._writeLine({
+				event: "agent",
+				stream: "assistant",
+				data: {
+					delta:
+						"{\"version\":1,\"title\":\"不該出現\",\"panels\":[]}\n```\n後段說明",
+				},
+			});
+
+			await new Promise((r) => setTimeout(r, 50));
+			expect(
+				events.some(
+					(event) =>
+						event.type === "text-delta" &&
+						typeof event.delta === "string" &&
+						event.delta.includes("```report-json"),
+				),
+			).toBe(false);
+
+			child.stdout.end();
+			await new Promise((r) => setTimeout(r, 50));
+			child._emit("close", 0);
+			await new Promise((r) => setTimeout(r, 50));
+
+			const liveText = events
+				.filter((event) => event.type === "text-delta" && typeof event.delta === "string")
+				.map((event) => event.delta as string)
+				.join("");
+
+			expect(liveText).toContain("前段說明");
+			expect(liveText).toContain("未通過資料驗證");
+			expect(liveText).toContain("後段說明");
+			expect(liveText).not.toContain("```report-json");
+			expect(liveText).not.toContain("不該出現");
+		});
+
 		it("writes direct-answer metadata only after the synthetic reply is persisted", async () => {
 			const { createSyntheticCompletedRun } = await setup();
 			const { writeFile } = await import("node:fs/promises");
@@ -855,6 +920,7 @@ describe("active-runs", () => {
 			child.stdout.end();
 			await new Promise((r) => setTimeout(r, 50));
 			child._emit("close", 0);
+			await new Promise((r) => setTimeout(r, 50));
 
 			expect(completed).toHaveLength(1);
 		});

@@ -156,6 +156,83 @@ function ChartConfigError({ compact }: { compact?: boolean }) {
   );
 }
 
+function ChartEmptyState({
+  compact,
+  title = "沒有可視覺化資料",
+  message = "目前沒有足夠資料可繪製圖表。",
+}: {
+  compact?: boolean;
+  title?: string;
+  message?: string;
+}) {
+  return (
+    <div
+      className="flex flex-col items-center justify-center gap-1.5 rounded-xl px-4 text-center"
+      style={{
+        height: compact ? 200 : 320,
+        background: "var(--color-surface)",
+        border: "1px solid var(--color-border)",
+        color: "var(--color-text-muted)",
+        fontSize: 13,
+      }}
+    >
+      <span style={{ color: "var(--color-text)" }}>{title}</span>
+      <span className="text-[11px]">{message}</span>
+    </div>
+  );
+}
+
+function isFiniteNumericValue(value: unknown): boolean {
+  if (typeof value === "number") {
+    return Number.isFinite(value);
+  }
+
+  if (typeof value === "string" && value.trim() !== "") {
+    return Number.isFinite(Number(value));
+  }
+
+  return false;
+}
+
+function hasNumericValue(
+  rows: Record<string, unknown>[],
+  keys: string[],
+): boolean {
+  return keys.some((key) => rows.some((row) => isFiniteNumericValue(row[key])));
+}
+
+function hasRenderableNumericSeries(
+  config: PanelConfig,
+  rows: Record<string, unknown>[],
+): boolean {
+  if (rows.length === 0) {
+    return false;
+  }
+
+  const { mapping } = config;
+  const xKey = mapping.xAxis ?? Object.keys(rows[0] ?? {})[0] ?? "x";
+  const yKeys = safeYAxis(mapping, Object.keys(rows[0] ?? {}).filter((key) => key !== xKey));
+
+  switch (config.type) {
+    case "pie":
+    case "donut":
+    case "funnel": {
+      const valueKey = mapping.valueKey ?? yKeys[0];
+      return valueKey ? hasNumericValue(rows, [valueKey]) : false;
+    }
+    case "scatter": {
+      return hasNumericValue(rows, [xKey]) && hasNumericValue(rows, yKeys);
+    }
+    case "bar":
+    case "line":
+    case "area":
+    case "radar":
+    case "radialBar":
+    default:
+      return yKeys.length > 0 && hasNumericValue(rows, yKeys);
+  }
+}
+
 type ChartPanelErrorBoundaryProps = {
   children: ReactNode;
   compact?: boolean;
@@ -479,22 +556,16 @@ function ChartPanelInner({ config, data, compact }: ChartPanelProps) {
   }, [data, config]);
 
   if (processedData.length === 0) {
+    return <ChartEmptyState compact={compact} />;
+  }
+
+  if (!hasRenderableNumericSeries(config, processedData)) {
     return (
-      <div
-        className="flex flex-col items-center justify-center gap-1.5 rounded-xl px-4 text-center"
-        style={{
-          height: compact ? 200 : 320,
-          background: "var(--color-surface)",
-          border: "1px solid var(--color-border)",
-          color: "var(--color-text-muted)",
-          fontSize: 13,
-        }}
-      >
-        <span style={{ color: "var(--color-text)" }}>沒有可視覺化資料</span>
-        <span className="text-[11px]">
-          目前沒有足夠資料可繪製圖表。
-        </span>
-      </div>
+      <ChartEmptyState
+        compact={compact}
+        title="圖表缺少數值欄位"
+        message="目前資料沒有可繪製的數值欄位，請改用文字摘要或提供數值資料。"
+      />
     );
   }
 

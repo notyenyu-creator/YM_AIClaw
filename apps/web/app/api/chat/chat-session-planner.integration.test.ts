@@ -3,12 +3,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const WEB_CHAT_DIR = "/virtual/webchat";
 const OPENCLAW_DIR = "/virtual/openclaw";
 const TEST_ENMS_CONNECTION =
-	"host=118.168.188.27 port=55433 dbname=EnMS user=test password=secret sslmode=disable";
+	"host=enms-db.internal port=55433 dbname=EnMS user=test password=secret sslmode=disable";
 const TEST_YCRM_CONNECTION =
 	"dbname=default user=test password=secret host=localhost port=5432";
 const TEST_ERP_CONNECTION =
 	"host=118.168.188.27 port=5433 dbname=ErpUAT_local user=test password=secret sslmode=disable";
 const ORIGINAL_ENV = { ...process.env };
+
+function configureEnmsAllowlist() {
+	process.env.ENMS_PG_ALLOWED_HOST = "enms-db.internal";
+	process.env.ENMS_PG_ALLOWED_PORT = "55433";
+	process.env.ENMS_PG_ALLOWED_DATABASE = "EnMS";
+}
 
 const fileStore = new Map<string, string>();
 const dirStore = new Set<string>();
@@ -266,10 +272,11 @@ function mockErpDetailedQueryWithBootstrap(
 describe("Chat session planner persistence integration", () => {
 	beforeEach(() => {
 		fileStore.clear();
-		dirStore.clear();
-		dirStore.add("/");
-		process.env.ENMS_PG_CONNECTION = TEST_ENMS_CONNECTION;
-		process.env.YCRM_PG_CONNECTION = TEST_YCRM_CONNECTION;
+			dirStore.clear();
+			dirStore.add("/");
+			process.env.ENMS_PG_CONNECTION = TEST_ENMS_CONNECTION;
+			configureEnmsAllowlist();
+			process.env.YCRM_PG_CONNECTION = TEST_YCRM_CONNECTION;
 		process.env.ERP_PG_CONNECTION = TEST_ERP_CONNECTION;
 		delete process.env.OPENCLAW_ENMS_PG_CONNECTION;
 		delete process.env.ENMS_POSTGRES_CONNECTION;
@@ -2245,11 +2252,11 @@ describe("Chat session planner persistence integration", () => {
 		const { duckdbQueryExternalPgAsyncDetailed } = await import("@/lib/workspace");
 
 		vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockReset();
-		vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockResolvedValueOnce({
-			rows: [],
-			error:
-				"ATTACH 'host=118.168.188.27 port=55433 dbname=EnMS user=sa password=secret sslmode=disable' AS enms failed",
-		});
+			vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockResolvedValueOnce({
+				rows: [],
+				error:
+					"ATTACH 'host=enms-redaction.internal port=55433 dbname=EnMS user=sa password=secret sslmode=disable' AS enms failed",
+			});
 
 		await POST(new Request("http://localhost/api/chat", {
 			method: "POST",

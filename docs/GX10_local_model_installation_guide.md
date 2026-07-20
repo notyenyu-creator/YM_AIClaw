@@ -16,7 +16,7 @@ DenchClaw 的設計原則是：GX10 只替換 LLM inference layer；既有知識
 ```text
 GX10 IP: 118.168.188.70
 Hermes endpoint: http://118.168.188.70:8642/v1
-Hermes API key: hermes_local_secret
+Hermes API key: <HERMES_API_KEY>
 Ollama endpoint: http://118.168.188.70:11434/v1
 ```
 
@@ -92,7 +92,7 @@ curl http://118.168.188.70:11434/v1/chat/completions \
 
 ```bash
 curl http://118.168.188.70:8642/v1/models \
-  -H "Authorization: Bearer hermes_local_secret"
+  -H "Authorization: Bearer <HERMES_API_KEY>"
 ```
 
 再測 Hermes chat completion：
@@ -100,7 +100,7 @@ curl http://118.168.188.70:8642/v1/models \
 ```bash
 curl http://118.168.188.70:8642/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer hermes_local_secret" \
+  -H "Authorization: Bearer <HERMES_API_KEY>" \
   -d '{"model":"qwen3:30b","messages":[{"role":"user","content":"請用一句話回答：Hermes 可以呼叫 GX10 本地模型嗎？"}],"max_tokens":128}'
 ```
 
@@ -113,9 +113,11 @@ curl http://118.168.188.70:8642/v1/chat/completions \
 - `mistral-small3.2:24b`
 - `qwen3:14b`
 
-## 6. DenchClaw 直接連 Ollama 的備援方案
+## 6. Ollama 隔離測試方案（非 DenchClaw 正式路線）
 
-若 Hermes 暫時無法穩定代理 Ollama，可以先讓 DenchClaw 直接連 GX10 Ollama endpoint。建議 provider 名稱使用 `gx10_ollama`，base URL 使用：
+正式路線仍是 DenchClaw 透過 GX10 Hermes Router 或雲端模型切換，不讓 DenchClaw 預設直連 Ollama。若 Hermes 暫時無法穩定代理 Ollama，只能把下列設定作為 GX10 端的隔離測試參考，不應直接放入正式 DenchClaw provider。
+
+隔離測試 base URL：
 
 ```text
 http://118.168.188.70:11434/v1

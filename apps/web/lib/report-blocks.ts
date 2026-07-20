@@ -277,3 +277,13 @@ export function splitReportBlocks(
 export function hasReportBlocks(text: string): boolean {
   return text.includes("```report-json");
 }
+
+export function stripReportBlocksFromText(
+  text: string,
+  replacement = "\n\n（系統已移除未通過資料驗證的圖表區塊；本題以文字摘要與已驗證資料來源為準。）\n\n",
+): string {
+  if (!hasReportBlocks(text)) {
+    return text;
+  }
+  return text.replace(/```report-json\s*\n[\s\S]*?```/g, replacement);
+}

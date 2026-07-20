@@ -73,4 +73,19 @@ describe("domain db config", () => {
     );
     expect(() => getErpPostgresConnectionString()).not.toThrow("password=");
   });
+
+  it("redacts connection strings before user-facing error messages", async () => {
+    const { redactDomainDatabaseConnectionSecrets } = await import("./domain-db-config");
+
+    const message = redactDomainDatabaseConnectionSecrets(
+      "DuckDB error: ATTACH 'host=127.0.0.1 port=5432 dbname=erp user=postgres password=super-secret' AS erp; detail password = another-secret; postgres://admin:secret@example.local/db",
+    );
+
+    expect(message).toContain("ATTACH '<redacted-connection>' AS erp");
+    expect(message).toContain("password = <redacted>");
+    expect(message).toContain("postgres://<user>:<redacted>@example.local/db");
+    expect(message).not.toContain("super-secret");
+    expect(message).not.toContain("another-secret");
+    expect(message).not.toContain("admin:secret");
+  });
 });

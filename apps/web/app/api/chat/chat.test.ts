@@ -638,7 +638,7 @@ describe("Chat API routes", () => {
       );
     });
 
-    it("adds a generic chart guardrail for chart-only requests that do not route to a domain pack", async () => {
+    it("adds a concise generic chart safety hint for chart-only requests that do not route to a domain pack", async () => {
       const { startRun, hasActiveRun, subscribeToRun } = await import("@/lib/active-runs");
       vi.mocked(hasActiveRun).mockReturnValue(false);
       vi.mocked(subscribeToRun).mockReturnValue(() => {});
@@ -663,12 +663,58 @@ describe("Chat API routes", () => {
 
       expect(startRun).toHaveBeenCalledWith(
         expect.objectContaining({
-          message: expect.stringContaining("[Generic Chart Guardrail]"),
+          message: expect.stringContaining("Chart safety:"),
         }),
       );
       expect(startRun).toHaveBeenCalledWith(
         expect.objectContaining({
-          message: expect.stringContaining("either a valid sql string or inline rows/data"),
+          message: expect.stringContaining("do not use SQL"),
+        }),
+      );
+      expect(startRun).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: expect.not.stringContaining("[Generic Chart Guardrail]"),
+        }),
+      );
+    });
+
+    it("does not ask the model to invent weather charts without a verified weather datasource", async () => {
+      const {
+        startRun,
+        hasActiveRun,
+        subscribeToRun,
+        createSyntheticCompletedRun,
+      } = await import("@/lib/active-runs");
+      vi.mocked(hasActiveRun).mockReturnValue(false);
+      vi.mocked(subscribeToRun).mockReturnValue(() => {});
+
+      const { POST } = await import("./route.js");
+      const req = new Request("http://localhost/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          messages: [
+            {
+              id: "m1",
+              role: "user",
+              parts: [{ type: "text", text: "台北當日天氣，可以用圖表呈現嗎？" }],
+            },
+          ],
+          sessionId: "s-weather-chart",
+        }),
+      });
+
+      await POST(req);
+
+      expect(startRun).not.toHaveBeenCalled();
+      expect(createSyntheticCompletedRun).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionId: "s-weather-chart",
+          text: expect.stringContaining("尚未接入正式天氣資料來源"),
+          completionTrace: expect.objectContaining({
+            answerMode: "system_direct",
+            suppressReportBlocks: true,
+          }),
         }),
       );
     });

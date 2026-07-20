@@ -25,4 +25,20 @@ describe("ChartPanel", () => {
     ).toBeInTheDocument();
     expect(screen.queryByText("No data")).not.toBeInTheDocument();
   });
+
+  it("does not render an empty cartesian chart when mapped numeric values are missing", () => {
+    render(
+      <ChartPanel
+        config={panel}
+        data={[{ label: "多雲", weather: "多雲" }]}
+        compact
+      />,
+    );
+
+    expect(screen.getByText("圖表缺少數值欄位")).toBeInTheDocument();
+    expect(
+      screen.getByText("目前資料沒有可繪製的數值欄位，請改用文字摘要或提供數值資料。"),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("No data")).not.toBeInTheDocument();
+  });
 });

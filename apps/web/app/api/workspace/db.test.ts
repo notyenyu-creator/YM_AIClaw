@@ -1,12 +1,18 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 const TEST_ENMS_CONNECTION =
-  "host=118.168.188.27 port=55433 dbname=EnMS user=test password=secret sslmode=disable";
+  "host=enms-db.internal port=55433 dbname=EnMS user=test password=secret sslmode=disable";
 const TEST_YCRM_CONNECTION =
   "dbname=default user=test password=secret host=localhost port=5432";
 const TEST_ERP_CONNECTION =
   "host=118.168.188.27 port=5433 dbname=ErpUAT_local user=test password=secret sslmode=disable";
 const ORIGINAL_ENV = { ...process.env };
+
+function configureEnmsAllowlist() {
+  process.env.ENMS_PG_ALLOWED_HOST = "enms-db.internal";
+  process.env.ENMS_PG_ALLOWED_PORT = "55433";
+  process.env.ENMS_PG_ALLOWED_DATABASE = "EnMS";
+}
 
 // Mock workspace (include ALL exports used by the routes)
 vi.mock("@/lib/workspace", () => ({
@@ -43,6 +49,7 @@ vi.mock("@/lib/report-filters", () => ({
 describe("Workspace DB & Reports API", () => {
   beforeEach(() => {
     process.env.ENMS_PG_CONNECTION = TEST_ENMS_CONNECTION;
+    configureEnmsAllowlist();
     process.env.YCRM_PG_CONNECTION = TEST_YCRM_CONNECTION;
     process.env.ERP_PG_CONNECTION = TEST_ERP_CONNECTION;
     delete process.env.OPENCLAW_ENMS_PG_CONNECTION;

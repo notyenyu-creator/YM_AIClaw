@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const fileStore = new Map<string, string>();
 const TEST_ENMS_CONNECTION =
-  "host=118.168.188.27 port=55433 dbname=EnMS user=test password=secret sslmode=disable";
+  "host=enms-db.internal port=55433 dbname=EnMS user=test password=secret sslmode=disable";
 const TEST_YCRM_CONNECTION =
   "dbname=default user=test password=secret host=localhost port=5432";
 const TEST_ERP_CONNECTION =
@@ -200,6 +200,9 @@ describe("domain bootstrap snapshots", () => {
   beforeEach(() => {
     fileStore.clear();
     process.env.ENMS_PG_CONNECTION = TEST_ENMS_CONNECTION;
+    process.env.ENMS_PG_ALLOWED_HOST = "enms-db.internal";
+    process.env.ENMS_PG_ALLOWED_PORT = "55433";
+    process.env.ENMS_PG_ALLOWED_DATABASE = "EnMS";
     process.env.YCRM_PG_CONNECTION = TEST_YCRM_CONNECTION;
     process.env.ERP_PG_CONNECTION = TEST_ERP_CONNECTION;
     delete process.env.OPENCLAW_ENMS_PG_CONNECTION;
@@ -517,7 +520,7 @@ describe("domain bootstrap snapshots", () => {
     expect(snapshot?.system).toBe("enms");
     expect(snapshot?.source).toBe("unavailable");
     expect(snapshot?.availability).toBe("blocked");
-    expect(snapshot?.gaps.join(" ")).toContain("目前 EnMS 資料連線尚未啟用");
+    expect(snapshot?.gaps.join(" ")).toContain("目前 EnMS 資料來源尚未通過授權目標檢查");
   });
 
   it("returns a blocked EnMS bootstrap snapshot when live introspection fails", async () => {
@@ -525,7 +528,7 @@ describe("domain bootstrap snapshots", () => {
     vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockResolvedValueOnce({
       rows: [],
       error:
-        "ATTACH 'host=118.168.188.27 port=55433 dbname=EnMS user=sa password=secret sslmode=disable' AS enms failed",
+        "ATTACH 'host=enms-db.internal port=55433 dbname=EnMS user=sa password=secret sslmode=disable' AS enms failed",
     });
     const { buildDomainBootstrapSnapshot } = await import("./domain-bootstrap");
 
