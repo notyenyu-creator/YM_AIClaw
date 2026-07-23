@@ -28,6 +28,7 @@ Usage:
 
 Commands:
   build      Run web build + web:prepack only
+  cleanup    Clean stale DenchClaw standalone processes for the configured port
   start      Start the standalone web server
   stop       Stop the current listener on the configured port
   restart    Stop, rebuild, prepack, then start again (default)
@@ -44,6 +45,7 @@ Options:
 Examples:
   bash scripts/dench-web-standalone.sh restart --port 3200 --detach
   bash scripts/dench-web-standalone.sh restart --port 3200 --foreground
+  bash scripts/dench-web-standalone.sh cleanup --port 3200
   bash scripts/dench-web-standalone.sh stop --port 3200
   bash scripts/dench-web-standalone.sh status --port 3200
 EOF
@@ -179,7 +181,7 @@ redact_sensitive_log() {
 parse_args() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      build|start|stop|restart|status)
+      build|cleanup|start|stop|restart|status)
         MODE="$1"
         shift
         ;;
@@ -222,6 +224,110 @@ parse_args() {
 
 find_listener_pids() {
   lsof -tiTCP:"$PORT" -sTCP:LISTEN 2>/dev/null || true
+}
+
+pid_parent() {
+  local pid="$1"
+  ps -o ppid= -p "$pid" 2>/dev/null | tr -d '[:space:]' || true
+}
+
+pid_is_running() {
+  local pid="$1"
+  [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null
+}
+
+pid_in_lines() {
+  local pid="$1"
+  local lines="$2"
+  printf '%s\n' "$lines" | grep -qx "$pid"
+}
+
+collect_active_process_family() {
+  local listener parent guard
+  while IFS= read -r listener; do
+    [[ -n "$listener" ]] || continue
+    echo "$listener"
+    parent="$(pid_parent "$listener")"
+    guard=0
+    while [[ -n "$parent" && "$parent" != "0" && "$parent" != "1" && $guard -lt 20 ]]; do
+      echo "$parent"
+      parent="$(pid_parent "$parent")"
+      guard=$((guard + 1))
+    done
+  done < <(find_listener_pids)
+}
+
+find_dench_standalone_launcher_pids() {
+  local server_entry="$APP_DIR/.next/standalone/apps/web/server.js"
+  ps -axo pid=,comm=,command= | awk \
+    -v pid_file="$PID_FILE" \
+    -v app_dir="$APP_DIR" \
+    -v server_entry="$server_entry" \
+    '
+      {
+        pid = $1
+        comm = $2
+        $1 = ""
+        $2 = ""
+        cmd = $0
+        is_launcher = (comm == "SCREEN" || comm == "login" || comm == "bash")
+        has_scope = (index(cmd, pid_file) && (index(cmd, app_dir) || index(cmd, server_entry)))
+        if (is_launcher && has_scope) {
+          print pid
+        }
+      }
+    '
+}
+
+child_pids_of() {
+  local parent="$1"
+  ps -axo pid=,ppid= | awk -v parent="$parent" '$2 == parent { print $1 }'
+}
+
+find_stale_standalone_pids() {
+  local active_family launcher child
+  active_family="$(collect_active_process_family | awk 'NF && !seen[$1]++')"
+  while IFS= read -r launcher; do
+    [[ -n "$launcher" ]] || continue
+    if pid_in_lines "$launcher" "$active_family"; then
+      continue
+    fi
+    echo "$launcher"
+    while IFS= read -r child; do
+      [[ -n "$child" ]] || continue
+      if ! pid_in_lines "$child" "$active_family"; then
+        echo "$child"
+      fi
+    done < <(child_pids_of "$launcher")
+  done < <(find_dench_standalone_launcher_pids)
+}
+
+cleanup_stale_standalone_processes() {
+  local stale_pids still_running pid
+  stale_pids="$(find_stale_standalone_pids | awk 'NF && !seen[$1]++')"
+  if [[ -z "$stale_pids" ]]; then
+    echo "[dench-web] no stale DenchClaw standalone process found for port $PORT"
+    return 0
+  fi
+
+  echo "[dench-web] cleaning stale DenchClaw standalone process(es) for port $PORT:"
+  printf '%s\n' "$stale_pids" | sed 's/^/[dench-web]   pid /'
+  kill $stale_pids 2>/dev/null || true
+
+  for _ in {1..20}; do
+    still_running=""
+    while IFS= read -r pid; do
+      [[ -n "$pid" ]] || continue
+      if pid_is_running "$pid"; then
+        still_running="${still_running}${pid} "
+      fi
+    done <<< "$stale_pids"
+    [[ -z "$still_running" ]] && return 0
+    sleep 0.25
+  done
+
+  echo "[dench-web] force cleaning stale process(es): $still_running"
+  kill -9 $still_running 2>/dev/null || true
 }
 
 show_listener_summary() {
@@ -289,21 +395,29 @@ stop_server() {
     screen -S "$SCREEN_NAME" -X quit >/dev/null 2>&1 || true
   fi
 
+  local port_cleared="false"
   for _ in {1..20}; do
     if [[ -z "$(find_listener_pids)" ]]; then
-      echo "[dench-web] port $PORT is clear"
-      return 0
+      port_cleared="true"
+      break
     fi
     sleep 0.25
   done
 
-  die "port $PORT is still occupied after stop"
+  [[ "$port_cleared" == "true" ]] || die "port $PORT is still occupied after stop"
+
+  cleanup_stale_standalone_processes
+  echo "[dench-web] port $PORT is clear"
 }
 
 start_detached() {
   local server_entry="$APP_DIR/.next/standalone/apps/web/server.js"
 
   warn_missing_db_runtime_env
+  cleanup_stale_standalone_processes
+  if [[ -n "$(find_listener_pids)" ]]; then
+    die "port $PORT already has an active listener; use restart or stop first"
+  fi
   : >"$LOG_FILE"
 
   if command -v screen >/dev/null 2>&1; then
@@ -364,6 +478,15 @@ status_server() {
     echo "[dench-web] no active listener on port $PORT"
   fi
 
+  local stale_pids
+  stale_pids="$(find_stale_standalone_pids | awk 'NF && !seen[$1]++')"
+  if [[ -n "$stale_pids" ]]; then
+    echo "[dench-web] stale standalone process(es):"
+    printf '%s\n' "$stale_pids" | sed 's/^/[dench-web]   pid /'
+  else
+    echo "[dench-web] stale standalone process(es): none"
+  fi
+
   if curl -fsS -I "http://127.0.0.1:${PORT}/" >/dev/null 2>&1; then
     echo "[dench-web] health: ok"
   else
@@ -380,6 +503,9 @@ validate_runtime_args
 case "$MODE" in
     build)
       build_bundle
+      ;;
+    cleanup)
+      cleanup_stale_standalone_processes
       ;;
     stop)
       stop_server

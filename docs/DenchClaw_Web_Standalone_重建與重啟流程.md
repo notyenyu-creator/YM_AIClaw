@@ -61,6 +61,7 @@ node .next/standalone/apps/web/server.js
 它會負責：
 
 - 停掉舊的 `3200` listener
+- 清理同一個 port 下殘留的 DenchClaw standalone wrapper / server 程序
 - 重建 `apps/web`
 - 執行 `web:prepack`
 - 驗證 standalone bundle 是否完整
@@ -97,7 +98,17 @@ bash scripts/dench-web-standalone.sh stop --port 3200
 bash scripts/dench-web-standalone.sh status --port 3200
 ```
 
-### 5. 只做重建，不啟動
+`status` 會同時顯示目前 listener、pid file、screen session、health，以及是否有 stale standalone process。
+
+### 5. 只清理殘留程序，不重啟服務
+
+適合看到多個舊 `next-server` / `denchclaw-web-3200` 程序時使用。腳本只會清理同一個 port、同一個 DenchClaw standalone 啟動路徑下的殘留程序，會保留目前正在 listen 的服務。
+
+```bash
+bash scripts/dench-web-standalone.sh cleanup --port 3200
+```
+
+### 6. 只做重建，不啟動
 
 ```bash
 bash scripts/dench-web-standalone.sh build --port 3200
@@ -121,6 +132,7 @@ bash scripts/dench-web-standalone.sh build --port 3200
 1. 首頁 `HTTP 200`
 2. `_next/static` chunk 不再 `404`
 3. `lsof -iTCP:3200 -sTCP:LISTEN` 能看到 listener
+4. `status` 顯示 `stale standalone process(es): none`
 
 ---
 
