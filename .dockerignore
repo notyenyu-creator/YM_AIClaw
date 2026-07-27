@@ -1,0 +1,23 @@
+.git
+.github
+.DS_Store
+
+# Runtime secrets and local-only configuration must stay on the host.
+.env
+.env.*
+!.env.example
+
+# Host/build artifacts are rebuilt inside the image.
+node_modules
+**/node_modules
+dist
+**/.next
+coverage
+*.log
+
+# Local scratch data and backup dumps should not enter Docker build context.
+tmp
+db-backups
+*.dump
+*.bak
+*.sql.gz

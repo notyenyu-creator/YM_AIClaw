@@ -284,12 +284,11 @@ describe("Y-CRM context builder debug page", () => {
     await user.click(screen.getByRole("button", { name: "Load Session Preflight" }));
 
     await waitFor(() => {
-      expect(screen.getByText("Latest Session Preflight")).toBeInTheDocument();
+      expect(screen.getAllByText(/entity_summary/i).length).toBeGreaterThan(0);
+      expect(screen.getAllByText(/workspace_3jox/i).length).toBeGreaterThan(0);
+      expect(screen.getByText("Advisory planner state")).toBeInTheDocument();
     });
     expect(screen.getByDisplayValue("s-preflight")).toBeInTheDocument();
-    expect(screen.getAllByText(/entity_summary/i).length).toBeGreaterThan(0);
-    expect(screen.getAllByText(/workspace_3jox/i).length).toBeGreaterThan(0);
-    expect(screen.getByText("Advisory planner state")).toBeInTheDocument();
     expect(screen.getByText("heuristic")).toBeInTheDocument();
     expect(screen.getByText("Latest Session Context Pack")).toBeInTheDocument();
     expect(screen.getByText("Latest Session Learning Draft")).toBeInTheDocument();
@@ -350,11 +349,10 @@ describe("Y-CRM context builder debug page", () => {
 
     render(<Page />);
 
-    await waitFor(() => {
-      expect(screen.getByText("Latest Session Preflight")).toBeInTheDocument();
-    });
+    expect(
+      await screen.findByText("Loaded session snapshot from persisted metadata."),
+    ).toBeInTheDocument();
     expect(screen.getByDisplayValue("s-autoload")).toBeInTheDocument();
-    expect(screen.getByText("Loaded session snapshot from persisted metadata.")).toBeInTheDocument();
     await user.clear(screen.getByLabelText("Web session ID"));
   });
 

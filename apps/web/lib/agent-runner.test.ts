@@ -1,4 +1,14 @@
 import { EventEmitter } from "node:events";
+import {
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	rmSync,
+	statSync,
+	writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 vi.mock("./workspace", () => ({
@@ -186,6 +196,38 @@ describe("agent-runner", () => {
 			expect(params.auth?.password).toBe("secret-pass");
 		});
 
+		it("uses a paired device token as the signed auth token", async () => {
+			const {
+				buildConnectParams,
+				loadOrCreateGatewayDeviceIdentity,
+			} = await import("./agent-runner.js");
+			const stateDir = mkdtempSync(
+				join(tmpdir(), "agent-runner-device-token-"),
+			);
+			try {
+				const identity = loadOrCreateGatewayDeviceIdentity(stateDir, true);
+				expect(identity).not.toBeNull();
+				const params = buildConnectParams(
+					{ url: "ws://127.0.0.1:19001" },
+					{
+						nonce: "challenge",
+						deviceIdentity: identity,
+						deviceToken: "paired-device-token",
+					},
+				) as {
+					auth?: { token?: string; deviceToken?: string };
+					device?: { signature?: string };
+				};
+				expect(params.auth).toEqual({
+					token: "paired-device-token",
+					deviceToken: "paired-device-token",
+				});
+				expect(params.device?.signature).toBeTruthy();
+			} finally {
+				rmSync(stateDir, { recursive: true, force: true });
+			}
+		});
+
 		it("omits auth when no token or password is set", async () => {
 			const { buildConnectParams } = await import("./agent-runner.js");
 			const params = buildConnectParams({ url: "ws://127.0.0.1:19001" }) as {
@@ -239,6 +281,53 @@ describe("agent-runner", () => {
 		});
 	});
 
+	describe("gateway device identity", () => {
+		it("creates and reuses a persistent mode-0600 Ed25519 identity", async () => {
+			const { loadOrCreateGatewayDeviceIdentity } = await import(
+				"./agent-runner.js"
+			);
+			const stateDir = mkdtempSync(join(tmpdir(), "agent-runner-identity-"));
+			try {
+				const first = loadOrCreateGatewayDeviceIdentity(stateDir, true);
+				const second = loadOrCreateGatewayDeviceIdentity(stateDir, true);
+				expect(first).not.toBeNull();
+				expect(second).toEqual(first);
+				expect(first?.deviceId).toMatch(/^[a-f0-9]{64}$/);
+
+				const identityPath = join(stateDir, "identity", "device.json");
+				expect(statSync(identityPath).mode & 0o777).toBe(0o600);
+				const stored = JSON.parse(
+					readFileSync(identityPath, "utf-8"),
+				) as Record<string, unknown>;
+				expect(stored.version).toBe(1);
+				expect(stored.deviceId).toBe(first?.deviceId);
+			} finally {
+				rmSync(stateDir, { recursive: true, force: true });
+			}
+		});
+
+		it("fails closed instead of replacing a malformed existing identity", async () => {
+			const { loadOrCreateGatewayDeviceIdentity } = await import(
+				"./agent-runner.js"
+			);
+			const stateDir = mkdtempSync(join(tmpdir(), "agent-runner-invalid-"));
+			const identityDir = join(stateDir, "identity");
+			try {
+				mkdirSync(identityDir, { recursive: true });
+				writeFileSync(
+					join(identityDir, "device.json"),
+					'{"version":1,"deviceId":"invalid"}\n',
+					{ mode: 0o600 },
+				);
+				expect(() =>
+					loadOrCreateGatewayDeviceIdentity(stateDir, true),
+				).toThrow("identity file is invalid");
+			} finally {
+				rmSync(stateDir, { recursive: true, force: true });
+			}
+		});
+	});
+
 	// ── spawnAgentProcess (ws transport) ─────────────────────────────
 
 	describe("spawnAgentProcess", () => {
@@ -252,11 +341,52 @@ describe("agent-runner", () => {
 			const ws = MockWs.instances[0];
 			expect(ws).toBeDefined();
 			expect(ws.constructorUrl).toMatch(/^ws:\/\//);
+			expect(ws.constructorOpts.origin).toBe("http://127.0.0.1:18789");
 
 			expect(ws.methods).toContain("connect");
 			expect(ws.methods).toContain("sessions.patch");
 			expect(ws.methods).toContain("chat.send");
 			expect(ws.methods.slice(0, 3)).toEqual(["connect", "sessions.patch", "chat.send"]);
+			proc.kill("SIGTERM");
+		});
+
+		it("supports a least-privilege run without sessions.patch", async () => {
+			const MockWs = installMockWsModule();
+			const { spawnAgentProcess } = await import("./agent-runner.js");
+
+			const proc = spawnAgentProcess(
+				"hello",
+				"enms-session",
+				"enms-bff",
+				undefined,
+				undefined,
+				["operator.read", "operator.write"],
+				true,
+			);
+			await waitFor(() => MockWs.instances[0]?.methods.includes("chat.send"));
+
+			const instance = MockWs.instances[0];
+			const connect = instance.requestFrames.find(
+				(frame) => frame.method === "connect",
+			);
+			expect(instance.methods).not.toContain("sessions.patch");
+			expect(
+				(connect?.params as { scopes?: string[] })?.scopes,
+			).toEqual(["operator.read", "operator.write"]);
+			proc.kill("SIGTERM");
+		});
+
+		it("uses an HTTPS Origin for a secure Gateway WebSocket", async () => {
+			const MockWs = installMockWsModule();
+			process.env.OPENCLAW_GATEWAY_URL = "wss://gateway.example.com/socket";
+			const { spawnAgentProcess } = await import("./agent-runner.js");
+
+			const proc = spawnAgentProcess("hello", "sess-origin");
+			await waitFor(() => MockWs.instances[0]?.methods.includes("chat.send"));
+
+			expect(MockWs.instances[0]?.constructorOpts.origin).toBe(
+				"https://gateway.example.com",
+			);
 			proc.kill("SIGTERM");
 		});
 

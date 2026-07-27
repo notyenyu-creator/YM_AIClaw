@@ -33,6 +33,12 @@ describe("detectEnmsIntent", () => {
     expect(result.matchedKeywords).toContain("roi");
   });
 
+  it("detects efficiency_analysis intent from energy-saving advice wording in the shared registry", () => {
+    const result = detectEnmsIntent("可以給我一個省電建議嗎？");
+    expect(result.intent).toBe("efficiency_analysis");
+    expect(result.matchedKeywords).toContain("省電");
+  });
+
   it("detects natural_language_query intent on energy trend phrasing", () => {
     const result = detectEnmsIntent(
       "請問我在2026年1月到今天的能源趨勢分析可以提供給我嗎？",

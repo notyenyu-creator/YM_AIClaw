@@ -1,7 +1,22 @@
-import { createPrivateKey, createPublicKey, randomUUID, sign } from "node:crypto";
+import {
+	createHash,
+	createPrivateKey,
+	createPublicKey,
+	generateKeyPairSync,
+	randomUUID,
+	sign,
+} from "node:crypto";
 import { EventEmitter } from "node:events";
-import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import {
+	chmodSync,
+	existsSync,
+	mkdirSync,
+	readFileSync,
+	renameSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
+import { dirname, join } from "node:path";
 import { PassThrough } from "node:stream";
 import NodeWebSocket from "ws";
 import {
@@ -153,6 +168,8 @@ type SpawnGatewayProcessParams = {
 	lane?: string;
 	modelOverride?: string;
 	attachments?: ImageAttachment[];
+	gatewayScopes?: string[];
+	skipSessionPatch?: boolean;
 };
 
 type BuildConnectParamsOptions = {
@@ -161,6 +178,7 @@ type BuildConnectParamsOptions = {
 	nonce?: string;
 	deviceIdentity?: DeviceIdentity | null;
 	deviceToken?: string | null;
+	scopes?: string[];
 };
 
 const DEFAULT_GATEWAY_PORT = 18_789;
@@ -178,6 +196,19 @@ const GATEWAY_RPC_RETRY_BASE_MS = 250;
 const MAX_GATEWAY_FILTER_DROP_LOGS = 8;
 const ED25519_SPKI_PREFIX = Buffer.from("302a300506032b6570032100", "hex");
 const RETRYABLE_GATEWAY_CLOSE_CODES = new Set([1000, 1005, 1006, 1012]);
+
+function gatewayWebSocketOrigin(url: string): string {
+	try {
+		const origin = new URL(url);
+		origin.protocol = origin.protocol === "wss:" ? "https:" : "http:";
+		origin.pathname = "/";
+		origin.search = "";
+		origin.hash = "";
+		return origin.origin;
+	} catch {
+		return url;
+	}
+}
 
 function normalizeModelOverride(modelOverride?: string): string | undefined {
 	if (typeof modelOverride !== "string" || !modelOverride.trim()) {
@@ -222,7 +253,7 @@ function buildSessionPatchParams(
 type AgentSubscribeSupport = "unknown" | "supported" | "unsupported";
 let cachedAgentSubscribeSupport: AgentSubscribeSupport = "unknown";
 
-type DeviceIdentity = {
+export type DeviceIdentity = {
 	deviceId: string;
 	publicKeyPem: string;
 	privateKeyPem: string;
@@ -249,32 +280,107 @@ function derivePublicKeyRaw(publicKeyPem: string): Buffer {
 	return spki;
 }
 
+function fingerprintPublicKey(publicKeyPem: string): string {
+	return createHash("sha256").update(derivePublicKeyRaw(publicKeyPem)).digest("hex");
+}
+
+function privateKeyMatchesPublicKey(identity: DeviceIdentity): boolean {
+	try {
+		const derivedPublicKey = createPublicKey(
+			createPrivateKey(identity.privateKeyPem),
+		).export({ type: "spki", format: "der" });
+		const expectedPublicKey = createPublicKey(identity.publicKeyPem).export({
+			type: "spki",
+			format: "der",
+		});
+		return Buffer.from(derivedPublicKey).equals(Buffer.from(expectedPublicKey));
+	} catch {
+		return false;
+	}
+}
+
 function signDevicePayload(privateKeyPem: string, payload: string): string {
 	const key = createPrivateKey(privateKeyPem);
 	return base64UrlEncode(sign(null, Buffer.from(payload, "utf8"), key) as unknown as Buffer);
 }
 
-function loadDeviceIdentity(stateDir: string): DeviceIdentity | null {
-	const filePath = join(stateDir, "identity", "device.json");
-	if (!existsSync(filePath)) {
-		return null;
-	}
+function writeJsonAtomic(filePath: string, value: Record<string, unknown>): void {
+	mkdirSync(dirname(filePath), { recursive: true, mode: 0o700 });
+	const temporaryPath = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
 	try {
+		writeFileSync(temporaryPath, `${JSON.stringify(value, null, 2)}\n`, {
+			encoding: "utf-8",
+			flag: "wx",
+			mode: 0o600,
+		});
+		renameSync(temporaryPath, filePath);
+		chmodSync(filePath, 0o600);
+	} catch (error) {
+		try {
+			rmSync(temporaryPath, { force: true });
+		} catch {
+			// Preserve the original filesystem error.
+		}
+		throw error;
+	}
+}
+
+function shouldAutoCreateDeviceIdentity(): boolean {
+	return process.env.OPENCLAW_GATEWAY_AUTO_CREATE_DEVICE_IDENTITY === "1";
+}
+
+export function loadOrCreateGatewayDeviceIdentity(
+	stateDir: string,
+	allowCreate = shouldAutoCreateDeviceIdentity(),
+): DeviceIdentity | null {
+	const filePath = join(stateDir, "identity", "device.json");
+	if (existsSync(filePath)) {
 		const parsed = parseJsonObject(readFileSync(filePath, "utf-8"));
 		if (
 			parsed &&
+			parsed.version === 1 &&
 			typeof parsed.deviceId === "string" &&
 			typeof parsed.publicKeyPem === "string" &&
 			typeof parsed.privateKeyPem === "string"
 		) {
-			return {
+			const identity = {
 				deviceId: parsed.deviceId,
 				publicKeyPem: parsed.publicKeyPem,
 				privateKeyPem: parsed.privateKeyPem,
 			};
+			const derivedDeviceId = fingerprintPublicKey(identity.publicKeyPem);
+			if (
+				derivedDeviceId !== identity.deviceId ||
+				!privateKeyMatchesPublicKey(identity)
+			) {
+				throw new Error("OpenClaw device identity validation failed");
+			}
+			return identity;
 		}
-	} catch { /* ignore */ }
-	return null;
+		throw new Error("OpenClaw device identity file is invalid");
+	}
+	if (!allowCreate) {
+		return null;
+	}
+
+	const { publicKey, privateKey } = generateKeyPairSync("ed25519");
+	const publicKeyPem = publicKey
+		.export({ type: "spki", format: "pem" })
+		.toString();
+	const privateKeyPem = privateKey
+		.export({ type: "pkcs8", format: "pem" })
+		.toString();
+	const identity: DeviceIdentity = {
+		deviceId: fingerprintPublicKey(publicKeyPem),
+		publicKeyPem,
+		privateKeyPem,
+	};
+	writeJsonAtomic(filePath, {
+		version: 1,
+		...identity,
+		createdAtMs: Date.now(),
+	});
+	return identity;
 }
 
 function loadDeviceAuth(stateDir: string): DeviceAuth | null {
@@ -298,6 +404,49 @@ function loadDeviceAuth(stateDir: string): DeviceAuth | null {
 		}
 	} catch { /* ignore */ }
 	return null;
+}
+
+function persistDeviceAuthFromHello(
+	stateDir: string,
+	identity: DeviceIdentity,
+	payload: unknown,
+): void {
+	const hello = asRecord(payload);
+	const auth = asRecord(hello?.auth);
+	if (!auth || typeof auth.deviceToken !== "string" || !auth.deviceToken.trim()) {
+		return;
+	}
+	const role =
+		typeof auth.role === "string" && auth.role.trim()
+			? auth.role.trim()
+			: "operator";
+	const scopes = Array.isArray(auth.scopes)
+		? auth.scopes.filter(
+				(scope): scope is string =>
+					typeof scope === "string" && scope.trim().length > 0,
+			)
+		: [];
+	const filePath = join(stateDir, "identity", "device-auth.json");
+	const existing = existsSync(filePath)
+		? parseJsonObject(readFileSync(filePath, "utf-8"))
+		: null;
+	const existingTokens =
+		existing?.deviceId === identity.deviceId
+			? asRecord(existing.tokens) ?? {}
+			: {};
+	writeJsonAtomic(filePath, {
+		version: 1,
+		deviceId: identity.deviceId,
+		tokens: {
+			...existingTokens,
+			[role]: {
+				token: auth.deviceToken.trim(),
+				role,
+				scopes: [...new Set(scopes)].sort(),
+				updatedAtMs: Date.now(),
+			},
+		},
+	});
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -442,19 +591,25 @@ export function buildConnectParams(
 	const clientMode = options?.clientMode ?? "backend";
 	const clientId = process.env.OPENCLAW_GATEWAY_CLIENT_ID || "gateway-client";
 	const role = "operator";
-	const scopes = [
+	const defaultScopes = [
 		"operator.admin",
 		"operator.approvals",
 		"operator.pairing",
 		"operator.read",
 		"operator.write",
 	];
+	const scopes =
+		options?.scopes?.filter(
+			(scope): scope is string =>
+				typeof scope === "string" && scope.trim().length > 0,
+		) ?? defaultScopes;
 
-	const hasGatewayAuth = Boolean(settings.token || settings.password);
 	const deviceToken = options?.deviceToken;
-	const auth = hasGatewayAuth || deviceToken
+	const authToken = settings.token || deviceToken || undefined;
+	const hasGatewayAuth = Boolean(authToken || settings.password);
+	const auth = hasGatewayAuth
 		? {
-				...(settings.token ? { token: settings.token } : {}),
+				...(authToken ? { token: authToken } : {}),
 				...(settings.password ? { password: settings.password } : {}),
 				...(deviceToken ? { deviceToken } : {}),
 			}
@@ -474,7 +629,7 @@ export function buildConnectParams(
 			role,
 			scopes.join(","),
 			String(signedAtMs),
-			settings.token ?? "",
+			authToken ?? "",
 			nonce,
 			platform,
 			"",
@@ -640,7 +795,9 @@ class GatewayWsClient {
 		if (this.ws) {
 			return;
 		}
-		const ws = new NodeWebSocket(this.settings.url, { origin: this.settings.url });
+		const ws = new NodeWebSocket(this.settings.url, {
+			origin: gatewayWebSocketOrigin(this.settings.url),
+		});
 		this.ws = ws;
 
 		// Attach message/close handlers BEFORE awaiting "open" so that
@@ -923,7 +1080,7 @@ class GatewayProcessHandle
 		this.client = client;
 		try {
 			const stateDir = resolveOpenClawStateDir();
-			const deviceIdentity = loadDeviceIdentity(stateDir);
+			const deviceIdentity = loadOrCreateGatewayDeviceIdentity(stateDir);
 			const deviceAuth = loadDeviceAuth(stateDir);
 
 			let nonce: string | undefined;
@@ -939,10 +1096,18 @@ class GatewayProcessHandle
 				nonce,
 				deviceIdentity,
 				deviceToken: deviceAuth?.token,
+				scopes: this.params.gatewayScopes,
 			});
 			const connectRes = await client.request("connect", connectParams);
 			if (!connectRes.ok) {
 				throw new Error(frameErrorMessage(connectRes));
+			}
+			if (deviceIdentity) {
+				persistDeviceAuthFromHello(
+					stateDir,
+					deviceIdentity,
+					connectRes.payload,
+				);
 			}
 		} catch (error) {
 			this.client = null;
@@ -956,7 +1121,7 @@ class GatewayProcessHandle
 		if (!client) {
 			throw new Error("Gateway WebSocket is not connected");
 		}
-		if (this.params.sessionKey) {
+		if (this.params.sessionKey && !this.params.skipSessionPatch) {
 			// Pre-patch verbose for existing sessions (best-effort; new
 			// sessions don't exist yet so this may fail — we retry below).
 			await this.ensureFullToolVerbose(
@@ -1010,7 +1175,7 @@ class GatewayProcessHandle
 		// Retry verbose patch now that the RPC has created the
 		// session.  This is the critical path for first-message-in-chat
 		// where the pre-patch above failed.
-		if (sessionKey) {
+		if (sessionKey && !this.params.skipSessionPatch) {
 			await this.ensureFullToolVerbose(sessionKey, this.params.modelOverride);
 		}
 	}
@@ -1507,7 +1672,7 @@ class GatewayProcessHandle
 async function callGatewayRpcOnce(
 	method: string,
 	params?: Record<string, unknown>,
-	options?: { timeoutMs?: number },
+	options?: { timeoutMs?: number; scopes?: string[] },
 ): Promise<GatewayResFrame> {
 	let closed = false;
 	const { client, settings } = await openGatewayClient(
@@ -1518,7 +1683,7 @@ async function callGatewayRpcOnce(
 	);
 	try {
 		const stateDir = resolveOpenClawStateDir();
-		const deviceIdentity = loadDeviceIdentity(stateDir);
+		const deviceIdentity = loadOrCreateGatewayDeviceIdentity(stateDir);
 		const deviceAuth = loadDeviceAuth(stateDir);
 
 		let nonce: string | undefined;
@@ -1536,11 +1701,19 @@ async function callGatewayRpcOnce(
 				nonce,
 				deviceIdentity,
 				deviceToken: deviceAuth?.token,
+				scopes: options?.scopes,
 			}),
 			options?.timeoutMs ?? REQUEST_TIMEOUT_MS,
 		);
 		if (!connect.ok) {
 			throw new Error(frameErrorMessage(connect));
+		}
+		if (deviceIdentity) {
+			persistDeviceAuthFromHello(
+				stateDir,
+				deviceIdentity,
+				connect.payload,
+			);
 		}
 		const result = await client.request(
 			method,
@@ -1558,7 +1731,7 @@ async function callGatewayRpcOnce(
 export async function callGatewayRpc(
 	method: string,
 	params?: Record<string, unknown>,
-	options?: { timeoutMs?: number; retries?: number },
+	options?: { timeoutMs?: number; retries?: number; scopes?: string[] },
 ): Promise<GatewayResFrame> {
 	const retries = Math.max(
 		0,
@@ -1596,6 +1769,8 @@ export function spawnAgentProcess(
 	overrideAgentId?: string,
 	modelOverride?: string,
 	attachments?: ImageAttachment[],
+	gatewayScopes?: string[],
+	skipSessionPatch = false,
 ): AgentProcessHandle {
 	const agentId = overrideAgentId ?? resolveActiveAgentId();
 	const sessionKey = agentSessionId
@@ -1609,6 +1784,8 @@ export function spawnAgentProcess(
 		lane: agentSessionId ? `web:${agentSessionId}` : "web",
 		modelOverride,
 		attachments,
+		gatewayScopes,
+		skipSessionPatch,
 	});
 }
 
