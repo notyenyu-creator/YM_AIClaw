@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const structuredAgentMocks = vi.hoisted(() => ({
   enabled: vi.fn(() => false),
   run: vi.fn(),
+  runGeneral: vi.fn(),
 }));
 
 vi.mock("@/lib/enms-structured-agent", async (importOriginal) => {
@@ -12,13 +13,18 @@ vi.mock("@/lib/enms-structured-agent", async (importOriginal) => {
     ...actual,
     isEnmsStructuredAgentEnabled: structuredAgentMocks.enabled,
     runEnmsStructuredAgent: structuredAgentMocks.run,
+    runEnmsGeneralChatAgent: structuredAgentMocks.runGeneral,
   };
 });
 
 const ORIGINAL_ENV = { ...process.env };
 const DEFAULT_API_KEY = "server-secret";
 
-function buildRequest(body: unknown, headers?: HeadersInit) {
+function buildRequest(
+  body: unknown,
+  headers?: HeadersInit,
+  options: { preserveGuardrails?: boolean } = {},
+) {
   const requestHeaders = new Headers(headers);
   requestHeaders.set("Content-Type", "application/json");
   if (!requestHeaders.has("Authorization")) {
@@ -26,15 +32,38 @@ function buildRequest(body: unknown, headers?: HeadersInit) {
   }
 
   const requestBody =
-    body && typeof body === "object" && "scopedContext" in body
+    body && typeof body === "object"
       ? {
           ...body,
-          scopedContext: {
-            contractVersion: "enms.ai.page-insight.v1",
-            factsSchemaVersion: "enms.ai.facts.v1",
-            ...(body as { scopedContext?: Record<string, unknown> })
-              .scopedContext,
-          },
+          ...(!options.preserveGuardrails &&
+          "guardrails" in body &&
+          (body as { guardrails?: Record<string, unknown> }).guardrails
+            ? {
+                guardrails: {
+                  ...(body as { guardrails?: Record<string, unknown> })
+                    .guardrails,
+                  ...((body as { guardrails?: Record<string, unknown> })
+                    .guardrails?.semanticViewsOnly === true &&
+                  !(
+                    "allowedViewPrefix" in
+                    ((body as { guardrails?: Record<string, unknown> })
+                      .guardrails ?? {})
+                  )
+                    ? { allowedViewPrefix: "ai_" }
+                    : {}),
+                },
+              }
+            : {}),
+          ...("scopedContext" in body
+            ? {
+                scopedContext: {
+                  contractVersion: "enms.ai.page-insight.v1",
+                  factsSchemaVersion: "enms.ai.facts.v1",
+                  ...(body as { scopedContext?: Record<string, unknown> })
+                    .scopedContext,
+                },
+              }
+            : {}),
         }
       : body;
 
@@ -50,6 +79,7 @@ describe("POST /api/enms/chat", () => {
     vi.resetModules();
     structuredAgentMocks.enabled.mockReturnValue(false);
     structuredAgentMocks.run.mockReset();
+    structuredAgentMocks.runGeneral.mockReset();
     process.env.ENCLAW_ENMS_API_KEY = DEFAULT_API_KEY;
     delete process.env.ENMS_AI_ASSISTANT_API_KEY;
     delete process.env.ENMS_PG_CONNECTION;
@@ -346,6 +376,356 @@ describe("POST /api/enms/chat", () => {
     expect(JSON.stringify(json)).not.toContain("為避免越權讀取");
   });
 
+  it("keeps exact nlq device answers in a multi-intent bundle before demand analysis", async () => {
+    const { POST } = await import("./route.js");
+    const response = await POST(
+      buildRequest({
+        message: "迴路1 是對應哪個設備，也請說明需量超約風險",
+        conversationId: "conv-device-demand",
+        scope: {
+          userId: "UserA",
+          companyNo: "Pingroun",
+          allSites: false,
+          siteFilterRequired: true,
+          siteIds: ["site-1"],
+        },
+        scopedFactsBundle: {
+          contractVersion: "enms.ai.page-insight.v1",
+          factsSchemaVersion: "enms.ai.facts.v1",
+          primaryPageKey: "nlq",
+          contexts: [
+            {
+              contractVersion: "enms.ai.page-insight.v1",
+              factsSchemaVersion: "enms.ai.facts.v1",
+              pageKey: "nlq",
+              status: "ready",
+              facts: {
+                deviceMappings: [
+                  {
+                    label: "冰機 CH1 電源 · MAC-A / 位址 2 / 迴路 1",
+                    deviceAlias: "冰機 CH1 電源",
+                    macAddress: "MAC-A",
+                    address: "2",
+                    circuitSeq: 1,
+                    accountNumber: "04043717102",
+                    siteName: "阿里山",
+                    identityKey: "MAC-A|2|1",
+                  },
+                ],
+              },
+              evidence: {
+                dataSources: ["ai_meter_v1"],
+                timeRange: "目前設備主檔",
+                queryScope: "nlq scope",
+                confidence: "high",
+              },
+            },
+            {
+              contractVersion: "enms.ai.page-insight.v1",
+              factsSchemaVersion: "enms.ai.facts.v1",
+              pageKey: "demand",
+              status: "ready",
+              facts: {
+                metrics: {
+                  currentDemandKw: 82.3,
+                  peakDemandKw: 91.2,
+                  projectedPeakDemandKw: 104.5,
+                  contractCapacityKw: 100,
+                },
+              },
+              evidence: {
+                dataSources: ["ai_energy_15m_v1"],
+                timeRange: "最近 30 日",
+                queryScope: "demand scope",
+                confidence: "high",
+              },
+            },
+          ],
+        },
+        guardrails: {
+          mode: "readonly",
+          factsAlreadyScopedByEnms: true,
+          noSqlFromClient: true,
+          noHtml: true,
+          semanticViewsOnly: true,
+          requireEvidence: true,
+        },
+      }),
+    );
+    const json = await response.json();
+    const blocks = JSON.stringify(json.blocks);
+
+    expect(response.status).toBe(200);
+    expect(blocks).toContain("冰機 CH1 電源");
+    expect(blocks).toContain("目前需量：82.3 kW");
+    expect(blocks).not.toContain("需量 / 契約容量");
+    expect(json.answerContract.chatFactsBundle.pageKeys).toEqual([
+      "nlq",
+      "demand",
+    ]);
+  });
+
+  it("keeps exact nlq meter ranking answers in a multi-intent bundle before demand analysis", async () => {
+    const { POST } = await import("./route.js");
+    const response = await POST(
+      buildRequest({
+        message: "哪個迴路最費電，也請說明需量超約風險",
+        conversationId: "conv-ranking-demand",
+        scope: {
+          userId: "UserA",
+          companyNo: "Pingroun",
+          allSites: false,
+          siteFilterRequired: true,
+          siteIds: ["site-1"],
+        },
+        scopedFactsBundle: {
+          contractVersion: "enms.ai.page-insight.v1",
+          factsSchemaVersion: "enms.ai.facts.v1",
+          primaryPageKey: "nlq",
+          contexts: [
+            {
+              contractVersion: "enms.ai.page-insight.v1",
+              factsSchemaVersion: "enms.ai.facts.v1",
+              pageKey: "nlq",
+              status: "ready",
+              facts: {
+                meterRankingDetails: [
+                  {
+                    label: "冰機 CH1 電源 · MAC-A / 位址 2 / 迴路 1",
+                    consumptionKwh: 3420,
+                    peakDemandKw: 91.2,
+                    macAddress: "MAC-A",
+                    address: "2",
+                    circuitSeq: 1,
+                    identityKey: "MAC-A|2|1",
+                  },
+                ],
+              },
+              evidence: {
+                dataSources: ["ai_energy_15m_v1"],
+                timeRange: "最近 7 日",
+                queryScope: "nlq scope",
+                confidence: "high",
+              },
+            },
+            {
+              contractVersion: "enms.ai.page-insight.v1",
+              factsSchemaVersion: "enms.ai.facts.v1",
+              pageKey: "demand",
+              status: "ready",
+              facts: {
+                metrics: {
+                  currentDemandKw: 82.3,
+                  peakDemandKw: 91.2,
+                  projectedPeakDemandKw: 104.5,
+                  contractCapacityKw: 100,
+                },
+              },
+              evidence: {
+                dataSources: ["ai_energy_15m_v1"],
+                timeRange: "最近 30 日",
+                queryScope: "demand scope",
+                confidence: "high",
+              },
+            },
+          ],
+        },
+        guardrails: {
+          mode: "readonly",
+          factsAlreadyScopedByEnms: true,
+          noSqlFromClient: true,
+          noHtml: true,
+          semanticViewsOnly: true,
+          requireEvidence: true,
+        },
+      }),
+    );
+    const json = await response.json();
+    const blocks = JSON.stringify(json.blocks);
+
+    expect(response.status).toBe(200);
+    expect(blocks).toContain("冰機 CH1 電源");
+    expect(blocks).toContain("3,420 kWh");
+    expect(blocks).toContain("目前需量：82.3 kW");
+    expect(blocks).not.toContain("需量 / 契約容量");
+    expect(json.answerContract.chatFactsBundle.pageKeys).toEqual([
+      "nlq",
+      "demand",
+    ]);
+  });
+
+  it("keeps meter ranking when the same bundle question also asks billing facts", async () => {
+    const { POST } = await import("./route.js");
+    const response = await POST(
+      buildRequest({
+        message: "哪個迴路最費電，也看最近帳單",
+        conversationId: "conv-ranking-billing",
+        scope: {
+          userId: "UserA",
+          companyNo: "Pingroun",
+          allSites: false,
+          siteFilterRequired: true,
+          siteIds: ["site-1"],
+        },
+        scopedFactsBundle: {
+          contractVersion: "enms.ai.page-insight.v1",
+          factsSchemaVersion: "enms.ai.facts.v1",
+          primaryPageKey: "nlq",
+          contexts: [
+            {
+              contractVersion: "enms.ai.page-insight.v1",
+              factsSchemaVersion: "enms.ai.facts.v1",
+              pageKey: "nlq",
+              status: "ready",
+              facts: {
+                meterRankingDetails: [
+                  {
+                    label: "冰機 CH1 電源 · MAC-A / 位址 2 / 迴路 1",
+                    consumptionKwh: 3420,
+                    macAddress: "MAC-A",
+                    address: "2",
+                    circuitSeq: 1,
+                    identityKey: "MAC-A|2|1",
+                  },
+                ],
+              },
+              evidence: {
+                dataSources: ["ai_energy_15m_v1"],
+                timeRange: "最近 7 日",
+                queryScope: "nlq scope",
+                confidence: "high",
+              },
+            },
+            {
+              contractVersion: "enms.ai.page-insight.v1",
+              factsSchemaVersion: "enms.ai.facts.v1",
+              pageKey: "eff",
+              status: "ready",
+              facts: {
+                metrics: {
+                  latestBillMonth: "11506",
+                  latestBillAmountNtd: 45678,
+                  latestBillUsageKwh: 10987,
+                },
+              },
+              evidence: {
+                dataSources: ["ai_bill_v1"],
+                timeRange: "最近一期帳單",
+                queryScope: "eff scope",
+                confidence: "high",
+              },
+            },
+          ],
+        },
+        guardrails: {
+          mode: "readonly",
+          factsAlreadyScopedByEnms: true,
+          noSqlFromClient: true,
+          noHtml: true,
+          semanticViewsOnly: true,
+          requireEvidence: true,
+        },
+      }),
+    );
+    const json = await response.json();
+    const blocks = JSON.stringify(json.blocks);
+
+    expect(response.status).toBe(200);
+    expect(blocks).toContain("冰機 CH1 電源");
+    expect(blocks).toContain("3,420 kWh");
+    expect(blocks).toContain("11506");
+    expect(blocks).toContain("45,678 NTD");
+    expect(blocks).not.toContain("台電帳單 / 費率");
+    expect(json.answerContract.chatFactsBundle.pageKeys).toEqual([
+      "nlq",
+      "eff",
+    ]);
+  });
+
+  it("keeps available meter ranking and warns when requested billing bundle facts are missing", async () => {
+    const { POST } = await import("./route.js");
+    const response = await POST(
+      buildRequest({
+        message: "哪個迴路最費電，也看最近帳單",
+        conversationId: "conv-ranking-missing-billing",
+        scope: {
+          userId: "UserA",
+          companyNo: "Pingroun",
+          allSites: false,
+          siteFilterRequired: true,
+          siteIds: ["site-1"],
+        },
+        scopedFactsBundle: {
+          contractVersion: "enms.ai.page-insight.v1",
+          factsSchemaVersion: "enms.ai.facts.v1",
+          primaryPageKey: "nlq",
+          contexts: [
+            {
+              contractVersion: "enms.ai.page-insight.v1",
+              factsSchemaVersion: "enms.ai.facts.v1",
+              pageKey: "nlq",
+              status: "ready",
+              facts: {
+                meterRankingDetails: [
+                  {
+                    label: "冰機 CH1 電源 · MAC-A / 位址 2 / 迴路 1",
+                    consumptionKwh: 3420,
+                    macAddress: "MAC-A",
+                    address: "2",
+                    circuitSeq: 1,
+                    identityKey: "MAC-A|2|1",
+                  },
+                ],
+              },
+              evidence: {
+                dataSources: ["ai_energy_15m_v1"],
+                timeRange: "最近 7 日",
+                queryScope: "nlq scope",
+                confidence: "high",
+              },
+            },
+            {
+              contractVersion: "enms.ai.page-insight.v1",
+              factsSchemaVersion: "enms.ai.facts.v1",
+              pageKey: "eff",
+              status: "empty",
+              facts: {},
+              evidence: {
+                dataSources: ["ai_bill_v1"],
+                timeRange: "最近一期帳單",
+                queryScope: "eff scope",
+                confidence: "medium",
+              },
+              missingData: [
+                {
+                  key: "taipowerBills",
+                  message: "缺台電帳單資料。",
+                },
+              ],
+            },
+          ],
+        },
+        guardrails: {
+          mode: "readonly",
+          factsAlreadyScopedByEnms: true,
+          noSqlFromClient: true,
+          noHtml: true,
+          semanticViewsOnly: true,
+          requireEvidence: true,
+        },
+      }),
+    );
+    const json = await response.json();
+    const blocks = JSON.stringify(json.blocks);
+
+    expect(response.status).toBe(200);
+    expect(blocks).toContain("冰機 CH1 電源");
+    expect(blocks).toContain("3,420 kWh");
+    expect(blocks).toContain("沒有足夠的台電帳單 / 費率資料");
+    expect(blocks).toContain("缺台電帳單資料");
+    expect(json.answerContract.answerKind).toBe("ranking");
+  });
+
   it("does not force latest-data bundle answers for energy-saving advice questions", async () => {
     process.env.ENCLAW_ENMS_STRUCTURED_AGENT_ENABLED = "1";
     structuredAgentMocks.enabled.mockReturnValue(true);
@@ -359,7 +739,7 @@ describe("POST /api/enms/chat", () => {
       ],
       recommendations: [
         {
-          text: "先從空調與長時間運轉迴路排程下手，預估年節省可作為追蹤 KPI。",
+          text: "先從空調與長時間運轉迴路排程下手，5% what-if 年化金額可作為追蹤 KPI。",
           factRefs: ["metrics.quickWinSavingNtd"],
         },
       ],
@@ -451,7 +831,7 @@ describe("POST /api/enms/chat", () => {
     expect(response.status).toBe(200);
     expect(blocks).not.toContain("授權範圍內最新一筆 EnMS 時序資料時間");
     expect(blocks).not.toContain("2026/7/22 10:00:00");
-    expect(blocks).toContain("預估年節省：120,000 NTD");
+    expect(blocks).toContain("5% what-if 年化金額：120,000 NTD");
     expect(blocks).toContain("夜間基載偏高");
     expect(structuredAgentMocks.run).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -468,11 +848,22 @@ describe("POST /api/enms/chat", () => {
   it("does not force EnMS scoped facts onto unrelated general questions", async () => {
     process.env.ENCLAW_ENMS_STRUCTURED_AGENT_ENABLED = "1";
     structuredAgentMocks.enabled.mockReturnValue(true);
+    structuredAgentMocks.runGeneral.mockResolvedValue({
+      text: "我目前沒有即時天氣查詢工具，因此不能直接確認今天實際天氣。請提供城市與資料來源，或改用天氣服務查詢。",
+      confidence: "high",
+    });
     const { POST } = await import("./route.js");
     const response = await POST(
       buildRequest({
         message: "今天天氣如何？",
         conversationId: "conv-general-no-match",
+        history: [
+          {
+            role: "assistant",
+            content:
+              "授權範圍內最新一筆 EnMS 時序資料時間：2026/7/22 10:00:00，電號 04043717102。",
+          },
+        ],
         scopedContext: {
           pageKey: "nlq",
           status: "ready",
@@ -545,11 +936,72 @@ describe("POST /api/enms/chat", () => {
     const payload = JSON.stringify(json);
 
     expect(response.status).toBe(200);
-    expect(json.citations[0].source).toBe("no_match");
-    expect(payload).toContain("沒有命中 EnMS 的能管語意路由");
+    expect(json.intent).toBe("general_question");
+    expect(json.citations[0].source).toBe("general_ai");
+    expect(json.evidence.queryScope).toBe("一般 AI 回覆；未讀取 EnMS scoped facts");
+    expect(payload).toContain("intent=general_question");
+    expect(payload).not.toContain("intent=demand_forecast");
+    expect(payload).toContain("我目前沒有即時天氣查詢工具");
     expect(payload).not.toContain("2026/7/22 10:00:00");
-    expect(payload).not.toContain("預估年節省");
+    expect(payload).not.toContain("5% what-if 年化金額");
     expect(payload).not.toContain("不應把 EnMS 摘要拿來回答天氣問題");
+    expect(structuredAgentMocks.runGeneral).toHaveBeenCalledWith(
+      expect.objectContaining({
+        task: "今天天氣如何？",
+      }),
+    );
+    expect(structuredAgentMocks.runGeneral.mock.calls[0][0]).not.toHaveProperty(
+      "history",
+    );
+    expect(structuredAgentMocks.run).not.toHaveBeenCalled();
+  });
+
+  it("uses the chat planner general route without requiring scoped facts", async () => {
+    process.env.ENCLAW_ENMS_STRUCTURED_AGENT_ENABLED = "1";
+    structuredAgentMocks.enabled.mockReturnValue(true);
+    structuredAgentMocks.runGeneral.mockResolvedValue({
+      text: "今天是 2026 年 7 月 28 日。",
+      confidence: "high",
+    });
+    const { POST } = await import("./route.js");
+    const response = await POST(
+      buildRequest({
+        message: "今天是幾月幾號？",
+        conversationId: "conv-general-plan",
+        chatPlan: {
+          contractVersion: "enms.ai.chat-plan.v1",
+          registryVersion: "test-registry",
+          strategy: "general_ai",
+          intent: "general_question",
+          allowDbFacts: false,
+          allowGeneralAI: true,
+          selectedPageKeys: [],
+        },
+        guardrails: {
+          mode: "readonly",
+          factsAlreadyScopedByEnms: true,
+          noSqlFromClient: true,
+          noHtml: true,
+          semanticViewsOnly: true,
+          allowedViewPrefix: "ai_",
+          requireEvidence: true,
+        },
+      }),
+    );
+    const json = await response.json();
+    const payload = JSON.stringify(json);
+
+    expect(response.status).toBe(200);
+    expect(json.intent).toBe("general_question");
+    expect(json.citations[0].source).toBe("general_ai");
+    expect(payload).toContain("今天是 2026 年 7 月 28 日");
+    expect(payload).not.toContain("EnMS 時序資料時間");
+    expect(payload).not.toContain("ai_energy_15m_v1");
+    expect(structuredAgentMocks.runGeneral).toHaveBeenCalledWith(
+      expect.objectContaining({
+        task: "今天是幾月幾號？",
+      }),
+    );
     expect(structuredAgentMocks.run).not.toHaveBeenCalled();
   });
 
@@ -754,6 +1206,134 @@ describe("POST /api/enms/chat", () => {
     expect(json.answerContract.structuredModelApplied).toBe(false);
   });
 
+  it("does not append structured analysis for precise device lookup answers", async () => {
+    process.env.ENCLAW_ENMS_STRUCTURED_AGENT_ENABLED = "1";
+    structuredAgentMocks.enabled.mockReturnValue(true);
+    structuredAgentMocks.run.mockResolvedValue({
+      summary: "這段節能模型摘要不應混入設備對應答案。",
+      findings: [
+        {
+          text: "模型誤把設備對應題轉成節能建議。",
+          factRefs: ["deviceMappings"],
+        },
+      ],
+      recommendations: [],
+      confidence: "high",
+      knowledgeRefs: ["skills/enms/SKILL.md"],
+    });
+    const { POST } = await import("./route.js");
+    const response = await POST(
+      buildRequest({
+        message: "迴路1 是對應哪個設備？",
+        scopedContext: {
+          pageKey: "nlq",
+          status: "ready",
+          facts: {
+            deviceMappings: [
+              {
+                label: "冰機 CH1 電源 · MAC-A / 位址 2 / 迴路 1",
+                deviceAlias: "冰機 CH1 電源",
+                macAddress: "MAC-A",
+                address: "2",
+                circuitSeq: 1,
+                meterRole: "Sub",
+                accountNumber: "04043717102",
+                siteName: "阿里山",
+              },
+            ],
+          },
+          evidence: {
+            dataSources: ["ai_meter_v1"],
+            queryScope: "siteCount=1",
+            confidence: "high",
+          },
+        },
+        guardrails: {
+          mode: "readonly",
+          factsAlreadyScopedByEnms: true,
+          noSqlFromClient: true,
+          noHtml: true,
+          semanticViewsOnly: true,
+          requireEvidence: true,
+        },
+      }),
+    );
+    const json = await response.json();
+    const blocks = JSON.stringify(json.blocks);
+
+    expect(response.status).toBe(200);
+    expect(json.answerContract.answerKind).toBe("device_lookup");
+    expect(blocks).toContain("冰機 CH1 電源");
+    expect(blocks).toContain("MAC-A");
+    expect(blocks).not.toContain("節能模型摘要");
+    expect(blocks).not.toContain("節能建議");
+    expect(structuredAgentMocks.run).not.toHaveBeenCalled();
+    expect(json.answerContract.structuredModelAttempted).toBe(false);
+    expect(json.answerContract.structuredModelApplied).toBe(false);
+  });
+
+  it("does not append structured analysis for precise meter ranking answers", async () => {
+    process.env.ENCLAW_ENMS_STRUCTURED_AGENT_ENABLED = "1";
+    structuredAgentMocks.enabled.mockReturnValue(true);
+    structuredAgentMocks.run.mockResolvedValue({
+      summary: "這段模型摘要不應混入迴路排行答案。",
+      findings: [
+        {
+          text: "模型誤把排行題轉成需量超約建議。",
+          factRefs: ["ranking"],
+        },
+      ],
+      recommendations: [],
+      confidence: "high",
+      knowledgeRefs: ["skills/enms/SKILL.md"],
+    });
+    const { POST } = await import("./route.js");
+    const response = await POST(
+      buildRequest({
+        message: "哪個迴路最費電？",
+        scopedContext: {
+          pageKey: "nlq",
+          status: "ready",
+          facts: {
+            ranking: [
+              { name: "MAC-A / 位址 2 / 迴路 1", value: 3420 },
+              { name: "MAC-B / 位址 4 / 迴路 1", value: 2150 },
+            ],
+            siteRankings: [
+              { name: "A 場域", value: 9999 },
+            ],
+          },
+          evidence: {
+            dataSources: ["ai_energy_15m_v1"],
+            timeRange: "最近 7 日",
+            queryScope: "siteCount=1",
+            confidence: "high",
+          },
+        },
+        guardrails: {
+          mode: "readonly",
+          factsAlreadyScopedByEnms: true,
+          noSqlFromClient: true,
+          noHtml: true,
+          semanticViewsOnly: true,
+          requireEvidence: true,
+        },
+      }),
+    );
+    const json = await response.json();
+    const blocks = JSON.stringify(json.blocks);
+
+    expect(response.status).toBe(200);
+    expect(json.answerContract.answerKind).toBe("ranking");
+    expect(blocks).toContain("MAC-A / 位址 2 / 迴路 1");
+    expect(blocks).toContain("3,420 kWh");
+    expect(blocks).not.toContain("A 場域");
+    expect(blocks).not.toContain("需量超約建議");
+    expect(structuredAgentMocks.run).not.toHaveBeenCalled();
+    expect(json.answerContract.structuredModelAttempted).toBe(false);
+    expect(json.answerContract.structuredModelApplied).toBe(false);
+  });
+
   it("filters unsupported Chat claims and never appends the model summary", async () => {
     process.env.ENCLAW_ENMS_STRUCTURED_AGENT_ENABLED = "1";
     structuredAgentMocks.enabled.mockReturnValue(true);
@@ -863,6 +1443,54 @@ describe("POST /api/enms/chat", () => {
     expect(JSON.stringify(json)).not.toContain("不應顯示這段內容");
   });
 
+  it("does not trust scoped context without the ai semantic-view prefix guardrail", async () => {
+    const { POST } = await import("./route.js");
+
+    const response = await POST(
+      buildRequest(
+        {
+          message: "請查最近 7 天最大需量",
+          scope: {
+            siteFilterRequired: true,
+            siteIds: ["site-1"],
+          },
+          scopedContext: {
+            pageKey: "demand",
+            status: "ready",
+            facts: {
+              metrics: {
+                currentDemandKw: 82.3,
+              },
+            },
+            analysis: {
+              summary: "不應顯示這段內容",
+            },
+            evidence: {
+              dataSources: ["ai_energy_15m_v1"],
+              queryScope: "siteCount=1",
+              confidence: "high",
+            },
+          },
+          guardrails: {
+            mode: "readonly",
+            factsAlreadyScopedByEnms: true,
+            noSqlFromClient: true,
+            noHtml: true,
+            semanticViewsOnly: true,
+            requireEvidence: true,
+          },
+        },
+        undefined,
+        { preserveGuardrails: true },
+      ),
+    );
+    const json = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(json.citations[0].source).toBe("blocked");
+    expect(JSON.stringify(json)).not.toContain("不應顯示這段內容");
+  });
+
   it("fails closed when scoped facts use an unsupported contract version", async () => {
     const { POST } = await import("./route.js");
 
@@ -941,6 +1569,18 @@ describe("POST /api/enms/chat", () => {
   });
 
   it("answers an exact bill question from trusted scoped facts", async () => {
+    structuredAgentMocks.enabled.mockReturnValue(true);
+    structuredAgentMocks.run.mockResolvedValue({
+      blocks: [
+        {
+          type: "paragraph",
+          text: "模型不應追加這段帳單解讀，避免把 exact facts 帶偏。",
+        },
+      ],
+      citations: [],
+      confidence: "high",
+      intent: "efficiency_analysis",
+    });
     const { POST } = await import("./route.js");
     const response = await POST(
       buildRequest({
@@ -988,9 +1628,18 @@ describe("POST /api/enms/chat", () => {
     expect(JSON.stringify(json.blocks)).toContain("11506");
     expect(JSON.stringify(json.blocks)).toContain("45,678 NTD");
     expect(JSON.stringify(json.blocks)).not.toContain("不應只回整頁摘要");
+    expect(JSON.stringify(json.blocks)).not.toContain("模型不應追加");
+    expect(structuredAgentMocks.run).not.toHaveBeenCalled();
   });
 
   it("does not answer a requested account absent from scoped facts", async () => {
+    structuredAgentMocks.enabled.mockReturnValue(true);
+    structuredAgentMocks.run.mockResolvedValue({
+      blocks: [{ type: "paragraph", text: "模型不應補不存在的帳單。" }],
+      citations: [],
+      confidence: "high",
+      intent: "efficiency_analysis",
+    });
     const { POST } = await import("./route.js");
     const response = await POST(
       buildRequest({
@@ -1031,6 +1680,8 @@ describe("POST /api/enms/chat", () => {
     expect(json.answerContract.answerKind).toBe("missing");
     expect(JSON.stringify(json.blocks)).toContain("99999999999");
     expect(JSON.stringify(json.blocks)).not.toContain("45,678");
+    expect(JSON.stringify(json.blocks)).not.toContain("模型不應補");
+    expect(structuredAgentMocks.run).not.toHaveBeenCalled();
   });
 
   it("disables legacy direct query through an explicit production setting", async () => {

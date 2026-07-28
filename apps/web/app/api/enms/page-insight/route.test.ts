@@ -116,7 +116,7 @@ function buildBody(pageKey = "demand") {
     cards: [
       {
         key: "peakDemand",
-        label: "預測尖峰",
+        label: "趨勢推估尖峰",
         value: "82.0",
         unit: "kW",
       },
@@ -130,7 +130,7 @@ function buildBody(pageKey = "demand") {
       },
       {
         key: "forecastDemand",
-        label: "AI 預測",
+        label: "趨勢推估",
         type: "line",
         points: [
           {
@@ -164,6 +164,8 @@ function buildBody(pageKey = "demand") {
       noSqlFromClient: true,
       requireEvidence: true,
       noHtml: true,
+      semanticViewsOnly: true,
+      allowedViewPrefix: "ai_",
     },
   };
 }
@@ -294,6 +296,28 @@ describe("POST /api/enms/page-insight", () => {
     expect(json.analysis.summary).toContain("必須回傳 evidence");
   });
 
+  it("requires EnMS ai semantic-view guardrails", async () => {
+    const { POST } = await import("./route.js");
+    const missingSemanticViewGuard = buildBody();
+    missingSemanticViewGuard.guardrails.semanticViewsOnly = false;
+
+    const semanticResponse = await POST(buildRequest(missingSemanticViewGuard));
+    const semanticJson = await semanticResponse.json();
+
+    expect(semanticJson.status).toBe("blocked");
+    expect(semanticJson.analysis.summary).toContain("ai_* semantic views");
+
+    const wrongPrefix = buildBody();
+    wrongPrefix.guardrails.allowedViewPrefix = "raw_";
+
+    const prefixResponse = await POST(buildRequest(wrongPrefix));
+    const prefixJson = await prefixResponse.json();
+
+    expect(prefixJson.status).toBe("blocked");
+    expect(prefixJson.missingData[0].key).toBe("guardrails");
+    expect(prefixJson.analysis.summary).toContain("ai_* semantic views");
+  });
+
   it("returns structured demand analysis without replacing EnMS forecast numbers", async () => {
     const { POST } = await import("./route.js");
     const body = buildBody();
@@ -313,7 +337,7 @@ describe("POST /api/enms/page-insight", () => {
     )).toEqual(authoritativeForecast);
     expect(json.analysis.findings).toEqual(
       expect.arrayContaining([
-        expect.stringContaining("EnMS 授權預測尖峰"),
+        expect.stringContaining("EnMS 授權趨勢推估尖峰"),
         expect.stringContaining("契約容量異動"),
       ]),
     );
@@ -408,29 +432,67 @@ describe("POST /api/enms/page-insight", () => {
       summary: "模型摘要不應取代 EnMS 摘要。",
       findings: [
         {
-          text: "需量接近契約警戒區。",
-          factRefs: ["metrics.currentDemandKw"],
+          text: "ROI 回收期約 8 個月。",
+          factRefs: ["metrics.quickWinSavingNtd"],
         },
         {
-          text: "近期耗能呈上升趨勢。",
-          factRefs: ["metrics.currentDemandKw"],
+          text: "夜間基載偏高，建議優先盤點排程。",
+          factRefs: ["metrics.offHourConsumptionRatio"],
         },
       ],
       recommendations: [
         {
-          text: "優先檢查可延後運轉的非關鍵設備。",
-          factRefs: ["metrics.currentDemandKw"],
+          text: "先確認可延後運轉的非關鍵設備。",
+          factRefs: ["opportunities"],
         },
       ],
       confidence: "high",
       knowledgeRefs: ["skills/enms/SKILL.md"],
     });
     const { POST } = await import("./route.js");
-    const body = buildBody();
-    body.facts.metrics.contractCapacityKw = null;
-    body.facts.metrics.projectedPeakContractCapacityKw = null;
-    body.facts.analyticsInputs.contractCapacityKw = null;
-    body.missingData = [
+    const body = buildBody("eff");
+    (
+      body as { missingData: Array<{ key: string; message: string }> }
+    ).missingData = [
+      {
+        key: "taipowerBills",
+        message: "缺台電帳單平均電價，未估算節省金額。",
+      },
+    ];
+
+    const response = await POST(buildRequest(body));
+    const json = await response.json();
+
+    expect(json.status).toBe("ready");
+    expect(json.analysis.findings).not.toContain(
+      "ROI 回收期約 8 個月。",
+    );
+    expect(json.analysis.findings).toContain(
+      "夜間基載偏高，建議優先盤點排程。",
+    );
+    expect(json.analysis.recommendations).toContain(
+      "先確認可延後運轉的非關鍵設備。",
+    );
+    expect(json.orchestration.model.applied).toBe(true);
+  });
+
+  it("skips structured model when required narrative facts would be blocked", async () => {
+    process.env.ENCLAW_ENMS_STRUCTURED_AGENT_ENABLED = "1";
+    structuredAgentMocks.enabled.mockReturnValue(true);
+    structuredAgentMocks.run.mockResolvedValue({
+      summary: "不應執行",
+      findings: [],
+      recommendations: [],
+      confidence: "high",
+      knowledgeRefs: ["skills/enms/SKILL.md"],
+    });
+    const { POST } = await import("./route.js");
+    const body = buildBody("demand");
+    (body.facts.metrics as Record<string, number | null>).contractCapacityKw =
+      null;
+    (
+      body as { missingData: Array<{ key: string; message: string }> }
+    ).missingData = [
       {
         key: "contractCapacity",
         message: "缺少目前有效契約容量。",
@@ -440,15 +502,17 @@ describe("POST /api/enms/page-insight", () => {
     const response = await POST(buildRequest(body));
     const json = await response.json();
 
+    expect(response.status).toBe(200);
     expect(json.status).toBe("ready");
-    expect(json.analysis.findings).not.toContain(
-      "需量接近契約警戒區。",
+    expect(structuredAgentMocks.run).not.toHaveBeenCalled();
+    expect(json.orchestration.model).toEqual(
+      expect.objectContaining({
+        attempted: false,
+        applied: false,
+        fallback: false,
+        skipReason: "skip_structured_model_missing_contract_capacity",
+      }),
     );
-    expect(json.analysis.findings).toContain(
-      "近期耗能呈上升趨勢。",
-    );
-    expect(json.evidence.confidence).toBe("medium");
-    expect(json.orchestration.model.applied).toBe(true);
   });
 
   it.each([

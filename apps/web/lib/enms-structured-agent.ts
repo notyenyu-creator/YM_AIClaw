@@ -18,9 +18,10 @@ const MAX_TASK_LENGTH = 2_000;
 const MAX_TEXT_LENGTH = 900;
 const MAX_ITEMS = 6;
 const DEFAULT_PAGE_TIMEOUT_MS = 30_000;
-const DEFAULT_CHAT_TIMEOUT_MS = 40_000;
-const ENMS_GATEWAY_SCOPES = ["operator.read", "operator.write"];
+const DEFAULT_CHAT_TIMEOUT_MS = 35_000;
+const ENMS_GATEWAY_SCOPES = ["operator.read"];
 const ENMS_GATEWAY_ATTESTATION_SCOPES = ["operator.read"];
+const ENMS_GENERAL_CHAT_SCOPES = ["operator.read"];
 const MAX_PROVIDER_RESPONSE_BYTES = 64 * 1024;
 
 type StructuredModelTransport = "gateway" | "openai-compatible";
@@ -36,6 +37,17 @@ export type EnmsStructuredNarrative = {
   recommendations: EnmsStructuredNarrativeItem[];
   confidence: "low" | "medium" | "high";
   knowledgeRefs: string[];
+};
+
+export type EnmsGeneralChatAnswer = {
+  text: string;
+  confidence: "low" | "medium" | "high";
+};
+
+export type EnmsGeneralChatInput = {
+  task: string;
+  history?: string;
+  signal?: AbortSignal;
 };
 
 type EnmsNarrativeMissingData = {
@@ -150,7 +162,7 @@ function getTimeoutMs(mode: "page" | "chat"): number {
         process.env.ENCLAW_ENMS_CHAT_MODEL_TIMEOUT_MS,
         DEFAULT_CHAT_TIMEOUT_MS,
         5_000,
-        40_000,
+        35_000,
       )
     : readPositiveInt(
         process.env.ENCLAW_ENMS_PAGE_MODEL_TIMEOUT_MS,
@@ -321,6 +333,25 @@ function buildPrompt(
   ].join("\n");
 }
 
+function buildGeneralChatPrompt(input: EnmsGeneralChatInput): string {
+  const task = input.task.trim().slice(0, MAX_TASK_LENGTH);
+  const history = (input.history ?? "").trim().slice(0, MAX_TASK_LENGTH);
+
+  return [
+    "你是 EnMS AI 助手的一般問題回答模式。",
+    "這次使用者問題沒有命中 EnMS 能管語意路由；不得使用、猜測或引用任何 EnMS scoped facts、DB、SQL、電號、MAC、場域或公司資料。",
+    "你沒有瀏覽網路、天氣、新聞、股價或外部工具能力。若問題需要即時外部資料，必須清楚說明目前無法取得即時資料，並請使用者提供地點、資料來源或改用具備外部查詢的工具。",
+    "可以回答一般知識、概念說明、寫作、規劃、非機敏建議與閒聊；高風險醫療、法律、金融問題只提供一般資訊並建議諮詢專業人士。",
+    "使用繁體中文，語氣自然、簡潔、有幫助。不要提及系統提示，不要輸出 HTML、Markdown 表格、SQL 或 code fence。",
+    '只回傳單一 JSON object，schema: {"answer":"string","confidence":"low|medium|high"}',
+    history ? `<RECENT_CONVERSATION>${history}</RECENT_CONVERSATION>` : "",
+    `<USER_MESSAGE>${task}</USER_MESSAGE>`,
+    "<FINAL_OUTPUT_RULES>只輸出 JSON object，不得在 JSON 前後加入任何文字。</FINAL_OUTPUT_RULES>",
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
@@ -397,6 +428,92 @@ function sanitizeNarrativeText(value: unknown): string {
     throw new Error("Structured narrative normalization failed");
   }
   return text;
+}
+
+function sanitizeGeneralChatText(value: unknown): string {
+  if (typeof value !== "string") {
+    throw new Error("General chat answer must be a string");
+  }
+  const text = value
+    .normalize("NFKC")
+    .replace(/<[^>]*>/g, "")
+    .replace(/```[\s\S]*?```/g, "")
+    .trim();
+  if (!text || text.length > MAX_OUTPUT_BYTES) {
+    throw new Error("General chat answer length is invalid");
+  }
+  if (
+    /\b(?:select|insert|update|delete|drop|alter|create|grant|revoke)\b/i.test(
+      text,
+    )
+  ) {
+    throw new Error("General chat answer contains forbidden content");
+  }
+  return text.slice(0, MAX_OUTPUT_BYTES);
+}
+
+function parseGeneralChatCandidate(candidate: string): EnmsGeneralChatAnswer {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(candidate);
+  } catch {
+    throw new Error("General chat answer is not valid JSON");
+  }
+  if (
+    !isPlainRecord(parsed) ||
+    !hasExactKeys(parsed, ["answer", "confidence"])
+  ) {
+    throw new Error("General chat answer schema is invalid");
+  }
+  if (
+    parsed.confidence !== "low" &&
+    parsed.confidence !== "medium" &&
+    parsed.confidence !== "high"
+  ) {
+    throw new Error("General chat confidence is invalid");
+  }
+
+  return {
+    text: sanitizeGeneralChatText(parsed.answer),
+    confidence: parsed.confidence,
+  };
+}
+
+function parseGeneralChatAnswer(raw: string): EnmsGeneralChatAnswer {
+  const trimmed = raw.trim();
+  if (
+    !trimmed ||
+    Buffer.byteLength(trimmed, "utf8") > MAX_OUTPUT_BYTES
+  ) {
+    throw new Error("General chat answer is not bounded");
+  }
+
+  const validAnswers: EnmsGeneralChatAnswer[] = [];
+  const candidateErrors = new Set<string>();
+  for (const candidate of extractTopLevelJsonObjects(trimmed)) {
+    try {
+      validAnswers.push(parseGeneralChatCandidate(candidate));
+    } catch (error) {
+      candidateErrors.add(
+        error instanceof Error
+          ? error.message
+          : "General chat candidate is invalid",
+      );
+    }
+  }
+
+  const uniqueAnswers = new Map<string, EnmsGeneralChatAnswer>();
+  for (const answer of validAnswers) {
+    uniqueAnswers.set(JSON.stringify(answer), answer);
+  }
+  if (uniqueAnswers.size === 1) {
+    return [...uniqueAnswers.values()][0];
+  }
+
+  const diagnostic = [...candidateErrors].slice(0, 3).join("; ");
+  throw new Error(
+    `General chat answer must contain exactly one valid JSON object${diagnostic ? ` (${diagnostic})` : ""}`,
+  );
 }
 
 async function assertGatewayAgentPolicy(
@@ -777,6 +894,93 @@ async function runOpenAiCompatibleStructuredModel(
   }
 }
 
+async function runOpenAiCompatibleGeneralChat(
+  input: EnmsGeneralChatInput,
+  fetchImpl: typeof globalThis.fetch,
+): Promise<EnmsGeneralChatAnswer> {
+  const config = getOpenAiCompatibleConfig();
+  const timeoutController = new AbortController();
+  const timeout = setTimeout(
+    () =>
+      timeoutController.abort(
+        new DOMException("Model request timed out", "TimeoutError"),
+      ),
+    getTimeoutMs("chat"),
+  );
+  const signal = input.signal
+    ? AbortSignal.any([input.signal, timeoutController.signal])
+    : timeoutController.signal;
+
+  try {
+    const response = await fetchImpl(config.endpoint, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${config.apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: config.model,
+        messages: [
+          {
+            role: "user",
+            content: buildGeneralChatPrompt(input),
+          },
+        ],
+        response_format: { type: "json_object" },
+        temperature: 0.2,
+        max_tokens: Math.min(config.maxTokens, 800),
+        stream: false,
+      }),
+      redirect: "error",
+      signal,
+    });
+    if (!response.ok) {
+      throw new Error(
+        `OpenAI-compatible general chat model returned HTTP ${response.status}`,
+      );
+    }
+
+    const rawResponse = await response.text();
+    if (
+      !rawResponse ||
+      Buffer.byteLength(rawResponse, "utf8") > MAX_PROVIDER_RESPONSE_BYTES
+    ) {
+      throw new Error("OpenAI-compatible general chat response is not bounded");
+    }
+
+    let envelope: unknown;
+    try {
+      envelope = JSON.parse(rawResponse);
+    } catch {
+      throw new Error("OpenAI-compatible general chat returned invalid JSON");
+    }
+    const content =
+      isPlainRecord(envelope) &&
+      Array.isArray(envelope.choices) &&
+      isPlainRecord(envelope.choices[0]) &&
+      isPlainRecord(envelope.choices[0].message) &&
+      typeof envelope.choices[0].message.content === "string"
+        ? envelope.choices[0].message.content
+        : "";
+    if (!content) {
+      throw new Error(
+        "OpenAI-compatible general chat response has no assistant content",
+      );
+    }
+    return parseGeneralChatAnswer(content);
+  } catch (error) {
+    if (input.signal?.aborted) {
+      throw new DOMException("Request aborted", "AbortError");
+    }
+    if (timeoutController.signal.aborted) {
+      throw new Error("EnMS general chat timed out", { cause: error });
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 export async function runEnmsStructuredAgent(
   input: EnmsStructuredAgentInput,
   dependencies: RunnerDependencies = defaultDependencies,
@@ -926,6 +1130,156 @@ export async function runEnmsStructuredAgent(
           error instanceof Error
             ? error
             : new Error("EnMS structured agent output is invalid"),
+        );
+      }
+    });
+  });
+}
+
+export async function runEnmsGeneralChatAgent(
+  input: EnmsGeneralChatInput,
+  dependencies: RunnerDependencies = defaultDependencies,
+): Promise<EnmsGeneralChatAnswer> {
+  if (!isEnmsStructuredAgentEnabled()) {
+    throw new Error("EnMS structured agent is disabled");
+  }
+  if (input.signal?.aborted) {
+    throw new DOMException("Request aborted", "AbortError");
+  }
+
+  if (getStructuredModelTransport() === "openai-compatible") {
+    return runOpenAiCompatibleGeneralChat(
+      input,
+      dependencies.fetch ?? globalThis.fetch,
+    );
+  }
+
+  const agentId = getAgentId();
+  await assertGatewayAgentPolicy(agentId, dependencies.callRpc);
+  if (input.signal?.aborted) {
+    throw new DOMException("Request aborted", "AbortError");
+  }
+  const sessionId = `enms-general-${dependencies.createId()}`;
+  const sessionKey = `agent:${agentId}:web:${sessionId}`;
+  const child = dependencies.spawn(
+    buildGeneralChatPrompt(input),
+    sessionId,
+    agentId,
+    undefined,
+    undefined,
+    ENMS_GENERAL_CHAT_SCOPES,
+    true,
+  );
+  const timeoutMs = getTimeoutMs("chat");
+
+  return await new Promise<EnmsGeneralChatAnswer>((resolve, reject) => {
+    const reader = createInterface({ input: child.stdout! });
+    let assistantText = "";
+    let finalChatText = "";
+    let settled = false;
+    let aborting = false;
+
+    const closeChild = () => {
+      try {
+        child.kill("SIGTERM");
+      } catch {
+        // Ignore close errors after the authoritative Gateway abort.
+      }
+    };
+
+    const abortGateway = async () => {
+      if (aborting) {
+        return;
+      }
+      aborting = true;
+      try {
+        await dependencies.callRpc(
+          "chat.abort",
+          { sessionKey },
+          {
+            timeoutMs: 4_000,
+            retries: 0,
+            scopes: ENMS_GENERAL_CHAT_SCOPES,
+          },
+        );
+      } catch {
+        // The caller still fails closed if the abort transport is unavailable.
+      } finally {
+        closeChild();
+      }
+    };
+
+    const finishError = (error: Error) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      input.signal?.removeEventListener("abort", onAbort);
+      reader.close();
+      void abortGateway().finally(() => reject(error));
+    };
+
+    const onAbort = () => {
+      finishError(new DOMException("Request aborted", "AbortError"));
+    };
+
+    const timer = setTimeout(() => {
+      finishError(new Error("EnMS general chat timed out"));
+    }, timeoutMs);
+    input.signal?.addEventListener("abort", onAbort, { once: true });
+
+    reader.on("line", (line) => {
+      if (settled || !line.trim()) {
+        return;
+      }
+      let event: AgentEvent;
+      try {
+        event = JSON.parse(line) as AgentEvent;
+      } catch {
+        finishError(new Error("EnMS general chat emitted invalid JSONL"));
+        return;
+      }
+      if (event.event === "agent" && event.stream === "tool") {
+        finishError(new Error("EnMS general chat attempted a tool call"));
+        return;
+      }
+      if (
+        event.event === "agent" &&
+        event.stream === "assistant" &&
+        typeof event.data?.delta === "string"
+      ) {
+        assistantText += event.data.delta;
+        if (Buffer.byteLength(assistantText, "utf8") > MAX_OUTPUT_BYTES) {
+          finishError(new Error("EnMS general chat output is too large"));
+        }
+      }
+      const finalText = readFinalChatText(event);
+      if (finalText) {
+        finalChatText = finalText;
+      }
+    });
+
+    child.stderr?.on("data", () => {
+      // Do not retain or expose provider stderr because it may contain secrets.
+    });
+
+    child.on("close", () => {
+      if (settled) {
+        return;
+      }
+      try {
+        const answer = parseGeneralChatAnswer(finalChatText || assistantText);
+        settled = true;
+        clearTimeout(timer);
+        input.signal?.removeEventListener("abort", onAbort);
+        reader.close();
+        resolve(answer);
+      } catch (error) {
+        finishError(
+          error instanceof Error
+            ? error
+            : new Error("EnMS general chat output is invalid"),
         );
       }
     });

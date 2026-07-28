@@ -6,6 +6,7 @@ import type { AgentProcessHandle } from "./agent-runner";
 import {
   filterEnmsStructuredNarrative,
   parseEnmsStructuredNarrative,
+  runEnmsGeneralChatAgent,
   runEnmsStructuredAgent,
 } from "./enms-structured-agent";
 
@@ -357,7 +358,7 @@ describe("EnMS structured agent", () => {
       "enms-bff",
       undefined,
       undefined,
-      ["operator.read", "operator.write"],
+      ["operator.read"],
       true,
     );
     expect(callRpc).toHaveBeenCalledWith(
@@ -368,6 +369,48 @@ describe("EnMS structured agent", () => {
         retries: 0,
         scopes: ["operator.read"],
       },
+    );
+  });
+
+  it("runs unrelated general chat with read-only Gateway scopes", async () => {
+    const process = createProcessHandle();
+    const spawn = vi.fn(() => process.handle);
+    const callRpc = createGatewayRpcMock();
+    const promise = runEnmsGeneralChatAgent(
+      { task: "今天天氣如何？" },
+      {
+        spawn,
+        callRpc,
+        createId: () => "general-1",
+      },
+    );
+
+    process.stdout.write(
+      `${JSON.stringify({
+        event: "agent",
+        stream: "assistant",
+        data: {
+          delta: JSON.stringify({
+            answer: "我目前沒有即時天氣查詢工具，請改用天氣服務確認。",
+            confidence: "high",
+          }),
+        },
+      })}\n`,
+    );
+    process.stdout.end();
+    await new Promise((resolve) => setImmediate(resolve));
+    process.emitter.emit("close", 0, null);
+
+    const result = await promise;
+    expect(result.text).toContain("即時天氣查詢工具");
+    expect(spawn).toHaveBeenCalledWith(
+      expect.stringContaining("一般問題回答模式"),
+      "enms-general-general-1",
+      "enms-bff",
+      undefined,
+      undefined,
+      ["operator.read"],
+      true,
     );
   });
 
@@ -508,7 +551,7 @@ describe("EnMS structured agent", () => {
       {
         timeoutMs: 4_000,
         retries: 0,
-        scopes: ["operator.read", "operator.write"],
+        scopes: ["operator.read"],
       },
     );
     expect(process.kill).toHaveBeenCalled();
@@ -554,7 +597,7 @@ describe("EnMS structured agent", () => {
       {
         timeoutMs: 4_000,
         retries: 0,
-        scopes: ["operator.read", "operator.write"],
+        scopes: ["operator.read"],
       },
     );
   });

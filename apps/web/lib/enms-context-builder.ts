@@ -181,9 +181,26 @@ export function detectEnmsIntent(message: string): {
       normalizedMessage.includes("比較") ||
       normalizedMessage.includes("最差") ||
       normalizedMessage.includes("低於建議值"));
+  const asksSiteBenchmarking =
+    (normalizedMessage.includes("場域") ||
+      normalizedMessage.includes("各場域") ||
+      normalizedMessage.includes("多場域") ||
+      normalizedMessage.includes("廠區") ||
+      normalizedMessage.includes("區域") ||
+      normalizedMessage.includes("site")) &&
+    (normalizedMessage.includes("比較") ||
+      normalizedMessage.includes("排名") ||
+      normalizedMessage.includes("排行") ||
+      normalizedMessage.includes("benchmark") ||
+      normalizedMessage.includes("用電") ||
+      normalizedMessage.includes("能耗") ||
+      normalizedMessage.includes("耗電") ||
+      normalizedMessage.includes("績效"));
 
   return {
-    intent: asksPowerFactorComparison ? "site_benchmarking" : bestIntent,
+    intent: asksPowerFactorComparison || asksSiteBenchmarking
+      ? "site_benchmarking"
+      : bestIntent,
     matchedKeywords: uniqueMatched,
     totalMatches: uniqueMatched.length,
   };

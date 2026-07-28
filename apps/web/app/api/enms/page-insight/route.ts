@@ -92,6 +92,8 @@ type PageInsightRequest = {
     noSqlFromClient?: boolean;
     requireEvidence?: boolean;
     noHtml?: boolean;
+    semanticViewsOnly?: boolean;
+    allowedViewPrefix?: string;
   };
 };
 
@@ -225,6 +227,62 @@ function lowerConfidence(
   return rank[normalizedCurrent] <= rank[model]
     ? normalizedCurrent
     : model;
+}
+
+function hasMissingDataKey(
+  missingData: MissingData[],
+  ...fragments: string[]
+): boolean {
+  const normalizedFragments = fragments.map((fragment) =>
+    fragment.toLowerCase(),
+  );
+  return missingData.some((item) => {
+    const key = sanitizeText(item.key, 120).toLowerCase();
+    return normalizedFragments.some((fragment) => key.includes(fragment));
+  });
+}
+
+function shouldAttemptStructuredNarrative(
+  pageKey: EnmsPageKey,
+  facts: Record<string, unknown>,
+  missingData: MissingData[],
+): { attempt: boolean; reason?: string } {
+  if (
+    pageKey === "demand" &&
+    hasMissingDataKey(missingData, "contractcapacity")
+  ) {
+    return {
+      attempt: false,
+      reason:
+        "skip_structured_model_missing_contract_capacity",
+    };
+  }
+
+  if (
+    pageKey === "bench" &&
+    hasMissingDataKey(missingData, "normalization")
+  ) {
+    return {
+      attempt: false,
+      reason:
+        "skip_structured_model_missing_benchmark_normalization",
+    };
+  }
+
+  if (
+    pageKey === "eff" &&
+    hasMissingDataKey(missingData, "taipowerbill", "tariff", "rate") &&
+    hasMissingDataKey(missingData, "productionvolume") &&
+    !Array.isArray(facts.opportunities)
+  ) {
+    return {
+      attempt: false,
+      reason:
+        "skip_structured_model_missing_efficiency_cost_and_production_context",
+    };
+  }
+
+  return { attempt: true };
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -362,7 +420,7 @@ function buildDemandEnrichment(
     projectedPeakContractCapacityKw !== null
   ) {
     findings.push(
-      `EnMS 授權預測尖峰為 ${projectedPeakDemandKw.toFixed(1)} kW，該時間點契約容量為 ${projectedPeakContractCapacityKw.toFixed(1)} kW${utilizationPercent === undefined ? "" : `，使用率約 ${utilizationPercent.toFixed(1)}%`}。`,
+      `EnMS 授權趨勢推估尖峰為 ${projectedPeakDemandKw.toFixed(1)} kW，該時間點契約容量為 ${projectedPeakContractCapacityKw.toFixed(1)} kW${utilizationPercent === undefined ? "" : `，使用率約 ${utilizationPercent.toFixed(1)}%`}。`,
     );
   }
 
@@ -607,6 +665,12 @@ function validateGuardrails(body: PageInsightRequest): string | null {
   ) {
     return "缺少必要的 SQL/HTML 安全限制";
   }
+  if (
+    body.guardrails?.semanticViewsOnly !== true ||
+    body.guardrails?.allowedViewPrefix !== "ai_"
+  ) {
+    return "page insight 只接受 ai_* semantic views";
+  }
   if (body.guardrails?.requireEvidence !== true) {
     return "page insight 必須回傳 evidence";
   }
@@ -760,6 +824,7 @@ export async function POST(req: Request) {
   let structuredModelAttempted = false;
   let structuredModelApplied = false;
   let structuredModelKnowledgeRefs: string[] = [];
+  let structuredModelSkipReason: string | null = null;
   const missingData = sanitizeMissingData(body.missingData);
 
   if (missingRequiredFactGroups.length > 0) {
@@ -812,8 +877,16 @@ export async function POST(req: Request) {
     confidence = enrichment.confidence;
   }
 
+  const structuredNarrativePlan = shouldAttemptStructuredNarrative(
+    pageKey,
+    facts,
+    missingData,
+  );
+  structuredModelSkipReason = structuredNarrativePlan.reason ?? null;
+
   if (
     missingRequiredFactGroups.length === 0 &&
+    structuredNarrativePlan.attempt &&
     isEnmsStructuredAgentEnabled()
   ) {
     structuredModelAttempted = true;
@@ -938,6 +1011,7 @@ export async function POST(req: Request) {
         applied: structuredModelApplied,
         fallback:
           structuredModelAttempted && !structuredModelApplied,
+        skipReason: structuredModelSkipReason,
         knowledgeRefs: structuredModelKnowledgeRefs,
       },
     },

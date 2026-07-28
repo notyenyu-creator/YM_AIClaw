@@ -1,4 +1,8 @@
-import { matchesEnmsChatSemanticRoute } from "./enms-capability-registry";
+import {
+  isEnmsDeviceLookupQuestion,
+  isEnmsLatestDataQuestion,
+  matchesEnmsChatSemanticRoute,
+} from "./enms-capability-registry";
 
 export type EnmsScopedAnswerContext = {
   pageKey?: string;
@@ -48,6 +52,7 @@ export type EnmsScopedAnswerResult = {
   answerKind:
     | "billing"
     | "demand"
+    | "device_lookup"
     | "ranking"
     | "account"
     | "time_range"
@@ -61,6 +66,31 @@ type NamedValue = {
   name: string;
   value: number | null;
   note: string;
+};
+
+type DeviceMapping = {
+  label: string;
+  meterId: string;
+  deviceName: string;
+  deviceAlias: string;
+  macAddress: string;
+  address: string;
+  circuitSeq: number | null;
+  meterRole: string;
+  accountNumber: string;
+  accountName: string;
+  siteName: string;
+  identityKey: string;
+};
+
+type CommonMetricDefinition = {
+  matches: (value: string) => boolean;
+  paths: string[];
+  label: string;
+  unit: string;
+  pathLabels?: Record<string, string>;
+  pathUnits?: Record<string, string>;
+  fallbackFromOpportunities?: boolean;
 };
 
 const NUMBER_FORMAT = new Intl.NumberFormat("zh-TW", {
@@ -126,7 +156,15 @@ function formatTaipeiTimestamp(value: string | undefined): string {
   });
 }
 
-function readNamedValues(value: unknown): NamedValue[] {
+function readNamedValues(
+  value: unknown,
+  valueKeys: string[] = [
+    "value",
+    "consumptionKwh",
+    "totalConsumptionKwh",
+    "usageKwh",
+  ],
+): NamedValue[] {
   if (!Array.isArray(value)) {
     return [];
   }
@@ -137,7 +175,9 @@ function readNamedValues(value: unknown): NamedValue[] {
       const name =
         sanitizeText(getCaseInsensitive(record, "name")) ||
         sanitizeText(getCaseInsensitive(record, "label"));
-      const rawValue = getCaseInsensitive(record, "value");
+      const rawValue = valueKeys
+        .map((key) => getCaseInsensitive(record, key))
+        .find((item) => typeof item === "number" && Number.isFinite(item));
       const numericValue =
         typeof rawValue === "number" && Number.isFinite(rawValue)
           ? rawValue
@@ -152,6 +192,46 @@ function readNamedValues(value: unknown): NamedValue[] {
       };
     })
     .filter((item): item is NamedValue => item !== null);
+}
+
+function readDeviceMappings(value: unknown): DeviceMapping[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((item): DeviceMapping | null => {
+      const record = asRecord(item);
+      const rawCircuitSeq = getCaseInsensitive(record, "circuitSeq");
+      const circuitSeq =
+        typeof rawCircuitSeq === "number" && Number.isFinite(rawCircuitSeq)
+          ? rawCircuitSeq
+          : typeof rawCircuitSeq === "string" && rawCircuitSeq.trim()
+            ? Number(rawCircuitSeq)
+            : null;
+      const mapping: DeviceMapping = {
+        label: sanitizeText(getCaseInsensitive(record, "label")),
+        meterId: sanitizeText(getCaseInsensitive(record, "meterId")),
+        deviceName: sanitizeText(getCaseInsensitive(record, "deviceName")),
+        deviceAlias: sanitizeText(getCaseInsensitive(record, "deviceAlias")),
+        macAddress: sanitizeText(getCaseInsensitive(record, "macAddress")),
+        address: sanitizeText(getCaseInsensitive(record, "address")),
+        circuitSeq: circuitSeq !== null && Number.isFinite(circuitSeq)
+          ? circuitSeq
+          : null,
+        meterRole: sanitizeText(getCaseInsensitive(record, "meterRole")),
+        accountNumber: sanitizeText(getCaseInsensitive(record, "accountNumber")),
+        accountName: sanitizeText(getCaseInsensitive(record, "accountName")),
+        siteName: sanitizeText(getCaseInsensitive(record, "siteName")),
+        identityKey: sanitizeText(getCaseInsensitive(record, "identityKey")),
+      };
+      if (!mapping.label && !mapping.macAddress && !mapping.meterId) {
+        return null;
+      }
+
+      return mapping;
+    })
+    .filter((item): item is DeviceMapping => item !== null);
 }
 
 function collectAccountNumbers(
@@ -188,6 +268,16 @@ function collectAccountNumbers(
 function findRequestedAccountNumber(message: string): string {
   const match = message.match(/(?:\d[\s-]?){8,14}/);
   return match ? match[0].replace(/[^\d]/g, "") : "";
+}
+
+function findRequestedCircuitSeq(message: string): number | null {
+  const match = message.match(/(?:迴路|回路|ch|circuit)\s*[-#:]?\s*(\d{1,3})/i);
+  if (!match) {
+    return null;
+  }
+
+  const value = Number(match[1]);
+  return Number.isFinite(value) ? value : null;
 }
 
 function normalizeAccountNumber(value: string): string {
@@ -250,6 +340,26 @@ function buildMissingAnswer(
   };
 }
 
+function inferMissingSubject(
+  message: string,
+  context: EnmsScopedAnswerContext,
+): string {
+  const missingText = (context.missingData ?? [])
+    .map((item) => `${sanitizeText(item.key)} ${sanitizeText(item.message)}`)
+    .join(" ");
+  const evidence = `${message} ${missingText}`;
+  if (/帳單|台電|電費|費率|平均電價|應繳|bill|billing/i.test(evidence)) {
+    return "台電帳單 / 費率";
+  }
+  if (/需量|契約容量|超約|降載|尖峰|demand|kw/i.test(evidence)) {
+    return "需量 / 契約容量";
+  }
+  if (/排名|排行|最耗電|最費電|耗電|用電最高|迴路|電表|kwh/i.test(evidence)) {
+    return "排名";
+  }
+  return "本題";
+}
+
 function answerBilling(
   message: string,
   context: EnmsScopedAnswerContext,
@@ -260,28 +370,77 @@ function answerBilling(
   }
 
   const metrics = asRecord(getCaseInsensitive(facts, "metrics"));
-  const month = getText(metrics, "latestBillMonth");
-  const amount = getNumber(metrics, "latestBillAmountNtd");
-  const usage = getNumber(metrics, "latestBillUsageKwh");
-  const averageRate = getNumber(metrics, "averageRateNtdPerKwh");
+  const billDetails = Array.isArray(getCaseInsensitive(facts, "billDetails"))
+    ? (getCaseInsensitive(facts, "billDetails") as unknown[])
+        .map(asRecord)
+        .filter((item) => sanitizeText(getCaseInsensitive(item, "accountNumber")))
+    : [];
+  const requestedAccount = findRequestedAccountNumber(message);
+  const selectedBill = requestedAccount
+    ? billDetails.find((item) =>
+        normalizeAccountNumber(sanitizeText(getCaseInsensitive(item, "accountNumber"))) ===
+          requestedAccount
+      )
+    : billDetails[0];
+  if (requestedAccount && billDetails.length > 0 && !selectedBill) {
+    return buildMissingAnswer(context, `電號 ${requestedAccount} 的台電帳單 / 費率`);
+  }
+
+  const month = selectedBill
+    ? sanitizeText(getCaseInsensitive(selectedBill, "billingMonth"))
+    : getText(metrics, "latestBillMonth");
+  const amount = selectedBill
+    ? typeof getCaseInsensitive(selectedBill, "totalAmountNtd") === "number"
+      ? (getCaseInsensitive(selectedBill, "totalAmountNtd") as number)
+      : null
+    : getNumber(metrics, "latestBillAmountNtd");
+  const usage = selectedBill
+    ? typeof getCaseInsensitive(selectedBill, "usageKwh") === "number"
+      ? (getCaseInsensitive(selectedBill, "usageKwh") as number)
+      : null
+    : getNumber(metrics, "latestBillUsageKwh");
+  const averageRate = selectedBill
+    ? typeof getCaseInsensitive(selectedBill, "averageRateNtdPerKwh") === "number"
+      ? (getCaseInsensitive(selectedBill, "averageRateNtdPerKwh") as number)
+      : null
+    : getNumber(metrics, "averageRateNtdPerKwh");
+  const accountLine = selectedBill
+    ? sanitizeText(getCaseInsensitive(selectedBill, "accountNumber"))
+    : "";
   const matchedFactPaths: string[] = [];
   const lines: string[] = [];
 
+  if (accountLine) {
+    lines.push(`電號：${accountLine}`);
+    matchedFactPaths.push("facts.billDetails.accountNumber");
+  }
   if (month) {
     lines.push(`最近一期帳單月份：${month}`);
-    matchedFactPaths.push("facts.metrics.latestBillMonth");
+    matchedFactPaths.push(
+      selectedBill ? "facts.billDetails.billingMonth" : "facts.metrics.latestBillMonth",
+    );
   }
   if (amount !== null) {
     lines.push(`最近一期應繳金額：${formatNumber(amount, "NTD")}`);
-    matchedFactPaths.push("facts.metrics.latestBillAmountNtd");
+    matchedFactPaths.push(
+      selectedBill
+        ? "facts.billDetails.totalAmountNtd"
+        : "facts.metrics.latestBillAmountNtd",
+    );
   }
   if (usage !== null) {
     lines.push(`最近一期用電量：${formatNumber(usage, "kWh")}`);
-    matchedFactPaths.push("facts.metrics.latestBillUsageKwh");
+    matchedFactPaths.push(
+      selectedBill ? "facts.billDetails.usageKwh" : "facts.metrics.latestBillUsageKwh",
+    );
   }
   if (averageRate !== null) {
     lines.push(`本次分析採用平均電價：${formatNumber(averageRate, "NTD/kWh")}`);
-    matchedFactPaths.push("facts.metrics.averageRateNtdPerKwh");
+    matchedFactPaths.push(
+      selectedBill
+        ? "facts.billDetails.averageRateNtdPerKwh"
+        : "facts.metrics.averageRateNtdPerKwh",
+    );
   }
 
   if (lines.length === 0) {
@@ -323,7 +482,7 @@ function answerDemand(
     },
     {
       path: "projectedPeakDemandKw",
-      label: "預測尖峰需量",
+      label: "趨勢推估尖峰需量",
       unit: "kW",
       include: /預測|未來|尖峰|超約/i.test(message),
     },
@@ -372,8 +531,8 @@ function answerDemand(
   const risk =
     contractCapacity !== null && projectedPeak !== null
       ? projectedPeak > contractCapacity
-        ? `預測尖峰高於契約容量 ${formatNumber(projectedPeak - contractCapacity, "kW")}，存在超約風險。`
-        : `預測尖峰仍低於契約容量 ${formatNumber(contractCapacity - projectedPeak, "kW")}。`
+        ? `趨勢推估尖峰高於契約容量 ${formatNumber(projectedPeak - contractCapacity, "kW")}，需人工確認超約風險。`
+        : `趨勢推估尖峰仍低於契約容量 ${formatNumber(contractCapacity - projectedPeak, "kW")}。`
       : "";
 
   return {
@@ -404,14 +563,39 @@ function answerRanking(
   context: EnmsScopedAnswerContext,
   facts: Record<string, unknown>,
 ): EnmsScopedAnswerResult | null {
-  if (!/排名|排行|最高|最低|最耗電|場域比較|哪個場域|哪個迴路/i.test(message)) {
+  if (isEnmsDeviceLookupQuestion(message)) {
+    return null;
+  }
+  if (
+    !/排名|排行|最高|最低|最耗電|最費電|耗電最高|用電最高|場域比較|哪個場域|哪個迴路.{0,8}(?:費電|耗電|用電)|(?:費電|耗電|用電).{0,8}迴路/i
+      .test(message)
+  ) {
+    return null;
+  }
+  if (
+    /需量|kw|demand/i.test(message) &&
+    !/迴路|回路|電表|mac|address|位址|地址|circuit|meter/i.test(message)
+  ) {
     return null;
   }
 
-  const sources: Array<{ path: string; values: NamedValue[] }> = [
+  const siteRankingSource = {
+    path: "facts.siteRankings",
+    values: readNamedValues(getCaseInsensitive(facts, "siteRankings")),
+  };
+  const meterDemandRankingSources: Array<{ path: string; values: NamedValue[] }> = [
     {
-      path: "facts.siteRankings",
-      values: readNamedValues(getCaseInsensitive(facts, "siteRankings")),
+      path: "facts.meterRankingDetails.peakDemandKw",
+      values: readNamedValues(
+        getCaseInsensitive(facts, "meterRankingDetails"),
+        ["peakDemandKw"],
+      ),
+    },
+  ];
+  const meterRankingSources: Array<{ path: string; values: NamedValue[] }> = [
+    {
+      path: "facts.meterRankingDetails",
+      values: readNamedValues(getCaseInsensitive(facts, "meterRankingDetails")),
     },
     {
       path: "facts.ranking",
@@ -422,9 +606,10 @@ function answerRanking(
       values: readNamedValues(getCaseInsensitive(facts, "topLoads")),
     },
   ];
+  const chartRankingSources: Array<{ path: string; values: NamedValue[] }> = [];
   for (const series of context.chartSeries ?? []) {
     if (/ranking|排行|排名/i.test(series.key ?? series.label ?? "")) {
-      sources.push({
+      chartRankingSources.push({
         path: `chartSeries.${series.key ?? "ranking"}`,
         values: (series.points ?? [])
           .map((point) => ({
@@ -439,10 +624,24 @@ function answerRanking(
       });
     }
   }
+  const asksMeterRanking =
+    /迴路|回路|電表|MAC|CircuitSeq|哪個迴路|哪個電表/i.test(message) &&
+    !/場域|site/i.test(message);
+  const asksConsumptionRanking =
+    /最耗電|最費電|耗電|費電|用電|耗能|kWh/i.test(message);
+  const asksDemandRanking =
+    asksMeterRanking && /需量|kw|demand/i.test(message) && !asksConsumptionRanking;
+  const sources = asksDemandRanking
+    ? meterDemandRankingSources
+    : asksMeterRanking
+    ? [...meterRankingSources, ...chartRankingSources, siteRankingSource]
+    : [siteRankingSource, ...meterRankingSources, ...chartRankingSources];
+  const valueUnit = asksDemandRanking ? "kW" : "kWh";
+  const missingSubject = asksDemandRanking ? "迴路 / 電表需量排名" : "排名";
 
   const source = sources.find((candidate) => candidate.values.length > 0);
   if (!source) {
-    return buildMissingAnswer(context, "排名");
+    return buildMissingAnswer(context, missingSubject);
   }
   const lowestFirst = /最低|最少/.test(message);
   const sorted = source.values.toSorted((left, right) => {
@@ -472,12 +671,73 @@ function answerRanking(
           const value =
             item.value === null
               ? "數值未提供"
-              : NUMBER_FORMAT.format(item.value);
+              : `${NUMBER_FORMAT.format(item.value)} ${valueUnit}`;
           return `#${rank} ${item.name}：${value}${item.note ? `（${item.note}）` : ""}`;
         })
         .join("\n"),
       `排名時間範圍：${sanitizeText(context.evidence?.timeRange) || "EnMS 未提供"}`,
     ].join("\n\n"),
+  };
+}
+
+function answerDeviceLookup(
+  message: string,
+  context: EnmsScopedAnswerContext,
+  facts: Record<string, unknown>,
+): EnmsScopedAnswerResult | null {
+  if (!isEnmsDeviceLookupQuestion(message)) {
+    return null;
+  }
+
+  const mappings = readDeviceMappings(getCaseInsensitive(facts, "deviceMappings"));
+  const requestedCircuitSeq = findRequestedCircuitSeq(message);
+  const matchedMappings = requestedCircuitSeq === null
+    ? mappings
+    : mappings.filter((mapping) => mapping.circuitSeq === requestedCircuitSeq);
+  if (matchedMappings.length === 0) {
+    return buildMissingAnswer(
+      context,
+      requestedCircuitSeq === null
+        ? "設備 / 電表對應"
+        : `迴路 ${requestedCircuitSeq} 的設備 / 電表對應`,
+    );
+  }
+
+  const shown = matchedMappings.slice(0, 8);
+  const title = requestedCircuitSeq === null
+    ? `目前授權範圍內可驗證的設備 / 電表對應共 ${matchedMappings.length} 筆：`
+    : `迴路 ${requestedCircuitSeq} 在目前授權範圍內有 ${matchedMappings.length} 筆可驗證對應：`;
+  const lines = shown.map((mapping) => {
+    const displayName =
+      mapping.deviceAlias || mapping.deviceName || mapping.label || "未註冊電表";
+    const details = [
+      mapping.macAddress ? `MAC ${mapping.macAddress}` : "",
+      mapping.address ? `位址 ${mapping.address}` : "",
+      mapping.circuitSeq !== null ? `迴路 ${mapping.circuitSeq}` : "",
+      mapping.meterRole ? `角色 ${mapping.meterRole}` : "",
+      mapping.accountNumber ? `電號 ${mapping.accountNumber}` : "",
+      mapping.siteName ? `場域 ${mapping.siteName}` : "",
+    ].filter(Boolean);
+    return `- ${displayName}${details.length ? `（${details.join(" / ")}）` : ""}`;
+  });
+  const ambiguityNote = matchedMappings.length > 1
+    ? "注意：迴路號在不同 Gateway MAC / Address 下可能重複，畫面判讀請以 MAC、位址與迴路一起看；後端另以電表主檔 surrogate key 輔助去重。"
+    : "";
+
+  return {
+    answerKind: "device_lookup",
+    matchedFactPaths: ["facts.deviceMappings"],
+    text: [
+      title,
+      lines.join("\n"),
+      matchedMappings.length > shown.length
+        ? `另有 ${matchedMappings.length - shown.length} 筆未列出，請縮小 MAC、位址或電號範圍。`
+        : "",
+      ambiguityNote,
+      `資料時間範圍：${sanitizeText(context.evidence?.timeRange) || "EnMS 電表主檔 scoped inventory"}`,
+    ]
+      .filter(Boolean)
+      .join("\n\n"),
   };
 }
 
@@ -562,11 +822,7 @@ function answerLatestDataAt(
   context: EnmsScopedAnswerContext,
   facts: Record<string, unknown>,
 ): EnmsScopedAnswerResult | null {
-  if (
-    !/最新.*(?:資料|一筆|時間)|最後一筆|最近一筆|更新到|資料.*(?:到|截至)|幾月幾號/i.test(
-      message,
-    )
-  ) {
+  if (!isEnmsLatestDataQuestion(message)) {
     return null;
   }
 
@@ -611,7 +867,7 @@ function answerCommonMetric(
   facts: Record<string, unknown>,
 ): EnmsScopedAnswerResult | null {
   const metrics = asRecord(getCaseInsensitive(facts, "metrics"));
-  const definitions = [
+  const definitions: CommonMetricDefinition[] = [
     {
       matches: (value: string) => /總用電|用電量|耗電|能耗/i.test(value),
       paths: ["totalConsumptionKwh", "totalConsumptionKwh30d"],
@@ -641,9 +897,20 @@ function answerCommonMetric(
     {
       matches: (value: string) =>
         matchesEnmsChatSemanticRoute("efficiency_advice", value),
-      paths: ["quickWinSavingNtd", "yearlyAvoidedCostNtd"],
-      label: "預估年節省",
+      paths: [
+        "quickWinSavingNtd",
+        "yearlyAvoidedCostNtd",
+        "quickWinSavingKwh",
+      ],
+      label: "5% what-if 年化金額",
       unit: "NTD",
+      pathLabels: {
+        quickWinSavingKwh: "5% what-if 年化節電量",
+      },
+      pathUnits: {
+        quickWinSavingKwh: "kWh",
+      },
+      fallbackFromOpportunities: true,
     },
   ];
   const definition = definitions.find((item) => item.matches(message));
@@ -654,11 +921,41 @@ function answerCommonMetric(
   for (const path of definition.paths) {
     const value = getNumber(metrics, path);
     if (value !== null) {
+      const label = definition.pathLabels?.[path] ?? definition.label;
+      const unit = definition.pathUnits?.[path] ?? definition.unit;
       return {
         answerKind: "metric",
         matchedFactPaths: [`facts.metrics.${path}`],
-        text: `${definition.label}：${formatNumber(value, definition.unit)}。\n\n資料時間範圍：${sanitizeText(context.evidence?.timeRange) || "EnMS 未提供"}。`,
+        text: `${label}：${formatNumber(value, unit)}。\n\n資料時間範圍：${sanitizeText(context.evidence?.timeRange) || "EnMS 未提供"}。`,
       };
+    }
+  }
+
+  if (definition.fallbackFromOpportunities) {
+    const opportunities = getCaseInsensitive(facts, "opportunities");
+    if (Array.isArray(opportunities)) {
+      const lines = opportunities
+        .map(asRecord)
+        .map((item) => {
+          const name = sanitizeText(getCaseInsensitive(item, "name"));
+          const note = sanitizeText(getCaseInsensitive(item, "note"));
+          const value = getNumber(item, "value");
+          const score =
+            value === null ? "" : `（指標分數 ${formatNumber(value)}）`;
+          return [name ? `${name}${score}` : "", note].filter(Boolean).join("：");
+        })
+        .filter(Boolean)
+        .slice(0, 3);
+      if (lines.length > 0) {
+        return {
+          answerKind: "summary",
+          matchedFactPaths: ["facts.opportunities"],
+          text: [
+            `可驗證節能線索：\n${lines.map((item) => `- ${item}`).join("\n")}`,
+            `資料時間範圍：${sanitizeText(context.evidence?.timeRange) || "EnMS 未提供"}。`,
+          ].join("\n\n"),
+        };
+      }
     }
   }
 
@@ -697,13 +994,19 @@ export function buildEnmsScopedAnswer(params: {
   const message = sanitizeText(params.message);
   const facts = asRecord(params.context.facts);
   const latestDataAnswer = answerLatestDataAt(message, params.context, facts);
+  const timeRangeAnswer = latestDataAnswer
+    ? null
+    : answerTimeRange(message, params.context);
 
   if (params.context.status !== "ready") {
     if (params.context.status === "empty" && latestDataAnswer) {
       return latestDataAnswer;
     }
 
-    return buildMissingAnswer(params.context, "本題");
+    return buildMissingAnswer(
+      params.context,
+      inferMissingSubject(message, params.context),
+    );
   }
 
   const requestedAccount = findRequestedAccountNumber(message);
@@ -730,15 +1033,20 @@ export function buildEnmsScopedAnswer(params: {
     );
   }
 
+  const answers = [
+    answerBilling(message, params.context, facts),
+    answerDeviceLookup(message, params.context, facts),
+    answerRanking(message, params.context, facts),
+    answerDemand(message, params.context, facts),
+    timeRangeAnswer,
+    latestDataAnswer,
+    answerAccount(message, params.context, facts, params.scope),
+    answerCommonMetric(message, params.context, facts),
+    answerCard(message, params.context),
+  ].filter((answer): answer is EnmsScopedAnswerResult => answer !== null);
   const answer =
-    answerBilling(message, params.context, facts) ||
-    answerDemand(message, params.context, facts) ||
-    answerRanking(message, params.context, facts) ||
-    latestDataAnswer ||
-    answerAccount(message, params.context, facts, params.scope) ||
-    answerTimeRange(message, params.context) ||
-    answerCommonMetric(message, params.context, facts) ||
-    answerCard(message, params.context);
+    answers.find((candidate) => candidate.answerKind !== "missing") ??
+    answers[0];
   if (answer) {
     return answer;
   }
@@ -749,7 +1057,10 @@ export function buildEnmsScopedAnswer(params: {
     .filter(Boolean)
     .slice(0, 4);
   if (!summary && findings.length === 0) {
-    return buildMissingAnswer(params.context, "本題");
+    return buildMissingAnswer(
+      params.context,
+      inferMissingSubject(message, params.context),
+    );
   }
 
   return {

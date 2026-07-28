@@ -8,6 +8,7 @@ import {
 } from "@/lib/enms-context-pack";
 import {
   ENMS_CHAT_CONTRACT_VERSION,
+  ENMS_CHAT_PLAN_CONTRACT_VERSION,
   ENMS_FACTS_SCHEMA_VERSION,
   ENMS_INTEGRATION_CONTRACT_VERSION,
   buildEnmsScopedBundleContextMessage,
@@ -22,6 +23,7 @@ import {
 import {
   filterEnmsStructuredNarrative,
   isEnmsStructuredAgentEnabled,
+  runEnmsGeneralChatAgent,
   runEnmsStructuredAgent,
 } from "@/lib/enms-structured-agent";
 import { getEnmsS2sApiKey } from "@/lib/enms-s2s-auth";
@@ -130,7 +132,13 @@ type EnmsScopedFactsBundle = {
 };
 
 type EnmsChatPlan = {
+  contractVersion?: string;
+  registryVersion?: string;
   strategy?: string;
+  intent?: string;
+  confidence?: string;
+  allowDbFacts?: boolean;
+  allowGeneralAI?: boolean;
   primaryPageKey?: string;
   selectedPageKeys?: string[];
   maxContexts?: number;
@@ -171,7 +179,8 @@ type EnmsAnswerSource =
   | "context_snapshot"
   | "runtime"
   | "blocked"
-  | "no_match";
+  | "no_match"
+  | "general_ai";
 
 function getExpectedApiKey(): string {
   return getEnmsS2sApiKey();
@@ -201,6 +210,16 @@ function isPreciseLatestDataAnswer(answer: EnmsScopedAnswerResult): boolean {
     answer.matchedFactPaths.some((path) =>
       path.toLowerCase().includes("latestdataat"),
     )
+  );
+}
+
+function shouldAppendStructuredAnalysis(answer: EnmsScopedAnswerResult): boolean {
+  return !(
+    isPreciseLatestDataAnswer(answer) ||
+    answer.answerKind === "billing" ||
+    answer.answerKind === "device_lookup" ||
+    answer.answerKind === "missing" ||
+    answer.answerKind === "ranking"
   );
 }
 
@@ -284,6 +303,7 @@ function isTrustedScopedContext(
     guardrails.noSqlFromClient === true &&
     guardrails.noHtml === true &&
     guardrails.semanticViewsOnly === true &&
+    guardrails.allowedViewPrefix === "ai_" &&
     guardrails.requireEvidence === true &&
     Boolean(sanitizePlainText(context.evidence?.queryScope, 1000)),
   );
@@ -334,6 +354,15 @@ function getTrustedScopedFactsBundle(
     primaryPageKey,
     contexts,
   };
+}
+
+function isGeneralAiChatPlan(plan?: EnmsChatPlan | null): boolean {
+  return (
+    plan?.contractVersion === ENMS_CHAT_PLAN_CONTRACT_VERSION &&
+    plan?.strategy === "general_ai" &&
+    plan.allowDbFacts === false &&
+    plan.allowGeneralAI === true
+  );
 }
 
 function summarizeScope(scope?: EnmsBridgeScope | null): string {
@@ -415,6 +444,7 @@ function buildCitationBlock(
   preflight: EnmsPlannerPreflight,
   snapshot: DomainBootstrapSnapshot | null,
   answerSource: EnmsAnswerSource,
+  intent: string = preflight.intent,
 ): AIAssistantBlock {
   const sourceLabel: Record<EnmsAnswerSource, string> = {
     verified_query: "來源：EnMS PostgreSQL / TimescaleDB verified query。",
@@ -424,13 +454,15 @@ function buildCitationBlock(
     blocked: "來源：EnClaw 安全邊界；本次未執行資料查詢。",
     no_match:
       "來源：EnClaw intent routing；目前未命中可安全查詢的 verified query。",
+    general_ai:
+      "來源：一般 AI 模型；本次未使用 EnMS scoped facts。",
   };
 
   const source = sourceLabel[answerSource] ?? sourceLabel.runtime;
 
   return {
     type: "citation",
-    text: `${source} intent=${preflight.intent} / confidence=${preflight.confidence}`,
+    text: `${source} intent=${intent} / confidence=${preflight.confidence}`,
   };
 }
 
@@ -449,6 +481,7 @@ function buildAnswer(params: {
   answerSource?: EnmsAnswerSource;
   structuredModelAttempted?: boolean;
   structuredModelApplied?: boolean;
+  intentOverride?: string;
 }): Response {
   const safeAnswerText = sanitizePlainText(
     params.text,
@@ -482,7 +515,12 @@ function buildAnswer(params: {
       .map((context) => sanitizePlainText(context.evidence?.confidence, 40))
       .find(Boolean) || "";
   blocks.push(
-    buildCitationBlock(params.preflight, params.snapshot ?? null, answerSource),
+    buildCitationBlock(
+      params.preflight,
+      params.snapshot ?? null,
+      answerSource,
+      params.intentOverride ?? params.preflight.intent,
+    ),
   );
 
   return Response.json({
@@ -492,7 +530,7 @@ function buildAnswer(params: {
       params.conversationId ||
       `enms-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
     sourceMode: "enclaw",
-    intent: params.preflight.intent,
+    intent: params.intentOverride ?? params.preflight.intent,
     isFallback: params.fallback ?? false,
     blocks,
     citations: [
@@ -500,6 +538,8 @@ function buildAnswer(params: {
         label:
           answerSource === "scoped_facts"
             ? "EnMS Scoped Facts + EnClaw Context Pack"
+            : answerSource === "general_ai"
+              ? "General AI"
             : "EnClaw EnMS Runtime",
         source: answerSource,
         timeRange:
@@ -509,7 +549,9 @@ function buildAnswer(params: {
     ],
     evidence: {
       dataSources: [
-        "EnClaw EnMS planner/context",
+        answerSource === "general_ai"
+          ? "General AI model (no EnMS facts)"
+          : "EnClaw EnMS planner/context",
         ...evidenceContexts.flatMap((context) =>
           sanitizeStringList(context.evidence?.dataSources),
         ),
@@ -526,12 +568,12 @@ function buildAnswer(params: {
       ]
         .filter((value, index, all) => all.indexOf(value) === index)
         .slice(0, 8),
-      timeRange:
-        timeRange ||
-        "依問題語意與資料可用性判定",
-      queryScope:
-        queryScope ||
-        summarizeScope(params.scope),
+      timeRange: answerSource === "general_ai"
+        ? "不使用 EnMS 資料"
+        : timeRange || "依問題語意與資料可用性判定",
+      queryScope: answerSource === "general_ai"
+        ? "一般 AI 回覆；未讀取 EnMS scoped facts"
+        : queryScope || summarizeScope(params.scope),
       confidence:
         confidence ||
         (params.snapshot?.availability === "blocked"
@@ -582,6 +624,53 @@ function buildScopeBlockedAnswer(
   });
 }
 
+async function buildGeneralNoMatchAnswer(
+  body: EnmsBridgeRequest,
+  preflight: EnmsPlannerPreflight,
+  message: string,
+  signal: AbortSignal,
+): Promise<Response> {
+  let text = [
+    "這題不是 EnMS 能管資料問題，因此我沒有使用 EnMS scoped facts、DB 或任何電表資料。",
+    "目前一般 AI 模型暫時不可用；為避免編造答案，請稍後再試，或改問能管相關問題。",
+  ].join("\n\n");
+  let structuredModelAttempted = false;
+  let structuredModelApplied = false;
+  let fallback = true;
+
+  if (isEnmsStructuredAgentEnabled()) {
+    structuredModelAttempted = true;
+    try {
+      const generalAnswer = await runEnmsGeneralChatAgent({
+        task: message,
+        signal,
+      });
+      text = generalAnswer.text;
+      structuredModelApplied = true;
+      fallback = false;
+    } catch (error) {
+      console.warn("[enms-chat] General AI fallback unavailable", {
+        reason:
+          error instanceof Error
+            ? error.message
+            : "unknown general AI error",
+      });
+    }
+  }
+
+  return buildAnswer({
+    conversationId: body.conversationId,
+    preflight,
+    scope: body.scope,
+    fallback,
+    answerSource: "general_ai",
+    structuredModelAttempted,
+    structuredModelApplied,
+    intentOverride: "general_question",
+    text,
+  });
+}
+
 function buildBundleAnswerText(
   candidates: Array<{
     context: EnmsScopedContext;
@@ -615,6 +704,10 @@ function selectBundleAnswerCandidates(
     context: EnmsScopedContext;
     scopedAnswer: EnmsScopedAnswerResult;
   }> = [];
+  const missingWarnings: Array<{
+    context: EnmsScopedContext;
+    scopedAnswer: EnmsScopedAnswerResult;
+  }> = [];
   const usedKinds = new Set<string>();
   const usedTexts = new Set<string>();
   const latestDataQuestion = isEnmsLatestDataQuestion(message);
@@ -628,13 +721,17 @@ function selectBundleAnswerCandidates(
       context,
       scope: body.scope ?? undefined,
     });
+    const textKey = scopedAnswer.text.replace(/\s+/g, " ").trim();
     if (scopedAnswer.answerKind === "missing") {
+      if (!usedTexts.has(textKey) && missingWarnings.length < 2) {
+        missingWarnings.push({ context, scopedAnswer });
+        usedTexts.add(textKey);
+      }
       continue;
     }
     if (!latestDataQuestion && scopedAnswer.answerKind === "time_range") {
       continue;
     }
-    const textKey = scopedAnswer.text.replace(/\s+/g, " ").trim();
     const kindKey = scopedAnswer.answerKind;
     if (usedTexts.has(textKey) || usedKinds.has(kindKey)) {
       continue;
@@ -648,7 +745,14 @@ function selectBundleAnswerCandidates(
     }
   }
 
-  return selected;
+  if (selected.length === 0) {
+    return missingWarnings.slice(0, 4);
+  }
+
+  return [
+    ...selected,
+    ...missingWarnings.slice(0, Math.max(0, 4 - selected.length)),
+  ];
 }
 
 async function buildScopedFactsBundleAnswer(
@@ -669,6 +773,16 @@ async function buildScopedFactsBundleAnswer(
     contexts[0];
   if (!primaryContext || !isEnmsPageKey(primaryContext.pageKey)) {
     return buildScopeBlockedAnswer(body, preflight);
+  }
+
+  const candidates = selectBundleAnswerCandidates(body, message, contexts);
+  if (
+    candidates.length === 0 &&
+    contexts.every(
+      (context) => !hasEnmsChatSemanticRouteForPage(message, context.pageKey),
+    )
+  ) {
+    return buildGeneralNoMatchAnswer(body, preflight, message, signal);
   }
 
   const definition = getEnmsPageDefinition(primaryContext.pageKey);
@@ -696,29 +810,6 @@ async function buildScopedFactsBundleAnswer(
     });
   }
 
-  const candidates = selectBundleAnswerCandidates(body, message, contexts);
-  if (
-    candidates.length === 0 &&
-    contexts.every(
-      (context) => !hasEnmsChatSemanticRouteForPage(message, context.pageKey),
-    )
-  ) {
-    return buildAnswer({
-      conversationId: body.conversationId,
-      preflight,
-      scope: body.scope,
-      scopedContext: primaryContext,
-      scopedFactsBundle: bundle,
-      contextPack: pack,
-      knowledgeBundle,
-      fallback: false,
-      answerSource: "no_match",
-      text: [
-        "這個問題沒有命中 EnMS 的能管語意路由，因此我不會把已授權的 EnMS scoped facts 硬套成答案。",
-        "若要一般 AI 閒聊或非能管問題，建議走獨立 general AI fallback，並在 UI 標示為一般 AI 回覆，避免和 EnMS 資料分析混淆。",
-      ].join("\n\n"),
-    });
-  }
   const scopedAnswer =
     candidates[0]?.scopedAnswer ??
     buildEnmsScopedAnswer({
@@ -733,15 +824,16 @@ async function buildScopedFactsBundleAnswer(
   let structuredModelAttempted = false;
   let structuredModelApplied = false;
   const modelCandidate = candidates.find(
-    (candidate) => !isPreciseLatestDataAnswer(candidate.scopedAnswer),
+    (candidate) => shouldAppendStructuredAnalysis(candidate.scopedAnswer),
   );
+  const modelScopedAnswer = modelCandidate?.scopedAnswer ?? scopedAnswer;
   const modelContext = modelCandidate?.context ??
-    (!isPreciseLatestDataAnswer(scopedAnswer) ? primaryContext : null);
+    (shouldAppendStructuredAnalysis(scopedAnswer) ? primaryContext : null);
 
   if (
     modelContext?.facts &&
     isEnmsPageKey(modelContext.pageKey) &&
-    !isPreciseLatestDataAnswer(scopedAnswer) &&
+    shouldAppendStructuredAnalysis(modelScopedAnswer) &&
     isEnmsStructuredAgentEnabled()
   ) {
     structuredModelAttempted = true;
@@ -872,7 +964,7 @@ async function buildScopedFactsAnswer(
 
   if (
     scopedContext.facts &&
-    !isPreciseLatestDataAnswer(scopedAnswer) &&
+    shouldAppendStructuredAnalysis(scopedAnswer) &&
     isEnmsStructuredAgentEnabled()
   ) {
     structuredModelAttempted = true;
@@ -1030,6 +1122,10 @@ export async function POST(req: Request) {
 
   const trustedScopedFactsBundle = getTrustedScopedFactsBundle(body);
   const trustedScopedContext = hasTrustedScopedContext(body);
+  if (isGeneralAiChatPlan(body.chatPlan)) {
+    return buildGeneralNoMatchAnswer(body, preflight, message, req.signal);
+  }
+
   if (
     shouldBlockRestrictedScope(body.scope) &&
     !trustedScopedContext &&

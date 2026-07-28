@@ -9,6 +9,7 @@ import type { EnmsContextPack } from "./enms-context-pack";
 export const ENMS_INTEGRATION_CONTRACT_VERSION =
   "enms.ai.page-insight.v1";
 export const ENMS_CHAT_CONTRACT_VERSION = "enms.ai.chat.v1";
+export const ENMS_CHAT_PLAN_CONTRACT_VERSION = "enms.ai.chat-plan.v1";
 export const ENMS_FACTS_SCHEMA_VERSION = "enms.ai.facts.v1";
 export const ENMS_CAPABILITY_REGISTRY_VERSION = "2026-07-27.1";
 
@@ -58,6 +59,8 @@ export type EnmsChatSemanticRouteKey =
   | "latest_data"
   | "demand_risk"
   | "anomaly_root_cause"
+  | "device_lookup"
+  | "meter_ranking"
   | "energy_usage_query"
   | "site_benchmarking"
   | "alert_governance"
@@ -72,6 +75,30 @@ export type EnmsChatSemanticRoute = {
   synonyms: string[];
   queryHint: string;
   preciseAnswerOnly?: boolean;
+};
+
+export type EnmsChatQueryPlan = {
+  contractVersion: string;
+  registryVersion: string;
+  strategy:
+    | "general_ai"
+    | "single_scoped_facts"
+    | "multi_scoped_facts_bundle";
+  intent: EnmsIntent | "general_question";
+  confidence: "low" | "medium" | "high";
+  allowDbFacts: boolean;
+  allowGeneralAI: boolean;
+  primaryPageKey: EnmsPageKey;
+  selectedPageKeys: EnmsPageKey[];
+  matchedRoutes: Array<{
+    key: EnmsChatSemanticRouteKey;
+    pageKey: EnmsPageKey;
+    intent: EnmsIntent;
+    queryHint: string;
+  }>;
+  maxContexts: number;
+  sourceOfTruth: string;
+  reason: string;
 };
 
 export type EnmsKnowledgeDocument = {
@@ -188,10 +215,8 @@ const CHAT_SEMANTIC_ROUTES: readonly EnmsChatSemanticRoute[] = [
       "最新的資料",
       "最後一筆",
       "最近一筆",
-      "更新時間",
       "更新到",
       "資料截至",
-      "幾月幾號",
     ],
     queryHint: "最新一筆資料時間",
     preciseAnswerOnly: true,
@@ -214,7 +239,7 @@ const CHAT_SEMANTIC_ROUTES: readonly EnmsChatSemanticRoute[] = [
       "maxdemand",
       "peak demand",
     ],
-    queryHint: "目前需量 契約容量 超約風險 預測尖峰 降載建議",
+    queryHint: "目前需量 契約容量 超約風險 趨勢推估尖峰 降載建議",
   },
   {
     key: "anomaly_root_cause",
@@ -236,6 +261,49 @@ const CHAT_SEMANTIC_ROUTES: readonly EnmsChatSemanticRoute[] = [
       "波動",
     ],
     queryHint: "異常 根因 功率因數 電力品質 關聯訊號 處置建議",
+  },
+  {
+    key: "device_lookup",
+    pageKey: "nlq",
+    intent: "natural_language_query",
+    synonyms: [
+      "對應",
+      "對應設備",
+      "是哪個設備",
+      "是哪台設備",
+      "是什麼設備",
+      "設備名稱",
+      "設備別名",
+      "設備主檔",
+      "電表主檔",
+      "綁定",
+      "mapping",
+      "註冊",
+    ],
+    queryHint:
+      "設備對應 電表主檔 迴路 MAC Address CircuitSeq ElectricityMeterId",
+  },
+  {
+    key: "meter_ranking",
+    pageKey: "nlq",
+    intent: "natural_language_query",
+    synonyms: [
+      "最費電",
+      "最耗電",
+      "耗電最高",
+      "用電最高",
+      "耗能最高",
+      "迴路排名",
+      "迴路排行",
+      "電表排名",
+      "電表排行",
+      "用電排名",
+      "用電排行",
+      "耗電排名",
+      "耗電排行",
+    ],
+    queryHint:
+      "迴路用電排行 電表耗電排名 sum(kWh) by MAC Address CircuitSeq",
   },
   {
     key: "energy_usage_query",
@@ -538,6 +606,74 @@ function normalizeText(value: string): string {
   return value.toLowerCase().replace(/\s+/g, " ").trim();
 }
 
+const ENMS_DOMAIN_ANCHORS = [
+  "enms",
+  "能管",
+  "能源管理",
+  "能源",
+  "用電",
+  "能耗",
+  "耗電",
+  "電表",
+  "電號",
+  "電費",
+  "台電",
+  "需量",
+  "契約容量",
+  "超約",
+  "kwh",
+  "kw",
+  "功率",
+  "功因",
+  "功率因數",
+  "告警",
+  "警報",
+  "預警",
+  "場域",
+  "廠區",
+  "迴路",
+  "空調",
+  "基載",
+  "節能",
+  "節電",
+  "省電",
+  "碳排",
+  "mqtt",
+  "timescale",
+];
+
+const CONTEXTUAL_SYNONYMS: Partial<
+  Record<EnmsChatSemanticRouteKey, string[]>
+> = {
+  energy_usage_query: ["最高", "最低", "趨勢", "排名"],
+  site_benchmarking: ["排名", "比較", "區域"],
+  alert_governance: ["摘要", "類型", "分類", "治理", "門檻"],
+};
+
+function hasEnmsDomainAnchor(normalizedMessage: string): boolean {
+  return ENMS_DOMAIN_ANCHORS.some((anchor) =>
+    normalizedMessage.includes(anchor.toLowerCase())
+  );
+}
+
+function routeHasContextualOnlyMatch(
+  route: EnmsChatSemanticRoute,
+  normalizedMessage: string,
+): boolean {
+  const contextual = CONTEXTUAL_SYNONYMS[route.key] ?? [];
+  if (contextual.length === 0) {
+    return false;
+  }
+
+  const matchedSynonyms = route.synonyms.filter((synonym) =>
+    normalizedMessage.includes(synonym.toLowerCase())
+  );
+  return (
+    matchedSynonyms.length > 0 &&
+    matchedSynonyms.every((synonym) => contextual.includes(synonym))
+  );
+}
+
 function getRequestedAccountSuffix(message: string): string {
   const requestedAccount = message.match(/(?:\d[\s-]?){8,14}/)?.[0] ?? "";
   return requestedAccount ? ` 電號 ${requestedAccount}` : "";
@@ -554,6 +690,21 @@ export function matchesEnmsChatSemanticRoute(
   routeKey: EnmsChatSemanticRouteKey,
   message: string,
 ): boolean {
+  if (routeKey === "latest_data") {
+    return isEnmsLatestDataQuestion(message);
+  }
+  if (routeKey === "device_lookup") {
+    return isEnmsDeviceLookupQuestion(message);
+  }
+  if (routeKey === "meter_ranking") {
+    if (isEnmsDeviceLookupQuestion(message)) {
+      return false;
+    }
+    if (isEnmsSiteBenchmarkingQuestion(normalizeText(message))) {
+      return false;
+    }
+  }
+
   const route = CHAT_SEMANTIC_ROUTES.find((candidate) =>
     candidate.key === routeKey
   );
@@ -562,13 +713,50 @@ export function matchesEnmsChatSemanticRoute(
   }
 
   const normalizedMessage = normalizeText(message);
-  return route.synonyms.some((synonym) =>
+  const matched = route.synonyms.some((synonym) =>
     normalizedMessage.includes(synonym.toLowerCase())
   );
+  if (!matched) {
+    return false;
+  }
+
+  if (routeHasContextualOnlyMatch(route, normalizedMessage)) {
+    return hasEnmsDomainAnchor(normalizedMessage);
+  }
+
+  return true;
+}
+
+export function isEnmsDeviceLookupQuestion(message: string): boolean {
+  const normalizedMessage = normalizeText(message);
+  const hasIdentityAnchor =
+    /迴路|回路|電表|設備|mac|address|位址|地址|circuit|meter/.test(
+      normalizedMessage,
+    );
+  const hasLookupIntent =
+    /對應|是哪|是什麼|哪台|哪個設備|設備名稱|設備別名|主檔|綁定|mapping|註冊|屬於/.test(
+      normalizedMessage,
+    );
+  const isRankingIntent =
+    /最費電|最耗電|耗電最高|用電最高|耗能最高|排行|排名/.test(
+      normalizedMessage,
+    );
+
+  return hasIdentityAnchor && hasLookupIntent && !isRankingIntent;
 }
 
 export function isEnmsLatestDataQuestion(message: string): boolean {
-  return matchesEnmsChatSemanticRoute("latest_data", message);
+  const normalizedMessage = normalizeText(message);
+  return (
+    /(?:最新|最後|最近).{0,8}(?:資料|一筆|讀值|紀錄|記錄|時序|電表|db|資料庫|enms|meter|data)/i
+      .test(normalizedMessage) ||
+    /(?:資料|讀值|紀錄|記錄|時序|電表|db|資料庫|enms|meter|data).{0,12}(?:最新|最後|最近|更新到|截至)/i
+      .test(normalizedMessage) ||
+    /(?:資料|讀值|紀錄|記錄|時序|電表|db|資料庫|enms|meter|data).{0,12}幾月幾號/i
+      .test(normalizedMessage) ||
+    /幾月幾號.{0,12}(?:資料|讀值|紀錄|記錄|時序|電表|db|資料庫|enms|meter|data)/i
+      .test(normalizedMessage)
+  );
 }
 
 export function buildEnmsIntentKeywordMap(): Record<EnmsIntent, string[]> {
@@ -593,6 +781,144 @@ export function buildEnmsIntentKeywordMap(): Record<EnmsIntent, string[]> {
       unique(values),
     ]),
   ) as Record<EnmsIntent, string[]>;
+}
+
+export function buildEnmsChatQueryPlan(message: string): EnmsChatQueryPlan {
+  const normalizedMessage = normalizeText(message);
+  const matchedRoutes = prioritizeEnmsChatRoutes(
+    CHAT_SEMANTIC_ROUTES
+      .map((route, index) => ({
+        route,
+        index,
+        firstMentionAt: getRouteFirstMentionIndex(route, normalizedMessage),
+      }))
+      .filter((item) => item.firstMentionAt >= 0)
+      .sort((left, right) =>
+        left.firstMentionAt - right.firstMentionAt || left.index - right.index
+      )
+      .map((item) => item.route),
+    normalizedMessage,
+  );
+  const selectedPageKeys = unique(
+    matchedRoutes.map((route) => route.pageKey),
+  ).slice(0, 4) as EnmsPageKey[];
+
+  if (selectedPageKeys.length === 0) {
+    return {
+      contractVersion: ENMS_CHAT_PLAN_CONTRACT_VERSION,
+      registryVersion: ENMS_CAPABILITY_REGISTRY_VERSION,
+      strategy: "general_ai",
+      intent: "general_question",
+      confidence: "low",
+      allowDbFacts: false,
+      allowGeneralAI: true,
+      primaryPageKey: "nlq",
+      selectedPageKeys: [],
+      matchedRoutes: [],
+      maxContexts: 0,
+      sourceOfTruth:
+        "EnClaw Capability Registry / Context Builder; no EnMS facts required",
+      reason:
+        "未命中 EnMS domain capability，應走一般 AI fallback，不查 EnMS DB facts。",
+    };
+  }
+
+  const primaryRoute = matchedRoutes.find((route) =>
+    route.pageKey === selectedPageKeys[0]
+  ) ?? matchedRoutes[0];
+  return {
+    contractVersion: ENMS_CHAT_PLAN_CONTRACT_VERSION,
+    registryVersion: ENMS_CAPABILITY_REGISTRY_VERSION,
+    strategy:
+      selectedPageKeys.length > 1
+        ? "multi_scoped_facts_bundle"
+        : "single_scoped_facts",
+    intent: primaryRoute.intent,
+    confidence: matchedRoutes.length > 0 ? "high" : "medium",
+    allowDbFacts: true,
+    allowGeneralAI: false,
+    primaryPageKey: primaryRoute.pageKey,
+    selectedPageKeys,
+    matchedRoutes: matchedRoutes.slice(0, 8).map((route) => ({
+      key: route.key,
+      pageKey: route.pageKey,
+      intent: route.intent,
+      queryHint: route.queryHint,
+    })),
+    maxContexts: 4,
+    sourceOfTruth:
+      "EnClaw Capability Registry / Context Builder -> EnMS API scoped ai_* facts",
+    reason:
+      "命中 EnMS domain capability，EnMS API 應依 selectedPageKeys 建立授權 scoped facts bundle。",
+  };
+}
+
+function prioritizeEnmsChatRoutes(
+  routes: EnmsChatSemanticRoute[],
+  normalizedMessage: string,
+): EnmsChatSemanticRoute[] {
+  if (!isEnmsSiteBenchmarkingQuestion(normalizedMessage)) {
+    return routes;
+  }
+
+  const siteBenchmarkingRoutes = routes.filter((route) =>
+    route.key === "site_benchmarking"
+  );
+  if (siteBenchmarkingRoutes.length === 0) {
+    return routes;
+  }
+
+  return routes.slice().sort((left, right) => {
+    if (left.key === "site_benchmarking" && right.key === "energy_usage_query") {
+      return -1;
+    }
+    if (left.key === "energy_usage_query" && right.key === "site_benchmarking") {
+      return 1;
+    }
+    return 0;
+  });
+}
+
+function isEnmsSiteBenchmarkingQuestion(normalizedMessage: string): boolean {
+  const hasSiteAnchor =
+    /場域|多場域|各場域|區域|各區域|廠區|分店|據點|site|benchmark/.test(
+      normalizedMessage,
+    );
+  const hasComparisonIntent =
+    /比較|排名|排行|benchmark/.test(normalizedMessage);
+  const hasEnergyMetric =
+    /用電|耗電|能耗|總用電|總耗電|能源績效|kwh|kw/.test(
+      normalizedMessage,
+    );
+  return hasSiteAnchor && hasComparisonIntent && hasEnergyMetric;
+}
+
+function getRouteFirstMentionIndex(
+  route: EnmsChatSemanticRoute,
+  normalizedMessage: string,
+): number {
+  if (!matchesEnmsChatSemanticRoute(route.key, normalizedMessage)) {
+    return -1;
+  }
+
+  if (route.key === "latest_data") {
+    const regexMentions = [
+      /(?:最新|最後|最近).{0,8}(?:資料|一筆|讀值|紀錄|記錄|時序|電表|db|資料庫|enms|meter|data)/i,
+      /(?:資料|讀值|紀錄|記錄|時序|電表|db|資料庫|enms|meter|data).{0,12}(?:最新|最後|最近|更新到|截至)/i,
+      /(?:資料|讀值|紀錄|記錄|時序|電表|db|資料庫|enms|meter|data).{0,12}幾月幾號/i,
+      /幾月幾號.{0,12}(?:資料|讀值|紀錄|記錄|時序|電表|db|資料庫|enms|meter|data)/i,
+    ]
+      .map((regex) => normalizedMessage.search(regex))
+      .filter((index) => index >= 0);
+    if (regexMentions.length > 0) {
+      return Math.min(...regexMentions);
+    }
+  }
+
+  return route.synonyms.reduce((best, synonym) => {
+    const index = normalizedMessage.indexOf(synonym.toLowerCase());
+    return index >= 0 && (best < 0 || index < best) ? index : best;
+  }, -1);
 }
 
 export function getEnmsChatSemanticRouteForPage(
@@ -631,6 +957,10 @@ export function buildEnmsScopedBundleContextMessage(
   }
 
   const suffix = getRequestedAccountSuffix(message);
+  if (pageKey !== "nlq") {
+    return `${route.queryHint}${suffix}`.replace(/\s+/g, " ").trim();
+  }
+
   if (route.preciseAnswerOnly) {
     return `${route.queryHint}${suffix}`.replace(/\s+/g, " ").trim();
   }
