@@ -17,6 +17,14 @@ vi.mock("./ycrm-learning-auto-trigger", () => ({
 	triggerAutoLearningDraftIfEligible: vi.fn(),
 }));
 
+vi.mock("./erp-learning-auto-trigger", () => ({
+	triggerAutoErpLearningDraftIfEligible: vi.fn(),
+}));
+
+vi.mock("./enms-learning-auto-trigger", () => ({
+	triggerAutoEnmsLearningDraftIfEligible: vi.fn(),
+}));
+
 vi.mock("@/app/api/web-sessions/shared", async (importOriginal) => {
 	const actual =
 		await importOriginal<typeof import("@/app/api/web-sessions/shared")>();
@@ -140,6 +148,14 @@ describe("active-runs", () => {
 
 		vi.mock("./ycrm-learning-auto-trigger", () => ({
 			triggerAutoLearningDraftIfEligible: vi.fn(),
+		}));
+
+		vi.mock("./erp-learning-auto-trigger", () => ({
+			triggerAutoErpLearningDraftIfEligible: vi.fn(),
+		}));
+
+		vi.mock("./enms-learning-auto-trigger", () => ({
+			triggerAutoEnmsLearningDraftIfEligible: vi.fn(),
 		}));
 
 		vi.mock("@/app/api/web-sessions/shared", async (importOriginal) => {
@@ -369,7 +385,18 @@ describe("active-runs", () => {
 
 		it("writes direct-answer metadata only after the synthetic reply is persisted", async () => {
 			const { createSyntheticCompletedRun } = await setup();
-			const { writeFile } = await import("node:fs/promises");
+				const { writeFile } = await import("node:fs/promises");
+				const { triggerAutoLearningDraftIfEligible } = await import(
+					"./ycrm-learning-auto-trigger.js"
+				);
+				const { triggerAutoErpLearningDraftIfEligible } = await import(
+					"./erp-learning-auto-trigger.js"
+				);
+				const { triggerAutoEnmsLearningDraftIfEligible } = await import(
+					"./enms-learning-auto-trigger.js"
+				);
+			vi.mocked(writeFile).mockClear();
+			vi.mocked(triggerAutoEnmsLearningDraftIfEligible).mockClear();
 
 			await createSyntheticCompletedRun({
 				sessionId: "s-direct",
@@ -407,6 +434,16 @@ describe("active-runs", () => {
 			expect(messageWrite?.[1]).toContain("\"data\":{\"sourceKind\":\"verified_direct\"");
 			expect(messageWrite?.[1]).toContain("\"sourceDomain\":\"ycrm\"");
 			expect(messageWrite?.[1]).toContain("\"verifiedBy\":\"ycrm-verified-direct-query\"");
+			expect(triggerAutoEnmsLearningDraftIfEligible).toHaveBeenCalledWith(
+				"s-direct",
+			);
+			const latestWriteOrder = Math.max(
+				...vi.mocked(writeFile).mock.invocationCallOrder,
+			);
+			const triggerOrder =
+				vi.mocked(triggerAutoEnmsLearningDraftIfEligible).mock
+					.invocationCallOrder[0] ?? 0;
+			expect(triggerOrder).toBeGreaterThan(latestWriteOrder);
 		});
 
 		it("does not let an older completed turn overwrite newer answer metadata", async () => {
@@ -1118,6 +1155,12 @@ describe("active-runs", () => {
 			const { triggerAutoLearningDraftIfEligible } = await import(
 				"./ycrm-learning-auto-trigger.js"
 			);
+			const { triggerAutoErpLearningDraftIfEligible } = await import(
+				"./erp-learning-auto-trigger.js"
+			);
+			const { triggerAutoEnmsLearningDraftIfEligible } = await import(
+				"./enms-learning-auto-trigger.js"
+			);
 
 			startRun({
 				sessionId: "s-done",
@@ -1128,13 +1171,134 @@ describe("active-runs", () => {
 			child.stdout.end();
 			await new Promise((r) => setTimeout(r, 50));
 			child._emit("close", 0);
+			await new Promise((r) => setTimeout(r, 50));
 
 			expect(hasActiveRun("s-done")).toBe(false);
 			expect(getActiveRun("s-done")?.status).toBe("completed");
 			expect(triggerAutoLearningDraftIfEligible).toHaveBeenCalledWith(
 				"s-done",
 			);
+			expect(triggerAutoErpLearningDraftIfEligible).toHaveBeenCalledWith(
+				"s-done",
+			);
+			expect(triggerAutoEnmsLearningDraftIfEligible).toHaveBeenCalledWith(
+				"s-done",
+			);
 		});
+
+			it("triggers learning only after a model-run transcript write resolves", async () => {
+				const { child, startRun } = await setup();
+				const { writeFile } = await import("node:fs/promises");
+				const { triggerAutoLearningDraftIfEligible } = await import(
+					"./ycrm-learning-auto-trigger.js"
+				);
+				const { triggerAutoErpLearningDraftIfEligible } = await import(
+					"./erp-learning-auto-trigger.js"
+				);
+				const { triggerAutoEnmsLearningDraftIfEligible } = await import(
+					"./enms-learning-auto-trigger.js"
+				);
+				let releaseWrite: (() => void) | null = null;
+				vi.mocked(writeFile).mockImplementation(
+					async (_filePath, payload) => {
+						const serializedPayload =
+							typeof payload === "string" ? payload : "";
+						if (
+							!serializedPayload.includes("durable reply") ||
+							serializedPayload.includes("\"_streaming\":true")
+						) {
+							return undefined;
+						}
+						return await new Promise<void>((resolve) => {
+							releaseWrite = resolve;
+						});
+					},
+				);
+				vi.mocked(triggerAutoLearningDraftIfEligible).mockClear();
+				vi.mocked(triggerAutoErpLearningDraftIfEligible).mockClear();
+				vi.mocked(triggerAutoEnmsLearningDraftIfEligible).mockClear();
+
+			startRun({
+				sessionId: "s-durable-model",
+				message: "hello",
+				agentSessionId: "s-durable-model",
+			});
+			child._writeLine({
+				event: "agent",
+				stream: "assistant",
+				data: { delta: "durable reply" },
+			});
+			await new Promise((r) => setTimeout(r, 50));
+			child.stdout.end();
+			await new Promise((r) => setTimeout(r, 50));
+			child._emit("close", 0);
+			await new Promise((r) => setTimeout(r, 50));
+
+				expect(triggerAutoLearningDraftIfEligible).not.toHaveBeenCalled();
+				expect(triggerAutoErpLearningDraftIfEligible).not.toHaveBeenCalled();
+				expect(triggerAutoEnmsLearningDraftIfEligible).not.toHaveBeenCalled();
+				expect(releaseWrite).toBeTypeOf("function");
+				releaseWrite?.();
+				await new Promise((r) => setTimeout(r, 100));
+
+				expect(triggerAutoLearningDraftIfEligible).toHaveBeenCalledWith(
+					"s-durable-model",
+				);
+				expect(triggerAutoErpLearningDraftIfEligible).toHaveBeenCalledWith(
+					"s-durable-model",
+				);
+				expect(triggerAutoEnmsLearningDraftIfEligible).toHaveBeenCalledWith(
+					"s-durable-model",
+				);
+			});
+
+			it("does not trigger learning if final model-run persistence fails", async () => {
+				const { child, startRun } = await setup();
+				const { writeFile } = await import("node:fs/promises");
+				const { triggerAutoLearningDraftIfEligible } = await import(
+					"./ycrm-learning-auto-trigger.js"
+				);
+				const { triggerAutoErpLearningDraftIfEligible } = await import(
+					"./erp-learning-auto-trigger.js"
+				);
+				const { triggerAutoEnmsLearningDraftIfEligible } = await import(
+					"./enms-learning-auto-trigger.js"
+				);
+				vi.mocked(writeFile).mockImplementation(async (_filePath, payload) => {
+					const serializedPayload =
+						typeof payload === "string" ? payload : "";
+					if (
+						serializedPayload.includes("will not persist") &&
+						!serializedPayload.includes("\"_streaming\":true")
+					) {
+						throw new Error("disk full");
+					}
+					return undefined;
+				});
+				vi.mocked(triggerAutoLearningDraftIfEligible).mockClear();
+				vi.mocked(triggerAutoErpLearningDraftIfEligible).mockClear();
+				vi.mocked(triggerAutoEnmsLearningDraftIfEligible).mockClear();
+
+			startRun({
+				sessionId: "s-persist-fail",
+				message: "hello",
+				agentSessionId: "s-persist-fail",
+			});
+			child._writeLine({
+				event: "agent",
+				stream: "assistant",
+				data: { delta: "will not persist" },
+			});
+			await new Promise((r) => setTimeout(r, 50));
+			child.stdout.end();
+			await new Promise((r) => setTimeout(r, 50));
+			child._emit("close", 0);
+			await new Promise((r) => setTimeout(r, 50));
+
+				expect(triggerAutoLearningDraftIfEligible).not.toHaveBeenCalled();
+				expect(triggerAutoErpLearningDraftIfEligible).not.toHaveBeenCalled();
+				expect(triggerAutoEnmsLearningDraftIfEligible).not.toHaveBeenCalled();
+			});
 
 		it("marks status as error after non-zero exit", async () => {
 			const { child, startRun, getActiveRun } = await setup();

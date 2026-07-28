@@ -3,6 +3,7 @@ import {
   updateSessionEnmsPlannerLearningDraft,
 } from "@/app/api/web-sessions/shared";
 import { applyEnmsLearningDraftKeepCurrentResolution } from "@/lib/enms-learning-draft";
+import { requireEnmsLearningReviewAccess } from "@/lib/enms-learning-review-auth";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -24,6 +25,11 @@ function normalizeText(value: unknown): string | null {
 }
 
 export async function POST(req: Request) {
+  const accessError = requireEnmsLearningReviewAccess(req);
+  if (accessError) {
+    return accessError;
+  }
+
   let body: DebugRequestBody;
   try {
     body = await req.json();

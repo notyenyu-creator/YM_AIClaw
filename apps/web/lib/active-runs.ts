@@ -810,7 +810,11 @@ export async function createSyntheticCompletedRun(params: {
 	};
 
 	activeRuns.set(sessionId, run);
-	await flushPersistence(run);
+	if (await flushPersistence(run)) {
+		triggerAutoLearningDraftIfEligible(run.sessionId);
+		triggerAutoErpLearningDraftIfEligible(run.sessionId);
+		triggerAutoEnmsLearningDraftIfEligible(run.sessionId);
+	}
 	setTimeout(() => {
 		if (activeRuns.get(sessionId) === run) {
 			cleanupRun(sessionId);
@@ -2484,18 +2488,16 @@ function wireChildProcess(run: ActiveRun): void {
 		// Normal completion path.
 		run.status = exitedClean ? "completed" : "error";
 
-		// Auto-generate Y-CRM / ERP learning drafts (fire-and-forget, never blocks).
-		// Both run independently; chat route routing already ensures only one
-		// system was the primary for this turn, so the inactive system's
-		// trigger will short-circuit via no_planner_artifacts.
-		if (exitedClean) {
+		// Final persistence flush (removes _streaming flag and writes answer metadata).
+		const persisted = await flushPersistence(run);
+
+		// Auto-generate learning drafts only after the assistant reply is durable,
+		// so the review draft can include the final answer instead of a stale transcript.
+		if (exitedClean && persisted) {
 			triggerAutoLearningDraftIfEligible(run.sessionId);
 			triggerAutoErpLearningDraftIfEligible(run.sessionId);
 			triggerAutoEnmsLearningDraftIfEligible(run.sessionId);
 		}
-
-		// Final persistence flush (removes _streaming flag and writes answer metadata).
-		await flushPersistence(run);
 
 		// Signal completion to all subscribers.
 		for (const sub of run.subscribers) {
@@ -2626,12 +2628,13 @@ function finalizeWaitingRun(run: ActiveRun): void {
 
 	stopSubscribeProcess(run);
 
-	// Auto-generate Y-CRM / ERP learning drafts (fire-and-forget, never blocks).
-	triggerAutoLearningDraftIfEligible(run.sessionId);
-	triggerAutoErpLearningDraftIfEligible(run.sessionId);
-	triggerAutoEnmsLearningDraftIfEligible(run.sessionId);
-
-	void flushPersistence(run).finally(() => {
+	void flushPersistence(run).then((persisted) => {
+		if (persisted) {
+			triggerAutoLearningDraftIfEligible(run.sessionId);
+			triggerAutoErpLearningDraftIfEligible(run.sessionId);
+			triggerAutoEnmsLearningDraftIfEligible(run.sessionId);
+		}
+	}).finally(() => {
 		for (const sub of run.subscribers) {
 			try { sub(null); } catch { /* ignore */ }
 		}
@@ -2694,7 +2697,7 @@ function schedulePersist(run: ActiveRun) {
 	}, delay);
 }
 
-async function flushPersistence(run: ActiveRun) {
+async function flushPersistence(run: ActiveRun): Promise<boolean> {
 	if (run._persistTimer) {
 		clearTimeout(run._persistTimer);
 		run._persistTimer = null;
@@ -2703,7 +2706,7 @@ async function flushPersistence(run: ActiveRun) {
 
 	const parts = run.accumulated.parts;
 	if (parts.length === 0) {
-		return; // Nothing to persist yet.
+		return false; // Nothing to persist yet.
 	}
 
 	// Filter out leaked silent-reply text fragments before persisting.
@@ -2755,10 +2758,12 @@ async function flushPersistence(run: ActiveRun) {
 						turnStartedAt: run.startedAt,
 					}),
 				});
-				run.completionTracePersisted = true;
+			run.completionTracePersisted = true;
 			}
+		return true;
 	} catch (err) {
 		console.error("[active-runs] Persistence error:", err);
+		return false;
 	}
 }
 

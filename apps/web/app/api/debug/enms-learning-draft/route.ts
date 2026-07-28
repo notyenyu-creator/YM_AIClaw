@@ -7,6 +7,7 @@ import {
   markEnmsLearningDraftAsCached,
   type EnmsLearningDraftInput,
 } from "@/lib/enms-learning-draft";
+import { requireEnmsLearningReviewAccess } from "@/lib/enms-learning-review-auth";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -15,7 +16,12 @@ type DebugRequestBody = Partial<EnmsLearningDraftInput> & {
   force_regenerate?: boolean;
 };
 
-export async function GET() {
+export async function GET(req: Request) {
+  const accessError = requireEnmsLearningReviewAccess(req);
+  if (accessError) {
+    return accessError;
+  }
+
   const sampleInput: EnmsLearningDraftInput = {
     session_id: "s-enms-learning-sample",
     planner_preflight: {
@@ -65,6 +71,11 @@ export async function GET() {
 }
 
 export async function POST(req: Request) {
+  const accessError = requireEnmsLearningReviewAccess(req);
+  if (accessError) {
+    return accessError;
+  }
+
   let body: DebugRequestBody;
   try {
     body = await req.json();

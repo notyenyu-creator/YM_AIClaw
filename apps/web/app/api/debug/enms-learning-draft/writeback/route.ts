@@ -3,6 +3,7 @@ import {
   updateSessionEnmsPlannerLearningDraft,
 } from "@/app/api/web-sessions/shared";
 import { applyEnmsLearningDraftWriteback } from "@/lib/enms-learning-draft";
+import { requireEnmsLearningReviewAccess } from "@/lib/enms-learning-review-auth";
 import { writeEnmsLearningWikiDrafts } from "@/lib/enms-learning-writeback";
 
 export const dynamic = "force-dynamic";
@@ -14,6 +15,11 @@ type DebugRequestBody = {
 };
 
 export async function POST(req: Request) {
+  const accessError = requireEnmsLearningReviewAccess(req);
+  if (accessError) {
+    return accessError;
+  }
+
   let body: DebugRequestBody;
   try {
     body = await req.json();
