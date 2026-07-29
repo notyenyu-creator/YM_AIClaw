@@ -1,5 +1,10 @@
+import { createHash } from "node:crypto";
 import type { EnmsPlannerPreflight } from "./enms-context-builder";
 import type { EnmsContextPack } from "./enms-context-pack";
+import {
+  buildEnmsChatQueryPlan,
+  type EnmsChatSemanticRouteKey,
+} from "./enms-capability-registry";
 
 export type EnmsLearningDraftMessage = {
   id?: string;
@@ -36,6 +41,8 @@ export type EnmsLearningDraft = {
     updated_at: number | null;
     files: string[];
     skipped_files: string[];
+    regression_files?: string[];
+    regression_skipped_files?: string[];
     promoted_files: string[];
     promotion_skipped_files: string[];
     promotion_conflict_files: string[];
@@ -84,6 +91,17 @@ export type EnmsLearningDraft = {
     memory: Array<{
       key: string;
       value: string;
+      reason: string;
+    }>;
+    regression: Array<{
+      kind: "chat_capability_regression";
+      suggested_path: string;
+      title: string;
+      question: string;
+      expected_intent: EnmsPlannerPreflight["intent"];
+      expected_capabilities: string[];
+      required_evidence: string[];
+      guardrails: string[];
       reason: string;
     }>;
   };
@@ -151,7 +169,7 @@ function latestMessage(
   messages: EnmsLearningDraftMessage[],
   role: "user" | "assistant",
 ): string | null {
-  const message = [...messages].reverse().find((entry) => entry.role === role);
+  const message = messages.toReversed().find((entry) => entry.role === role);
   return compactText(message?.content);
 }
 
@@ -164,6 +182,8 @@ const EMPTY_WRITEBACK = {
   updated_at: null,
   files: [] as string[],
   skipped_files: [] as string[],
+  regression_files: [] as string[],
+  regression_skipped_files: [] as string[],
   promoted_files: [] as string[],
   promotion_skipped_files: [] as string[],
   promotion_conflict_files: [] as string[],
@@ -175,6 +195,127 @@ const EMPTY_WRITEBACK = {
   reviewer_note: null,
   reviewer_actor: null,
 };
+
+function defaultRegressionQuestion(
+  intent: EnmsPlannerPreflight["intent"],
+  latestUserMessage: string | null,
+): string {
+  if (latestUserMessage) {
+    return latestUserMessage;
+  }
+  const fallbackQuestions: Partial<Record<EnmsPlannerPreflight["intent"], string>> = {
+    demand_forecast: "請分析目前授權範圍的最大需量與超約風險。",
+    anomaly_detection: "請判斷目前授權範圍是否有異常用電訊號並說明原因。",
+    site_benchmarking: "請比較目前授權範圍內各場域的用電表現。",
+    alert_governance: "請摘要目前授權範圍內的告警治理重點。",
+    efficiency_analysis: "請找出目前授權範圍內可優先改善的節能機會。",
+    raw_trace: "請追蹤目前授權範圍內 MQTT raw data 與設備主檔的對應。",
+    natural_language_query: "請依目前授權範圍回答最新可用的能管資料問題。",
+  };
+  return fallbackQuestions[intent] ?? "請依目前授權範圍回答 EnMS 能管資料問題。";
+}
+
+function unique<T extends string>(values: T[]): T[] {
+  return values.filter((value, index, all) => all.indexOf(value) === index);
+}
+
+function fallbackCapabilitiesForIntent(
+  intent: EnmsPlannerPreflight["intent"],
+): EnmsChatSemanticRouteKey[] {
+  const map: Partial<Record<EnmsPlannerPreflight["intent"], EnmsChatSemanticRouteKey[]>> = {
+    demand_forecast: ["demand_risk", "latest_data"],
+    anomaly_detection: ["anomaly_root_cause", "latest_data"],
+    site_benchmarking: ["site_benchmarking", "meter_ranking"],
+    alert_governance: ["alert_governance", "demand_risk"],
+    efficiency_analysis: ["efficiency_advice", "billing", "meter_ranking"],
+    raw_trace: ["raw_trace", "device_lookup"],
+    natural_language_query: ["energy_usage_query", "latest_data"],
+  };
+  return map[intent] ?? ["energy_usage_query"];
+}
+
+function expectedCapabilitiesForRegression(
+  intent: EnmsPlannerPreflight["intent"],
+  latestUserMessage: string | null,
+): EnmsChatSemanticRouteKey[] {
+  if (latestUserMessage) {
+    const plan = buildEnmsChatQueryPlan(latestUserMessage);
+    const matchedCapabilities = plan.matchedRoutes.map((route) => route.key);
+    if (matchedCapabilities.length > 0) {
+      return unique(matchedCapabilities);
+    }
+  }
+
+  return fallbackCapabilitiesForIntent(intent);
+}
+
+function requiredEvidenceForCapabilities(
+  intent: EnmsPlannerPreflight["intent"],
+  capabilities: EnmsChatSemanticRouteKey[],
+): string[] {
+  const common = [
+    "planner_context_pack",
+    "authorized_enms_scope",
+    "enms_scoped_facts",
+  ];
+  const capabilityEvidence: Record<EnmsChatSemanticRouteKey, string[]> = {
+    latest_data: ["latest_data_timestamp", "query_time_range"],
+    demand_risk: ["demand_trend", "contract_capacity_or_missing_boundary"],
+    anomaly_root_cause: ["statistical_baseline", "power_quality_or_raw_signal_boundary"],
+    device_lookup: ["meter_identity_mapping", "mac_address_circuit_or_clarification"],
+    meter_ranking: ["kwh_aggregation", "ranking_time_range", "meter_identity_mapping_or_missing_boundary"],
+    energy_usage_query: ["energy_consumption_summary", "query_time_range"],
+    site_benchmarking: ["site_scope", "kwh_or_demand_ranking"],
+    alert_governance: ["alert_history_or_empty_state", "threshold_context"],
+    efficiency_advice: ["kwh_or_power_factor_signal", "billing_or_cost_missing_boundary"],
+    billing: ["bill_history_or_missing_boundary", "account_scope"],
+    raw_trace: ["mqtt_topic_or_raw_table", "meter_identity_mapping"],
+  };
+  const evidence = capabilities.flatMap((capability) =>
+    capabilityEvidence[capability] ?? []
+  );
+  if (evidence.length === 0) {
+    evidence.push(...(intent === "natural_language_query" ? ["selected_capability_bundle"] : ["query_time_range"]));
+  }
+
+  return unique([...common, ...evidence]);
+}
+
+function buildRegressionDraft(
+  sessionId: string,
+  suffix: string,
+  intent: EnmsPlannerPreflight["intent"],
+  latestUserMessage: string | null,
+): EnmsLearningDraft["drafts"]["regression"][number] {
+  const question = defaultRegressionQuestion(intent, latestUserMessage);
+  const expectedCapabilities = expectedCapabilitiesForRegression(
+    intent,
+    latestUserMessage,
+  );
+  const fingerprint = createHash("sha256")
+    .update(JSON.stringify({ intent, question, expectedCapabilities }))
+    .digest("hex")
+    .slice(0, 8);
+  return {
+    kind: "chat_capability_regression",
+    suggested_path: `wiki/regression/enms/${suffix}-${intent}-${fingerprint}-regression.json`,
+    title: `EnMS ${intent} Regression ${suffix}`,
+    question,
+    expected_intent: intent,
+    expected_capabilities: expectedCapabilities,
+    required_evidence: requiredEvidenceForCapabilities(
+      intent,
+      expectedCapabilities,
+    ),
+    guardrails: [
+      "must_use_authorized_scope",
+      "must_not_use_global_data",
+      "must_not_accept_generic_model_answer_for_enms_facts",
+      "must_return_evidence_or_missing_data_boundary",
+    ],
+    reason: `Capture session ${sessionId} as a reviewer-approved regression candidate before it can influence future EnMS AI behavior.`,
+  };
+}
 
 export function buildEnmsLearningDraft(
   input: EnmsLearningDraftInput,
@@ -210,7 +351,7 @@ export function buildEnmsLearningDraft(
         live_query_steps: [],
         matched_keywords: [],
       },
-      drafts: { wiki: [], playbooks: [], memory: [] },
+      drafts: { wiki: [], playbooks: [], memory: [], regression: [] },
       history: [
         {
           at: Date.now(),
@@ -227,6 +368,9 @@ export function buildEnmsLearningDraft(
   const wiki: EnmsLearningDraft["drafts"]["wiki"] = [];
   const playbooks: EnmsLearningDraft["drafts"]["playbooks"] = [];
   const memory: EnmsLearningDraft["drafts"]["memory"] = [];
+  const regression: EnmsLearningDraft["drafts"]["regression"] = [
+    buildRegressionDraft(input.session_id, suffix, planner.intent, latestUserMessage),
+  ];
   const liveQuerySteps = [...(pack?.live_query_steps ?? [])];
 
   if (planner.intent === "demand_forecast") {
@@ -478,7 +622,7 @@ export function buildEnmsLearningDraft(
       live_query_steps: liveQuerySteps,
       matched_keywords: [...planner.matchedKeywords],
     },
-    drafts: { wiki, playbooks, memory },
+    drafts: { wiki, playbooks, memory, regression },
     history: [
       {
         at: Date.now(),
@@ -502,8 +646,16 @@ export function markEnmsLearningDraftAsCached(
 
 export function applyEnmsLearningDraftWriteback(
   draft: EnmsLearningDraft,
-  result: { files: string[]; skipped_files: string[] },
+  result: {
+    files: string[];
+    skipped_files: string[];
+    regression_files?: string[];
+    regression_skipped_files?: string[];
+  },
 ): EnmsLearningDraft {
+  const regressionFiles = result.regression_files ?? [];
+  const regressionSkippedFiles = result.regression_skipped_files ?? [];
+  const writtenCount = result.files.length + regressionFiles.length;
   return {
     ...draft,
     writeback: {
@@ -512,15 +664,22 @@ export function applyEnmsLearningDraftWriteback(
       updated_at: Date.now(),
       files: [...result.files],
       skipped_files: [...result.skipped_files],
+      regression_files: [...regressionFiles],
+      regression_skipped_files: [...regressionSkippedFiles],
     },
     history: appendHistoryEntry(draft, {
       event: "wiki_draft_written",
-      tone: result.files.length > 0 ? "success" : "warning",
+      tone: writtenCount > 0 ? "success" : "warning",
       summary:
-        result.files.length > 0
-          ? `Wrote ${result.files.length} EnMS wiki draft file${result.files.length === 1 ? "" : "s"} for review.`
-          : "Writeback completed without creating new EnMS wiki draft files.",
-      files: [...result.files, ...result.skipped_files],
+        writtenCount > 0
+          ? `Wrote ${result.files.length} EnMS wiki draft file${result.files.length === 1 ? "" : "s"} and ${regressionFiles.length} regression draft file${regressionFiles.length === 1 ? "" : "s"} for review.`
+          : "Writeback completed without creating new EnMS review artifacts.",
+      files: [
+        ...result.files,
+        ...result.skipped_files,
+        ...regressionFiles,
+        ...regressionSkippedFiles,
+      ],
     }),
   };
 }

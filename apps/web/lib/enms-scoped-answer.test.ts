@@ -363,6 +363,23 @@ describe("buildEnmsScopedAnswer", () => {
     expect(result.matchedFactPaths).toContain("facts.deviceMappings");
   });
 
+  it("answers main meter lookup by filtering scoped meter role", () => {
+    const result = buildEnmsScopedAnswer({
+      message: "主電表是哪個？",
+      context: buildContext({ pageKey: "nlq" }),
+    });
+
+    expect(result.answerKind).toBe("device_lookup");
+    expect(result.text).toContain("主電表共 1 筆");
+    expect(result.text).toContain("空壓機電源");
+    expect(result.text).toContain("角色 Main");
+    expect(result.text).toContain("MAC-B");
+    expect(result.text).not.toContain("冰機 CH1 電源");
+    expect(result.text).not.toContain("角色 Sub");
+    expect(result.text).not.toContain("kWh");
+    expect(result.matchedFactPaths).toContain("facts.deviceMappings");
+  });
+
   it("verifies a requested account number against scoped facts", () => {
     const result = buildEnmsScopedAnswer({
       message: "電號 04043717102 的資料有在這次範圍嗎？",
@@ -484,6 +501,38 @@ describe("buildEnmsScopedAnswer", () => {
     expect(result.answerKind).toBe("missing");
     expect(result.text).toContain("缺少台電帳單資料");
     expect(result.text).not.toContain("授權資料摘要");
+  });
+
+  it("reports only billing-related missing data for bill questions", () => {
+    const result = buildEnmsScopedAnswer({
+      message: "上個月電費多少？",
+      context: buildContext({
+        facts: {
+          metrics: {
+            latestDataAt: "2026-07-22T02:00:00.000Z",
+          },
+        },
+        missingData: [
+          {
+            key: "taipowerBills",
+            message: "缺少台電帳單資料。",
+          },
+          {
+            key: "carbonToday",
+            message: "今天沒有可用用電資料，不能計算本日碳排。",
+          },
+          {
+            key: "productionBaseline",
+            message: "缺產量 / 人流 / 營業時段資料，單位能耗與 ROI 仍屬粗估。",
+          },
+        ],
+      }),
+    });
+
+    expect(result.answerKind).toBe("missing");
+    expect(result.text).toContain("缺少台電帳單資料");
+    expect(result.text).not.toContain("本日碳排");
+    expect(result.text).not.toContain("產量 / 人流");
   });
 
   it("answers efficiency advice from kWh saving when bill amount is unavailable", () => {

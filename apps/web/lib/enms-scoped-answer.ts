@@ -83,6 +83,11 @@ type DeviceMapping = {
   identityKey: string;
 };
 
+type RequestedMeterRole = {
+  label: string;
+  matches: RegExp;
+};
+
 type CommonMetricDefinition = {
   matches: (value: string) => boolean;
   paths: string[];
@@ -280,6 +285,31 @@ function findRequestedCircuitSeq(message: string): number | null {
   return Number.isFinite(value) ? value : null;
 }
 
+function findRequestedMeterRole(message: string): RequestedMeterRole | null {
+  if (/主電表|主電錶|總表|總電表|總電錶|\bmain\b/i.test(message)) {
+    return {
+      label: "主電表",
+      matches: /^main$/i,
+    };
+  }
+
+  if (/子電表|子電錶|分表|\bsubmeter\b|\bsub\b/i.test(message)) {
+    return {
+      label: "子電表",
+      matches: /^sub(?:meter)?$/i,
+    };
+  }
+
+  if (/獨立設備|獨立電表|standalone/i.test(message)) {
+    return {
+      label: "獨立設備",
+      matches: /^standalone$/i,
+    };
+  }
+
+  return null;
+}
+
 function normalizeAccountNumber(value: string): string {
   return value.replace(/[^\d]/g, "");
 }
@@ -319,9 +349,11 @@ function buildMissingAnswer(
   context: EnmsScopedAnswerContext,
   subject: string,
 ): EnmsScopedAnswerResult {
-  const missing = (context.missingData ?? [])
+  const allMissing = (context.missingData ?? [])
     .map((item) => sanitizeText(item.message))
-    .filter(Boolean)
+    .filter(Boolean);
+  const relevantMissing = filterMissingBySubject(allMissing, subject);
+  const missing = (relevantMissing.length > 0 ? relevantMissing : allMissing)
     .slice(0, 4);
   const timeRange = sanitizeText(context.evidence?.timeRange);
 
@@ -338,6 +370,36 @@ function buildMissingAnswer(
       .filter(Boolean)
       .join("\n\n"),
   };
+}
+
+function filterMissingBySubject(
+  missing: string[],
+  subject: string,
+): string[] {
+  const subjectPattern = (() => {
+    if (/帳單|台電|電費|費率|電價|bill|billing/i.test(subject)) {
+      return /帳單|台電|電費|費率|電價|bill|billing/i;
+    }
+    if (/需量|契約容量|超約|降載|尖峰|demand/i.test(subject)) {
+      return /需量|契約|容量|超約|降載|尖峰|demand|kW/i;
+    }
+    if (/功率因數|功因|power factor|pf/i.test(subject)) {
+      return /功率因數|功因|power factor|pf|電力品質|summary|raw/i;
+    }
+    if (/排名|排行|迴路|電表|用電|耗電|kWh/i.test(subject)) {
+      return /排名|排行|迴路|電表|用電|耗電|能耗|summary|kWh|圖表/i;
+    }
+    if (/設備|對應|主檔|mapping/i.test(subject)) {
+      return /設備|電表|主檔|對應|mapping|MAC|位址|地址|迴路/i;
+    }
+    return null;
+  })();
+
+  if (!subjectPattern) {
+    return missing;
+  }
+
+  return missing.filter((item) => subjectPattern.test(item));
 }
 
 function inferMissingSubject(
@@ -691,22 +753,41 @@ function answerDeviceLookup(
 
   const mappings = readDeviceMappings(getCaseInsensitive(facts, "deviceMappings"));
   const requestedCircuitSeq = findRequestedCircuitSeq(message);
-  const matchedMappings = requestedCircuitSeq === null
-    ? mappings
-    : mappings.filter((mapping) => mapping.circuitSeq === requestedCircuitSeq);
+  const requestedMeterRole = findRequestedMeterRole(message);
+  const matchedMappings = mappings.filter((mapping) => {
+    if (
+      requestedCircuitSeq !== null &&
+      mapping.circuitSeq !== requestedCircuitSeq
+    ) {
+      return false;
+    }
+    if (
+      requestedMeterRole &&
+      !requestedMeterRole.matches.test(mapping.meterRole)
+    ) {
+      return false;
+    }
+    return true;
+  });
   if (matchedMappings.length === 0) {
+    const requestedLabel = [
+      requestedCircuitSeq === null ? "" : `迴路 ${requestedCircuitSeq}`,
+      requestedMeterRole?.label ?? "",
+      "設備 / 電表對應",
+    ]
+      .filter(Boolean)
+      .join("的");
     return buildMissingAnswer(
       context,
-      requestedCircuitSeq === null
-        ? "設備 / 電表對應"
-        : `迴路 ${requestedCircuitSeq} 的設備 / 電表對應`,
+      requestedLabel,
     );
   }
 
   const shown = matchedMappings.slice(0, 8);
+  const titleSubject = requestedMeterRole?.label ?? "設備 / 電表對應";
   const title = requestedCircuitSeq === null
-    ? `目前授權範圍內可驗證的設備 / 電表對應共 ${matchedMappings.length} 筆：`
-    : `迴路 ${requestedCircuitSeq} 在目前授權範圍內有 ${matchedMappings.length} 筆可驗證對應：`;
+    ? `目前授權範圍內可驗證的${titleSubject}共 ${matchedMappings.length} 筆：`
+    : `迴路 ${requestedCircuitSeq} 在目前授權範圍內有 ${matchedMappings.length} 筆可驗證${titleSubject}：`;
   const lines = shown.map((mapping) => {
     const displayName =
       mapping.deviceAlias || mapping.deviceName || mapping.label || "未註冊電表";

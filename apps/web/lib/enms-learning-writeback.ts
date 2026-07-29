@@ -1,21 +1,7 @@
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { dirname } from "node:path";
+import { resolveEnmsWikiDraftArtifactPath } from "./enms-learning-artifact-path";
 import type { EnmsLearningDraft } from "./enms-learning-draft";
-
-function resolveDenchClawRoot(): string {
-  const cwd = process.cwd();
-  if (cwd.endsWith("/apps/web")) {
-    return resolve(cwd, "..", "..");
-  }
-  return cwd;
-}
-
-function resolveTargetPath(suggestedPath: string): string {
-  if (isAbsolute(suggestedPath)) {
-    return suggestedPath;
-  }
-  return join(resolveDenchClawRoot(), suggestedPath);
-}
 
 function renderWikiDraftMarkdown(
   sessionId: string,
@@ -67,7 +53,7 @@ export function writeEnmsLearningWikiDrafts(
   const overwrite = options?.overwrite === true;
 
   for (const item of draft.drafts.wiki) {
-    const targetPath = resolveTargetPath(item.suggested_path);
+    const targetPath = resolveEnmsWikiDraftArtifactPath(item.suggested_path);
     if (existsSync(targetPath) && !overwrite) {
       skippedFiles.push(item.suggested_path);
       continue;

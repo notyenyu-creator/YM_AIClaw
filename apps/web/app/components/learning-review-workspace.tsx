@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { Button } from "@/app/components/ui/button";
 import { Input } from "@/app/components/ui/input";
@@ -34,6 +34,8 @@ type LearningDraftSnapshot = {
     updated_at?: number | null;
     files?: string[];
     skipped_files?: string[];
+    regression_files?: string[];
+    regression_skipped_files?: string[];
     promoted_files?: string[];
     promotion_skipped_files?: string[];
     promotion_conflict_files?: string[];
@@ -69,6 +71,17 @@ type LearningDraftSnapshot = {
     memory?: Array<{
       key?: string;
       value?: string;
+      reason?: string;
+    }>;
+    regression?: Array<{
+      kind?: string;
+      suggested_path?: string;
+      title?: string;
+      question?: string;
+      expected_intent?: string;
+      expected_capabilities?: string[];
+      required_evidence?: string[];
+      guardrails?: string[];
       reason?: string;
     }>;
   };
@@ -123,7 +136,7 @@ const SYSTEM_CONFIG: Record<
     title: "EnMS Learning Draft Review",
     accentLabel: "EnMS",
     draftKey: "enmsPlannerLearningDraft",
-    apiBase: "/api/debug/enms-learning-draft",
+    apiBase: "/api/internal/enms-learning-draft",
   },
 };
 
@@ -155,7 +168,9 @@ function StatusPill({ status }: { status: WritebackStatus | undefined }) {
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function formatTimestamp(value: number | null | undefined): string {
-  if (!value) return "—";
+  if (!value) {
+    return "—";
+  }
   try {
     return new Date(value).toLocaleString();
   } catch {
@@ -178,7 +193,17 @@ export function LearningReviewWorkspace({ system, sessionId }: LearningReviewWor
   const [reviewerActor, setReviewerActor] = useState("");
   const [reviewReason, setReviewReason] = useState("");
   const [reviewerNote, setReviewerNote] = useState("");
+  const [reviewerToken, setReviewerToken] = useState("");
+  const reviewerTokenRef = useRef("");
   const [feedback, setFeedback] = useState<{ tone: "success" | "warning" | "error"; message: string } | null>(null);
+
+  const buildActionHeaders = useCallback(() => {
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (system === "enms" && reviewerTokenRef.current.trim().length > 0) {
+      headers.Authorization = `Bearer ${reviewerTokenRef.current.trim()}`;
+    }
+    return headers;
+  }, [system]);
 
   const refetch = useCallback(async () => {
     if (!sessionId) {
@@ -186,56 +211,129 @@ export function LearningReviewWorkspace({ system, sessionId }: LearningReviewWor
       setDraft(null);
       return;
     }
+    if (system === "enms" && reviewerTokenRef.current.trim().length === 0) {
+      setLoadingError(null);
+      setDraft(null);
+      return;
+    }
     setLoadingError(null);
     try {
-      const res = await fetch(`/api/web-sessions/${encodeURIComponent(sessionId)}`);
+      const res = system === "enms"
+        ? await fetch(
+          `${config.apiBase}?session_id=${encodeURIComponent(sessionId)}`,
+          { headers: buildActionHeaders() },
+        )
+        : await fetch(`/api/web-sessions/${encodeURIComponent(sessionId)}`);
       if (!res.ok) {
-        setLoadingError(`Session not found (${res.status})`);
+        setLoadingError(
+          system === "enms" && (res.status === 401 || res.status === 403)
+            ? `Reviewer token is invalid or unauthorized (${res.status}).`
+            : `Session not found (${res.status})`,
+        );
         setDraft(null);
         return;
       }
-      const data = (await res.json()) as SessionResponse;
-      const next = data.session?.[config.draftKey] ?? null;
+      const data = (await res.json()) as SessionResponse & {
+        draft?: LearningDraftSnapshot | null;
+      };
+      const next = system === "enms"
+        ? (data.draft ?? null)
+        : (data.session?.[config.draftKey] ?? null);
       setDraft(next);
     } catch (err) {
       setLoadingError(err instanceof Error ? err.message : String(err));
     }
-  }, [sessionId, config.draftKey]);
+  }, [sessionId, system, config.apiBase, config.draftKey, buildActionHeaders]);
 
   useEffect(() => {
     refetch();
   }, [refetch]);
 
   const status = draft?.writeback?.status;
-  const canWriteback = status === "not_written" && draft?.status === "ready";
-  const canPromote = status === "written";
-  const canForcePromote = status === "promotion_conflicted";
-  const canKeepCurrent = status === "promotion_conflicted";
   const auditValid = reviewerActor.trim().length > 0 && reviewReason.trim().length > 0;
+  const hasReviewerToken =
+    system !== "enms" || reviewerToken.trim().length > 0;
+  const enmsPromotionMissingGates = useMemo(() => {
+    if (system !== "enms" || !draft) {
+      return [];
+    }
+
+    const missing: string[] = [];
+    if (draft.status !== "ready") {
+      missing.push("Draft status must be ready.");
+    }
+    if (
+      !draft.evidence?.latest_user_message ||
+      !draft.evidence?.latest_assistant_reply ||
+      (draft.evidence?.live_query_steps?.length ?? 0) === 0
+    ) {
+      missing.push("Reviewable evidence is required.");
+    }
+    if ((draft.drafts?.wiki?.length ?? 0) === 0) {
+      missing.push("Wiki draft candidate is required.");
+    }
+    if ((draft.drafts?.regression?.length ?? 0) === 0) {
+      missing.push("Regression case candidate is required.");
+    }
+    if (draft.writeback?.status !== "written") {
+      missing.push("Writeback status must be written before promotion.");
+    }
+    if (
+      (draft.writeback?.files?.length ?? 0) +
+      (draft.writeback?.skipped_files?.length ?? 0) ===
+      0
+    ) {
+      missing.push("Wiki draft artifact must be written or already exist.");
+    }
+    if (
+      (draft.writeback?.regression_files?.length ?? 0) +
+      (draft.writeback?.regression_skipped_files?.length ?? 0) ===
+      0
+    ) {
+      missing.push("Regression case artifact must be written or already exist.");
+    }
+    return missing;
+  }, [system, draft]);
+  const canWriteback =
+    hasReviewerToken && status === "not_written" && draft?.status === "ready";
+  const canPromote =
+    hasReviewerToken &&
+    status === "written" &&
+    (system !== "enms" || enmsPromotionMissingGates.length === 0);
+  const canForcePromote =
+    hasReviewerToken && status === "promotion_conflicted";
+  const canKeepCurrent = hasReviewerToken && status === "promotion_conflicted";
 
   // ─── Actions ──────────────────────────────────────────────────────────────
 
   const performWriteback = useCallback(async () => {
-    if (!sessionId) return;
+    if (!sessionId) {
+      return;
+    }
     setBusy("writeback");
     setFeedback(null);
     try {
       const res = await fetch(`${config.apiBase}/writeback`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: buildActionHeaders(),
         body: JSON.stringify({ session_id: sessionId }),
       });
       const body = await res.json();
       if (!res.ok) {
         setFeedback({ tone: "error", message: body.error ?? `HTTP ${res.status}` });
       } else {
-        const wrote = body.writeback?.files?.length ?? 0;
+        const wroteWiki = body.writeback?.files?.length ?? 0;
+        const wroteRegression = body.writeback?.regression_files?.length ?? 0;
+        const skippedWiki = body.writeback?.skipped_files?.length ?? 0;
+        const skippedRegression = body.writeback?.regression_skipped_files?.length ?? 0;
+        const wrote = wroteWiki + wroteRegression;
+        const skipped = skippedWiki + skippedRegression;
         setFeedback({
           tone: wrote > 0 ? "success" : "warning",
           message:
             wrote > 0
-              ? `Wrote ${wrote} draft file${wrote === 1 ? "" : "s"} to disk.`
-              : "No new draft files written (all targets already existed).",
+              ? `Wrote ${wroteWiki} wiki draft file${wroteWiki === 1 ? "" : "s"} and ${wroteRegression} regression case file${wroteRegression === 1 ? "" : "s"} to disk${skipped > 0 ? `; skipped ${skipped} existing target${skipped === 1 ? "" : "s"}` : ""}.`
+              : `No new draft files written (${skipped} target${skipped === 1 ? "" : "s"} already existed).`,
         });
         await refetch();
       }
@@ -244,17 +342,19 @@ export function LearningReviewWorkspace({ system, sessionId }: LearningReviewWor
     } finally {
       setBusy(null);
     }
-  }, [sessionId, config.apiBase, refetch]);
+  }, [sessionId, config.apiBase, buildActionHeaders, refetch]);
 
   const performPromote = useCallback(
     async (force: boolean) => {
-      if (!sessionId) return;
+      if (!sessionId) {
+        return;
+      }
       setBusy(force ? "force" : "promote");
       setFeedback(null);
       try {
         const res = await fetch(`${config.apiBase}/promote`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: buildActionHeaders(),
           body: JSON.stringify({
             session_id: sessionId,
             force_conflict_override: force,
@@ -288,17 +388,27 @@ export function LearningReviewWorkspace({ system, sessionId }: LearningReviewWor
         setBusy(null);
       }
     },
-    [sessionId, config.apiBase, refetch, reviewerActor, reviewReason, reviewerNote],
+    [
+      sessionId,
+      config.apiBase,
+      buildActionHeaders,
+      refetch,
+      reviewerActor,
+      reviewReason,
+      reviewerNote,
+    ],
   );
 
   const performKeepCurrent = useCallback(async () => {
-    if (!sessionId) return;
+    if (!sessionId) {
+      return;
+    }
     setBusy("keep");
     setFeedback(null);
     try {
       const res = await fetch(`${config.apiBase}/resolve`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: buildActionHeaders(),
         body: JSON.stringify({
           session_id: sessionId,
           resolution_action: "keep_current_page",
@@ -319,13 +429,22 @@ export function LearningReviewWorkspace({ system, sessionId }: LearningReviewWor
     } finally {
       setBusy(null);
     }
-  }, [sessionId, config.apiBase, refetch, reviewerActor, reviewReason, reviewerNote]);
+  }, [
+    sessionId,
+    config.apiBase,
+    buildActionHeaders,
+    refetch,
+    reviewerActor,
+    reviewReason,
+    reviewerNote,
+  ]);
 
   // ─── Render ───────────────────────────────────────────────────────────────
 
   const wikiDrafts = useMemo(() => draft?.drafts?.wiki ?? [], [draft]);
   const playbookDrafts = useMemo(() => draft?.drafts?.playbooks ?? [], [draft]);
   const memoryDrafts = useMemo(() => draft?.drafts?.memory ?? [], [draft]);
+  const regressionDrafts = useMemo(() => draft?.drafts?.regression ?? [], [draft]);
   const history = useMemo(() => draft?.history ?? [], [draft]);
 
   return (
@@ -345,19 +464,58 @@ export function LearningReviewWorkspace({ system, sessionId }: LearningReviewWor
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <StatusPill status={status} />
-          <Button variant="outline" onClick={refetch} disabled={!sessionId}>
+          <Button variant="outline" onClick={refetch} disabled={!sessionId || !hasReviewerToken}>
             Refresh
           </Button>
-          <Link
-            href={`/api/web-sessions/${encodeURIComponent(sessionId ?? "")}`}
-            target="_blank"
-            className="text-xs underline"
-            style={{ color: "var(--color-text-muted)" }}
-          >
-            Raw session JSON
-          </Link>
+          {system !== "enms" && (
+            <Link
+              href={`/api/web-sessions/${encodeURIComponent(sessionId ?? "")}`}
+              target="_blank"
+              className="text-xs underline"
+              style={{ color: "var(--color-text-muted)" }}
+            >
+              Raw session JSON
+            </Link>
+          )}
         </div>
       </header>
+
+      {system === "enms" && (
+        <section
+          className="rounded-md border p-4"
+          style={{ borderColor: "var(--color-border)" }}
+        >
+          <h2 className="text-sm font-semibold" style={{ color: "var(--color-text)" }}>
+            Secured EnMS Review Access
+          </h2>
+          <p className="mt-1 text-xs" style={{ color: "var(--color-text-muted)" }}>
+            EnMS learning review evidence is token-gated. The token is sent only as an Authorization header to the internal review endpoint; it is not stored in localStorage or written into the frontend bundle.
+          </p>
+          <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:items-end">
+            <div className="grow">
+              <Label htmlFor="reviewer_token">Reviewer token</Label>
+              <Input
+                id="reviewer_token"
+                type="password"
+                autoComplete="off"
+                value={reviewerToken}
+                onChange={(e) => {
+                  reviewerTokenRef.current = e.target.value;
+                  setReviewerToken(e.target.value);
+                }}
+                placeholder="Internal EnMS review token"
+              />
+            </div>
+            <Button
+              variant="outline"
+              onClick={refetch}
+              disabled={!sessionId || !hasReviewerToken}
+            >
+              Load secured draft
+            </Button>
+          </div>
+        </section>
+      )}
 
       {/* Error banner */}
       {loadingError && (
@@ -401,7 +559,16 @@ export function LearningReviewWorkspace({ system, sessionId }: LearningReviewWor
       )}
 
       {/* No draft yet */}
-      {!draft && !loadingError && sessionId && (
+      {system === "enms" && !draft && !loadingError && sessionId && !hasReviewerToken && (
+        <div className="rounded-md border p-6 text-sm" style={{ borderColor: "var(--color-border)" }}>
+          <p>Enter the internal EnMS reviewer token to load secured learning draft evidence.</p>
+          <p className="mt-2" style={{ color: "var(--color-text-muted)" }}>
+            This locked state avoids loading session evidence until review access is explicitly provided.
+          </p>
+        </div>
+      )}
+
+      {!draft && !loadingError && sessionId && (system !== "enms" || hasReviewerToken) && (
         <div className="rounded-md border p-6 text-sm" style={{ borderColor: "var(--color-border)" }}>
           <p>No learning draft persisted for this session yet.</p>
           <p className="mt-2" style={{ color: "var(--color-text-muted)" }}>
@@ -456,7 +623,10 @@ export function LearningReviewWorkspace({ system, sessionId }: LearningReviewWor
           )}
 
           {/* Draft items */}
-          {(wikiDrafts.length > 0 || playbookDrafts.length > 0 || memoryDrafts.length > 0) && (
+          {(wikiDrafts.length > 0 ||
+            playbookDrafts.length > 0 ||
+            memoryDrafts.length > 0 ||
+            regressionDrafts.length > 0) && (
             <section
               className="rounded-md border p-4"
               style={{ borderColor: "var(--color-border)" }}
@@ -489,6 +659,9 @@ export function LearningReviewWorkspace({ system, sessionId }: LearningReviewWor
                   </ul>
                 </div>
               )}
+              {regressionDrafts.length > 0 && (
+                <RegressionDraftList items={regressionDrafts} />
+              )}
             </section>
           )}
 
@@ -519,6 +692,29 @@ export function LearningReviewWorkspace({ system, sessionId }: LearningReviewWor
                 </p>
               </section>
             )}
+
+          {/* Reviewer form */}
+          {system === "enms" && enmsPromotionMissingGates.length > 0 && (
+            <section
+              className="rounded-md border p-4"
+              style={{
+                borderColor: "rgba(217,119,6,0.3)",
+                background: "rgba(217,119,6,0.04)",
+              }}
+            >
+              <h2 className="text-sm font-semibold" style={{ color: "var(--color-warning)" }}>
+                Promotion gate checklist
+              </h2>
+              <p className="mt-1 text-xs" style={{ color: "var(--color-text-muted)" }}>
+                EnMS promotion requires both wiki and regression artifacts before a reviewer can promote it.
+              </p>
+              <ul className="mt-2 list-disc pl-5 text-xs">
+                {enmsPromotionMissingGates.map((gate) => (
+                  <li key={gate}>{gate}</li>
+                ))}
+              </ul>
+            </section>
+          )}
 
           {/* Reviewer form */}
           <section
@@ -581,7 +777,7 @@ export function LearningReviewWorkspace({ system, sessionId }: LearningReviewWor
               disabled={!canPromote || busy !== null || !auditValid}
               variant={canPromote ? "default" : "outline"}
             >
-              {busy === "promote" ? "Promoting…" : "Promote to wiki"}
+              {busy === "promote" ? "Promoting…" : "Promote to wiki after regression gate"}
             </Button>
             <Button
               onClick={() => performPromote(true)}
@@ -644,6 +840,55 @@ export function LearningReviewWorkspace({ system, sessionId }: LearningReviewWor
         </>
       )}
     </main>
+  );
+}
+
+function RegressionDraftList({
+  items,
+}: {
+  items: NonNullable<LearningDraftSnapshot["drafts"]>["regression"];
+}) {
+  return (
+    <div className="mt-3">
+      <p className="text-xs font-semibold" style={{ color: "var(--color-text-muted)" }}>
+        Regression cases ({items?.length ?? 0})
+      </p>
+      <ul className="mt-2 space-y-3 text-xs">
+        {(items ?? []).map((item, idx) => (
+          <li
+            key={idx}
+            className="rounded-md border p-3"
+            style={{ borderColor: "var(--color-border)" }}
+          >
+            <p className="font-semibold">{item.title ?? "—"}</p>
+            <p style={{ color: "var(--color-text-muted)" }}>
+              <code>{item.suggested_path ?? "—"}</code>
+            </p>
+            <dl className="mt-2 grid gap-2">
+              <EvidenceRow label="Question" value={item.question} />
+              <EvidenceRow label="Expected intent" value={item.expected_intent} />
+              <EvidenceRow
+                label="Expected capabilities"
+                value={(item.expected_capabilities ?? []).join(", ") || "—"}
+              />
+              <EvidenceRow
+                label="Required evidence"
+                value={(item.required_evidence ?? []).join(", ") || "—"}
+              />
+              <EvidenceRow
+                label="Guardrails"
+                value={(item.guardrails ?? []).join(", ") || "—"}
+              />
+            </dl>
+            {item.reason && (
+              <p className="mt-2" style={{ color: "var(--color-text)" }}>
+                {item.reason}
+              </p>
+            )}
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }
 

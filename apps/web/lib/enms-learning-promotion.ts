@@ -1,23 +1,12 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { isAbsolute, join, resolve } from "node:path";
+import {
+  resolveEnmsRegressionArtifactPath,
+  resolveEnmsWikiDraftArtifactPath,
+  resolveEnmsWikiSupportArtifactPath,
+} from "./enms-learning-artifact-path";
 import type { EnmsLearningDraft } from "./enms-learning-draft";
 
 const DRAFT_MARKER = "- This file was generated from the persisted EnMS learning draft flow.";
-
-function resolveDenchClawRoot(): string {
-  const cwd = process.cwd();
-  if (cwd.endsWith("/apps/web")) {
-    return resolve(cwd, "..", "..");
-  }
-  return cwd;
-}
-
-function resolveRepoPath(relativePath: string): string {
-  if (isAbsolute(relativePath)) {
-    return relativePath;
-  }
-  return join(resolveDenchClawRoot(), relativePath);
-}
 
 function inferSection(filePath: string): "Entities" | "Operations" | "Playbooks" | "Analysis" {
   if (filePath.startsWith("wiki/entities/")) {
@@ -70,7 +59,7 @@ function appendRowToSectionTable(
 }
 
 function ensureIndexEntries(files: string[], today: string): boolean {
-  const indexPath = resolveRepoPath("wiki/index.md");
+  const indexPath = resolveEnmsWikiSupportArtifactPath("wiki/index.md");
   if (!existsSync(indexPath)) {
     return false;
   }
@@ -95,7 +84,7 @@ function ensureIndexEntries(files: string[], today: string): boolean {
 }
 
 function ensureLogEntry(sessionId: string, files: string[], today: string): boolean {
-  const logPath = resolveRepoPath("wiki/log.md");
+  const logPath = resolveEnmsWikiSupportArtifactPath("wiki/log.md");
   if (!existsSync(logPath)) {
     return false;
   }
@@ -111,7 +100,7 @@ function ensureLogEntry(sessionId: string, files: string[], today: string): bool
     header,
     "",
     `- 來源 session：\`${sessionId}\``,
-    ...files.map((filePath) => `- 升格 ` + `\`${filePath}\``),
+    ...files.map((filePath) => `- 升格 \`${filePath}\``),
     "- 更新 `wiki/index.md`，讓頁面正式進入 wiki 導航層",
     "",
   ].join("\n");
@@ -130,7 +119,7 @@ function upsertPromotionMetadataNote(
   sessionId: string,
   draft: EnmsLearningDraft,
 ): boolean {
-  const absolutePath = resolveRepoPath(filePath);
+  const absolutePath = resolveEnmsWikiDraftArtifactPath(filePath);
   if (!existsSync(absolutePath)) {
     return false;
   }
@@ -188,6 +177,96 @@ export type EnmsPromotionResult = {
   updated_supporting_files: string[];
 };
 
+export type EnmsPromotionReadiness = {
+  ready: boolean;
+  missing_gates: string[];
+};
+
+function artifactExists(
+  filePath: string,
+  resolver: (value: string) => string,
+): boolean {
+  try {
+    return existsSync(resolver(filePath));
+  } catch {
+    return false;
+  }
+}
+
+export function validateEnmsLearningPromotionReadiness(
+  draft: EnmsLearningDraft,
+  options?: { allowPromotionConflicted?: boolean },
+): EnmsPromotionReadiness {
+  const missing: string[] = [];
+  const hasWikiDraft = draft.drafts.wiki.length > 0;
+  const hasRegressionDraft = (draft.drafts.regression ?? []).length > 0;
+  const hasEvidence =
+    Boolean(draft.evidence.latest_user_message) &&
+    Boolean(draft.evidence.latest_assistant_reply) &&
+    draft.evidence.live_query_steps.length > 0;
+  const wikiArtifacts = [
+    ...draft.writeback.files,
+    ...draft.writeback.skipped_files,
+  ];
+  const regressionArtifacts = [
+    ...(draft.writeback.regression_files ?? []),
+    ...(draft.writeback.regression_skipped_files ?? []),
+  ];
+  const hasWrittenWiki = wikiArtifacts.length > 0;
+  const hasWrittenRegression = regressionArtifacts.length > 0;
+  const hasWikiArtifactOnDisk =
+    hasWrittenWiki &&
+    wikiArtifacts.some((filePath) =>
+      artifactExists(filePath, resolveEnmsWikiDraftArtifactPath)
+    );
+  const hasRegressionArtifactOnDisk =
+    hasWrittenRegression &&
+    regressionArtifacts.some((filePath) =>
+      artifactExists(filePath, resolveEnmsRegressionArtifactPath)
+    );
+  const hasPromotableStatus =
+    draft.writeback.status === "written" ||
+    (
+      options?.allowPromotionConflicted === true &&
+      draft.writeback.status === "promotion_conflicted"
+    );
+
+  if (draft.status !== "ready") {
+    missing.push("draft_status_ready");
+  }
+  if (!hasEvidence) {
+    missing.push("reviewable_evidence");
+  }
+  if (!hasWikiDraft) {
+    missing.push("wiki_draft_candidate");
+  }
+  if (!hasRegressionDraft) {
+    missing.push("regression_case_candidate");
+  }
+  if (!hasPromotableStatus) {
+    missing.push(
+      options?.allowPromotionConflicted === true
+        ? "writeback_status_written_or_conflicted"
+        : "writeback_status_written",
+    );
+  }
+  if (!hasWrittenWiki) {
+    missing.push("wiki_artifact_written_or_skipped");
+  } else if (!hasWikiArtifactOnDisk) {
+    missing.push("wiki_artifact_exists_on_disk");
+  }
+  if (!hasWrittenRegression) {
+    missing.push("regression_artifact_written_or_skipped");
+  } else if (!hasRegressionArtifactOnDisk) {
+    missing.push("regression_artifact_exists_on_disk");
+  }
+
+  return {
+    ready: missing.length === 0,
+    missing_gates: missing,
+  };
+}
+
 export function promoteEnmsLearningWikiDrafts(
   sessionId: string,
   draft: EnmsLearningDraft,
@@ -212,7 +291,7 @@ export function promoteEnmsLearningWikiDrafts(
   );
 
   for (const filePath of uniqueCandidates) {
-    const absolutePath = resolveRepoPath(filePath);
+    const absolutePath = resolveEnmsWikiDraftArtifactPath(filePath);
     if (!existsSync(absolutePath)) {
       skippedFiles.push(filePath);
       continue;

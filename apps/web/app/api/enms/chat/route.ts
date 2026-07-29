@@ -365,6 +365,59 @@ function isGeneralAiChatPlan(plan?: EnmsChatPlan | null): boolean {
   );
 }
 
+function isPlannerIntent(value: string): value is EnmsPlannerPreflight["intent"] {
+  return [
+    "demand_forecast",
+    "anomaly_detection",
+    "natural_language_query",
+    "site_benchmarking",
+    "alert_governance",
+    "efficiency_analysis",
+    "raw_trace",
+    "unknown",
+  ].includes(value);
+}
+
+function isPlannerConfidence(
+  value: string,
+): value is EnmsPlannerPreflight["confidence"] {
+  return ["low", "medium", "high"].includes(value);
+}
+
+function buildChatPlanAwarePreflight(
+  plan: EnmsChatPlan | null | undefined,
+  fallback: EnmsPlannerPreflight,
+): EnmsPlannerPreflight {
+  if (plan?.contractVersion !== ENMS_CHAT_PLAN_CONTRACT_VERSION) {
+    return fallback;
+  }
+
+  const plannedIntent = sanitizePlainText(plan.intent, 80);
+  const plannedConfidence = sanitizePlainText(plan.confidence, 40);
+  return {
+    ...fallback,
+    intent: isPlannerIntent(plannedIntent) ? plannedIntent : fallback.intent,
+    confidence: isPlannerConfidence(plannedConfidence)
+      ? plannedConfidence
+      : fallback.confidence,
+    shouldRouteToEnms: plan.strategy !== "general_ai" && plan.allowDbFacts !== false,
+    matchedKeywords: [
+      ...fallback.matchedKeywords,
+      ...(plan.selectedPageKeys ?? []).map((key) => `capability:${key}`),
+    ].slice(0, 12),
+  };
+}
+
+function getChatPlanIntentOverride(
+  plan: EnmsChatPlan | null | undefined,
+): string | undefined {
+  if (plan?.contractVersion !== ENMS_CHAT_PLAN_CONTRACT_VERSION) {
+    return undefined;
+  }
+
+  return sanitizePlainText(plan.intent, 80) || undefined;
+}
+
 function summarizeScope(scope?: EnmsBridgeScope | null): string {
   if (!scope) {
     return "EnMS scope not provided";
@@ -482,6 +535,11 @@ function buildAnswer(params: {
   structuredModelAttempted?: boolean;
   structuredModelApplied?: boolean;
   intentOverride?: string;
+  answerContractItems?: Array<{
+    pageKey?: string;
+    answerKind: EnmsScopedAnswerResult["answerKind"];
+    matchedFactPaths: string[];
+  }>;
 }): Response {
   const safeAnswerText = sanitizePlainText(
     params.text,
@@ -585,8 +643,17 @@ function buildAnswer(params: {
       ? {
           answerKind: params.scopedAnswer.answerKind,
           matchedFactPaths: params.scopedAnswer.matchedFactPaths,
+          items:
+            params.answerContractItems?.map((item) => ({
+              pageKey: sanitizePlainText(item.pageKey, 40),
+              answerKind: item.answerKind,
+              matchedFactPaths: item.matchedFactPaths
+                .map((path) => sanitizePlainText(path, 160))
+                .filter(Boolean)
+                .slice(0, 12),
+            })) ?? [],
           pageInsightContractVersion: params.knowledgeBundle?.contractVersion,
-          factsSchemaVersion: params.knowledgeBundle?.factsSchemaVersion,
+          factsSchemaVersion: ENMS_FACTS_SCHEMA_VERSION,
           registryVersion: params.knowledgeBundle?.registryVersion,
           structuredJsonOnly: true,
           htmlAllowed: false,
@@ -732,7 +799,7 @@ function selectBundleAnswerCandidates(
     if (!latestDataQuestion && scopedAnswer.answerKind === "time_range") {
       continue;
     }
-    const kindKey = scopedAnswer.answerKind;
+    const kindKey = `${context.pageKey}:${scopedAnswer.answerKind}`;
     if (usedTexts.has(textKey) || usedKinds.has(kindKey)) {
       continue;
     }
@@ -806,6 +873,7 @@ async function buildScopedFactsBundleAnswer(
       contextPack: pack,
       fallback: false,
       answerSource: "blocked",
+      intentOverride: getChatPlanIntentOverride(body.chatPlan),
       text: "EnClaw 的 EnMS skill/wiki/playbook knowledge contract 未完整載入；本次不會繞過規範直接回答。",
     });
   }
@@ -908,10 +976,16 @@ async function buildScopedFactsBundleAnswer(
     contextPack: pack,
     knowledgeBundle: responseKnowledgeBundle,
     scopedAnswer,
+    answerContractItems: candidates.map((candidate) => ({
+      pageKey: candidate.context.pageKey,
+      answerKind: candidate.scopedAnswer.answerKind,
+      matchedFactPaths: candidate.scopedAnswer.matchedFactPaths,
+    })),
     fallback: false,
     answerSource: "scoped_facts",
     structuredModelAttempted,
     structuredModelApplied,
+    intentOverride: getChatPlanIntentOverride(body.chatPlan),
     text,
   });
 }
@@ -950,6 +1024,7 @@ async function buildScopedFactsAnswer(
       contextPack: pack,
       fallback: false,
       answerSource: "blocked",
+      intentOverride: getChatPlanIntentOverride(body.chatPlan),
       text: "EnClaw 的 EnMS skill/wiki/playbook knowledge contract 未完整載入；本次不會繞過規範直接回答。",
     });
   }
@@ -1023,10 +1098,18 @@ async function buildScopedFactsAnswer(
     contextPack: pack,
     knowledgeBundle,
     scopedAnswer,
+    answerContractItems: [
+      {
+        pageKey: scopedContext.pageKey,
+        answerKind: scopedAnswer.answerKind,
+        matchedFactPaths: scopedAnswer.matchedFactPaths,
+      },
+    ],
     fallback: false,
     answerSource: "scoped_facts",
     structuredModelAttempted,
     structuredModelApplied,
+    intentOverride: getChatPlanIntentOverride(body.chatPlan),
     text,
   });
 }
@@ -1111,14 +1194,18 @@ export async function POST(req: Request) {
     return Response.json({ error: "Missing 'message' field" }, { status: 400 });
   }
 
-  const history = normalizeHistory(body.history);
-  const effectiveMessage = buildEffectiveMessage(message, history);
-  const preflight = buildEnmsContext({
+  const currentMessagePreflight = buildEnmsContext({
     request: {
-      user_message: effectiveMessage,
+      user_message: message,
       current_system_hint: "enms",
     },
   });
+  const preflight = buildChatPlanAwarePreflight(
+    body.chatPlan,
+    currentMessagePreflight,
+  );
+  const history = normalizeHistory(body.history);
+  const effectiveMessage = buildEffectiveMessage(message, history);
 
   const trustedScopedFactsBundle = getTrustedScopedFactsBundle(body);
   const trustedScopedContext = hasTrustedScopedContext(body);

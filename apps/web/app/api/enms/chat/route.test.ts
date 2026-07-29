@@ -463,6 +463,24 @@ describe("POST /api/enms/chat", () => {
       "nlq",
       "demand",
     ]);
+    expect(json.answerContract.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          pageKey: "nlq",
+          answerKind: "device_lookup",
+          matchedFactPaths: expect.arrayContaining(["facts.deviceMappings"]),
+        }),
+        expect.objectContaining({
+          pageKey: "demand",
+          answerKind: "demand",
+          matchedFactPaths: expect.arrayContaining([
+            "facts.metrics.currentDemandKw",
+            "facts.metrics.peakDemandKw",
+            "facts.metrics.projectedPeakDemandKw",
+          ]),
+        }),
+      ]),
+    );
   });
 
   it("keeps exact nlq meter ranking answers in a multi-intent bundle before demand analysis", async () => {
@@ -552,6 +570,24 @@ describe("POST /api/enms/chat", () => {
       "nlq",
       "demand",
     ]);
+    expect(json.answerContract.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          pageKey: "nlq",
+          answerKind: "ranking",
+          matchedFactPaths: expect.arrayContaining(["facts.meterRankingDetails"]),
+        }),
+        expect.objectContaining({
+          pageKey: "demand",
+          answerKind: "demand",
+          matchedFactPaths: expect.arrayContaining([
+            "facts.metrics.currentDemandKw",
+            "facts.metrics.peakDemandKw",
+            "facts.metrics.projectedPeakDemandKw",
+          ]),
+        }),
+      ]),
+    );
   });
 
   it("keeps meter ranking when the same bundle question also asks billing facts", async () => {
@@ -845,6 +881,107 @@ describe("POST /api/enms/chat", () => {
     expect(json.answerContract.structuredModelApplied).toBe(true);
   });
 
+  it("keeps same answerKind candidates when they belong to different page capabilities", async () => {
+    const { POST } = await import("./route.js");
+    const response = await POST(
+      buildRequest({
+        message: "功率因數正常嗎？也給我省電建議",
+        conversationId: "conv-multi-metric",
+        scope: {
+          userId: "UserA",
+          companyNo: "Pingroun",
+          allSites: false,
+          siteFilterRequired: true,
+          siteIds: ["site-1"],
+        },
+        scopedContext: {
+          pageKey: "anomaly",
+          status: "ready",
+          facts: {
+            metrics: {
+              avgPowerFactor: 0.82,
+            },
+          },
+          evidence: {
+            dataSources: ["ai_anomaly_view"],
+            timeRange: "最近 7 日",
+            queryScope: "anomaly scope",
+            confidence: "high",
+          },
+        },
+        scopedFactsBundle: {
+          contractVersion: "enms.ai.page-insight.v1",
+          factsSchemaVersion: "enms.ai.facts.v1",
+          primaryPageKey: "anomaly",
+          contexts: [
+            {
+              contractVersion: "enms.ai.page-insight.v1",
+              factsSchemaVersion: "enms.ai.facts.v1",
+              pageKey: "anomaly",
+              status: "ready",
+              facts: {
+                metrics: {
+                  avgPowerFactor: 0.82,
+                },
+              },
+              evidence: {
+                dataSources: ["ai_anomaly_view"],
+                timeRange: "最近 7 日",
+                queryScope: "anomaly scope",
+                confidence: "high",
+              },
+            },
+            {
+              contractVersion: "enms.ai.page-insight.v1",
+              factsSchemaVersion: "enms.ai.facts.v1",
+              pageKey: "eff",
+              status: "ready",
+              facts: {
+                metrics: {
+                  quickWinSavingNtd: 120000,
+                },
+              },
+              evidence: {
+                dataSources: ["ai_efficiency_view"],
+                timeRange: "最近 30 日",
+                queryScope: "eff scope",
+                confidence: "high",
+              },
+            },
+          ],
+        },
+        guardrails: {
+          mode: "readonly",
+          factsAlreadyScopedByEnms: true,
+          noSqlFromClient: true,
+          noHtml: true,
+          semanticViewsOnly: true,
+          requireEvidence: true,
+        },
+      }),
+    );
+    const json = await response.json();
+    const blocks = JSON.stringify(json.blocks);
+
+    expect(response.status).toBe(200);
+    expect(blocks).toContain("【異常根因分析】");
+    expect(blocks).toContain("平均功率因數：0.82");
+    expect(blocks).toContain("【能效節能挖掘】");
+    expect(blocks).toContain("5% what-if 年化金額：120,000 NTD");
+    expect(json.answerContract.items).toEqual([
+      {
+        pageKey: "anomaly",
+        answerKind: "metric",
+        matchedFactPaths: ["facts.metrics.avgPowerFactor"],
+      },
+      {
+        pageKey: "eff",
+        answerKind: "metric",
+        matchedFactPaths: ["facts.metrics.quickWinSavingNtd"],
+      },
+    ]);
+  });
+
   it("does not force EnMS scoped facts onto unrelated general questions", async () => {
     process.env.ENCLAW_ENMS_STRUCTURED_AGENT_ENABLED = "1";
     structuredAgentMocks.enabled.mockReturnValue(true);
@@ -1000,6 +1137,88 @@ describe("POST /api/enms/chat", () => {
     expect(structuredAgentMocks.runGeneral).toHaveBeenCalledWith(
       expect.objectContaining({
         task: "今天是幾月幾號？",
+      }),
+    );
+    expect(structuredAgentMocks.run).not.toHaveBeenCalled();
+  });
+
+  it("lets the current chat plan override stale EnMS history and scoped facts for general questions", async () => {
+    process.env.ENCLAW_ENMS_STRUCTURED_AGENT_ENABLED = "1";
+    structuredAgentMocks.enabled.mockReturnValue(true);
+    structuredAgentMocks.runGeneral.mockResolvedValue({
+      text: "一般省電方式包含關閉閒置設備、調整空調設定與排程管理；這次未讀取 EnMS 資料。",
+      confidence: "high",
+    });
+    const { POST } = await import("./route.js");
+    const response = await POST(
+      buildRequest({
+        message: "請用一般常識說明家庭怎麼省電",
+        conversationId: "conv-general-after-enms",
+        history: [
+          {
+            role: "assistant",
+            content:
+              "目前需量：899.64 kW；最高需量：1,368.4 kW；intent=demand_forecast。",
+          },
+        ],
+        chatPlan: {
+          contractVersion: "enms.ai.chat-plan.v1",
+          registryVersion: "test-registry",
+          strategy: "general_ai",
+          intent: "general_question",
+          confidence: "high",
+          allowDbFacts: false,
+          allowGeneralAI: true,
+          selectedPageKeys: [],
+        },
+        scopedFactsBundle: {
+          contractVersion: "enms.ai.page-insight.v1",
+          factsSchemaVersion: "enms.ai.facts.v1",
+          primaryPageKey: "demand",
+          contexts: [
+            {
+              contractVersion: "enms.ai.page-insight.v1",
+              factsSchemaVersion: "enms.ai.facts.v1",
+              pageKey: "demand",
+              status: "ready",
+              facts: {
+                metrics: {
+                  currentDemandKw: 899.64,
+                  peakDemandKw: 1368.4,
+                },
+              },
+              evidence: {
+                dataSources: ["ai_energy_15m_v1"],
+                timeRange: "最近 30 日",
+                queryScope: "siteCount=1",
+                confidence: "high",
+              },
+            },
+          ],
+        },
+        guardrails: {
+          mode: "readonly",
+          factsAlreadyScopedByEnms: true,
+          noSqlFromClient: true,
+          noHtml: true,
+          semanticViewsOnly: true,
+          allowedViewPrefix: "ai_",
+          requireEvidence: true,
+        },
+      }),
+    );
+    const json = await response.json();
+    const payload = JSON.stringify(json);
+
+    expect(response.status).toBe(200);
+    expect(json.intent).toBe("general_question");
+    expect(json.citations[0].source).toBe("general_ai");
+    expect(payload).toContain("一般省電方式");
+    expect(payload).not.toContain("899.64");
+    expect(payload).not.toContain("1,368.4");
+    expect(structuredAgentMocks.runGeneral).toHaveBeenCalledWith(
+      expect.objectContaining({
+        task: "請用一般常識說明家庭怎麼省電",
       }),
     );
     expect(structuredAgentMocks.run).not.toHaveBeenCalled();

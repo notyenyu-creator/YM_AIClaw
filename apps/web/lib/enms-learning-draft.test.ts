@@ -77,6 +77,17 @@ describe("buildEnmsLearningDraft", () => {
     expect(draft.drafts.playbooks.map((item) => item.kind)).toContain(
       "load_shedding",
     );
+    expect(draft.drafts.regression).toEqual([
+      expect.objectContaining({
+        kind: "chat_capability_regression",
+        suggested_path: expect.stringMatching(
+          /^wiki\/regression\/enms\/s-demand-demand_forecast-[a-f0-9]{8}-regression\.json$/,
+        ),
+        question: "請分析最大需量和超約風險",
+        expected_intent: "demand_forecast",
+        expected_capabilities: ["demand_risk"],
+      }),
+    ]);
     expect(draft.drafts.memory.map((item) => item.key)).toContain(
       "known_rule:enms_join_power_account_before_curtailment_advice",
     );
@@ -168,6 +179,64 @@ describe("buildEnmsLearningDraft", () => {
     );
   });
 
+  it("creates precise regression capabilities for device lookup and meter ranking questions", () => {
+    const lookupDraft = buildEnmsLearningDraft({
+      session_id: "s-lookup-1",
+      planner_preflight: makePreflight("natural_language_query"),
+      planner_context_pack: makePack("natural_language_query"),
+      messages: [{ role: "user", content: "迴路1是對應哪個設備？" }],
+    });
+    const rankingDraft = buildEnmsLearningDraft({
+      session_id: "s-ranking-1",
+      planner_preflight: makePreflight("natural_language_query"),
+      planner_context_pack: makePack("natural_language_query"),
+      messages: [{ role: "user", content: "哪個迴路最費電？" }],
+    });
+
+    expect(lookupDraft.drafts.regression[0]).toEqual(
+      expect.objectContaining({
+        expected_capabilities: ["device_lookup"],
+        required_evidence: expect.arrayContaining([
+          "meter_identity_mapping",
+          "mac_address_circuit_or_clarification",
+        ]),
+      }),
+    );
+    expect(rankingDraft.drafts.regression[0]).toEqual(
+      expect.objectContaining({
+        expected_capabilities: ["meter_ranking"],
+        required_evidence: expect.arrayContaining([
+          "kwh_aggregation",
+          "ranking_time_range",
+        ]),
+      }),
+    );
+  });
+
+  it("keeps multiple scoped capabilities for mixed EnMS questions", () => {
+    const draft = buildEnmsLearningDraft({
+      session_id: "s-mixed-1",
+      planner_preflight: makePreflight("natural_language_query"),
+      planner_context_pack: makePack("natural_language_query"),
+      messages: [
+        { role: "user", content: "哪個迴路最費電，也請看需量風險" },
+      ],
+    });
+
+    expect(draft.drafts.regression[0]).toEqual(
+      expect.objectContaining({
+        expected_capabilities: expect.arrayContaining([
+          "meter_ranking",
+          "demand_risk",
+        ]),
+        guardrails: expect.arrayContaining([
+          "must_use_authorized_scope",
+          "must_not_accept_generic_model_answer_for_enms_facts",
+        ]),
+      }),
+    );
+  });
+
   it("always records the primary-source and semantic-join rules", () => {
     const draft = buildEnmsLearningDraft({
       session_id: "s-mem-1",
@@ -220,6 +289,8 @@ describe("EnMS learning draft lifecycle helpers", () => {
     const written = applyEnmsLearningDraftWriteback(fresh, {
       files: ["wiki/entities/energy/s-flow-1-demand-forecast-summary.md"],
       skipped_files: [],
+      regression_files: ["wiki/regression/enms/s-flow-1-demand_forecast-regression.json"],
+      regression_skipped_files: [],
     });
     const conflicted = applyEnmsLearningDraftPromotion(written, {
       promoted_files: [],
@@ -241,6 +312,9 @@ describe("EnMS learning draft lifecycle helpers", () => {
       "wiki_draft_written",
       "promotion_conflicted",
       "resolution_kept_current",
+    ]);
+    expect(written.writeback.regression_files).toEqual([
+      "wiki/regression/enms/s-flow-1-demand_forecast-regression.json",
     ]);
     expect(resolved.writeback.review_reason).toBe("Keep curated page");
     expect(resolved.writeback.reviewer_actor).toBe("YM");

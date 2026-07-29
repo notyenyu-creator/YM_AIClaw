@@ -22,6 +22,16 @@ export async function GET(req: Request) {
     return accessError;
   }
 
+  const sessionId = new URL(req.url).searchParams.get("session_id")?.trim();
+  if (sessionId) {
+    const draft = getSessionMeta(sessionId)?.enmsPlannerLearningDraft ?? null;
+    return Response.json({
+      ok: true,
+      session_id: sessionId,
+      draft,
+    });
+  }
+
   const sampleInput: EnmsLearningDraftInput = {
     session_id: "s-enms-learning-sample",
     planner_preflight: {

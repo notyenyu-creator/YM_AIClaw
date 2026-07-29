@@ -4,7 +4,10 @@ import {
 } from "@/app/api/web-sessions/shared";
 import { applyEnmsLearningDraftPromotion } from "@/lib/enms-learning-draft";
 import { requireEnmsLearningReviewAccess } from "@/lib/enms-learning-review-auth";
-import { promoteEnmsLearningWikiDrafts } from "@/lib/enms-learning-promotion";
+import {
+  promoteEnmsLearningWikiDrafts,
+  validateEnmsLearningPromotionReadiness,
+} from "@/lib/enms-learning-promotion";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -90,10 +93,33 @@ export async function POST(req: Request) {
       { status: 409 },
     );
   }
+  const readiness = validateEnmsLearningPromotionReadiness(existing, {
+    allowPromotionConflicted: forceOverride,
+  });
+  if (!readiness.ready) {
+    return Response.json(
+      {
+        error: "EnMS learning draft is not ready for promotion.",
+        missing_gates: readiness.missing_gates,
+      },
+      { status: 409 },
+    );
+  }
 
   const result = promoteEnmsLearningWikiDrafts(body.session_id, existing, {
     forceConflictOverride: forceOverride,
   });
+
+  if (result.promoted_files.length === 0 && result.conflict_files.length === 0) {
+    return Response.json(
+      {
+        error:
+          "EnMS learning promotion did not promote any wiki artifacts. Re-run writeback and verify artifacts exist before promotion.",
+        skipped_files: result.skipped_files,
+      },
+      { status: 409 },
+    );
+  }
 
   const updated = applyEnmsLearningDraftPromotion(existing, {
     promoted_files: result.promoted_files,
