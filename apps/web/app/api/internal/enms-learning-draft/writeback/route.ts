@@ -1,1 +1,4 @@
-export { dynamic, runtime, POST } from "@/app/api/debug/enms-learning-draft/writeback/route";
+export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
+
+export { POST } from "@/app/api/debug/enms-learning-draft/writeback/route";

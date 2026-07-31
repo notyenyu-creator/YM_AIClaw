@@ -60,8 +60,10 @@ export async function GET(req: Request) {
       response: [
         "strategy",
         "intent",
+        "selectedCapabilities",
         "allowDbFacts",
         "allowGeneralAI",
+        "needClarification",
         "primaryPageKey",
         "selectedPageKeys",
         "matchedRoutes",

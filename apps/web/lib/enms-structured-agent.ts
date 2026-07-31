@@ -23,8 +23,16 @@ const ENMS_GATEWAY_SCOPES = ["operator.read"];
 const ENMS_GATEWAY_ATTESTATION_SCOPES = ["operator.read"];
 const ENMS_GENERAL_CHAT_SCOPES = ["operator.read"];
 const MAX_PROVIDER_RESPONSE_BYTES = 64 * 1024;
+const MAX_PROMPT_BUNDLE_CACHE_ITEMS = 64;
+
+const promptKnowledgeBundleCache = new Map<string, string>();
 
 type StructuredModelTransport = "gateway" | "openai-compatible";
+type EnmsModelProfile =
+  | "planner"
+  | "structured_answer"
+  | "general_chat"
+  | "fallback";
 
 export type EnmsStructuredNarrativeItem = {
   text: string;
@@ -156,16 +164,46 @@ function readPositiveInt(
     : fallback;
 }
 
-function getTimeoutMs(mode: "page" | "chat"): number {
+function toProfileEnvName(profile: EnmsModelProfile): string {
+  return profile.toUpperCase();
+}
+
+function readProfileModelEnv(
+  profile: EnmsModelProfile,
+  suffix: string,
+): string | undefined {
+  const profileValue =
+    process.env[`ENCLAW_ENMS_${toProfileEnvName(profile)}_MODEL_${suffix}`]
+      ?.trim();
+  if (profileValue) {
+    return profileValue;
+  }
+
+  if (profile === "general_chat") {
+    const generalValue =
+      process.env[`ENCLAW_ENMS_GENERAL_MODEL_${suffix}`]?.trim();
+    if (generalValue) {
+      return generalValue;
+    }
+  }
+
+  return process.env[`ENCLAW_ENMS_STRUCTURED_MODEL_${suffix}`]?.trim();
+}
+
+function getTimeoutMs(
+  mode: "page" | "chat",
+  profile: EnmsModelProfile = "structured_answer",
+): number {
+  const profileTimeout = readProfileModelEnv(profile, "TIMEOUT_MS");
   return mode === "chat"
     ? readPositiveInt(
-        process.env.ENCLAW_ENMS_CHAT_MODEL_TIMEOUT_MS,
+        profileTimeout ?? process.env.ENCLAW_ENMS_CHAT_MODEL_TIMEOUT_MS,
         DEFAULT_CHAT_TIMEOUT_MS,
         5_000,
         35_000,
       )
     : readPositiveInt(
-        process.env.ENCLAW_ENMS_PAGE_MODEL_TIMEOUT_MS,
+        profileTimeout ?? process.env.ENCLAW_ENMS_PAGE_MODEL_TIMEOUT_MS,
         DEFAULT_PAGE_TIMEOUT_MS,
         5_000,
         30_000,
@@ -185,27 +223,25 @@ function getAgentId(): string {
   return agentId;
 }
 
-function getStructuredModelTransport(): StructuredModelTransport {
-  const value =
-    process.env.ENCLAW_ENMS_STRUCTURED_MODEL_TRANSPORT?.trim() || "gateway";
+function getStructuredModelTransport(
+  profile: EnmsModelProfile = "structured_answer",
+): StructuredModelTransport {
+  const value = readProfileModelEnv(profile, "TRANSPORT") || "gateway";
   if (value !== "gateway" && value !== "openai-compatible") {
     throw new Error("Unsupported EnMS structured model transport");
   }
   return value;
 }
 
-function getOpenAiCompatibleConfig(): {
+function getOpenAiCompatibleConfig(profile: EnmsModelProfile): {
   endpoint: URL;
   apiKey: string;
   model: string;
   maxTokens: number;
 } {
-  const baseUrl =
-    process.env.ENCLAW_ENMS_STRUCTURED_MODEL_BASE_URL?.trim() ?? "";
-  const apiKey =
-    process.env.ENCLAW_ENMS_STRUCTURED_MODEL_API_KEY?.trim() ?? "";
-  const model =
-    process.env.ENCLAW_ENMS_STRUCTURED_MODEL_NAME?.trim() ?? "";
+  const baseUrl = readProfileModelEnv(profile, "BASE_URL") ?? "";
+  const apiKey = readProfileModelEnv(profile, "API_KEY") ?? "";
+  const model = readProfileModelEnv(profile, "NAME") ?? "";
   if (!baseUrl || !apiKey || !model) {
     throw new Error(
       "OpenAI-compatible EnMS structured model is not fully configured",
@@ -225,14 +261,13 @@ function getOpenAiCompatibleConfig(): {
       throw new Error("invalid URL");
     }
     if (
-      process.env.ENCLAW_ENMS_REQUIRE_MODEL_HTTPS === "1" &&
+      (readProfileModelEnv(profile, "REQUIRE_HTTPS") ??
+        process.env.ENCLAW_ENMS_REQUIRE_MODEL_HTTPS) === "1" &&
       normalizedBase.protocol !== "https:"
     ) {
       throw new Error("HTTPS is required");
     }
-    const allowedHosts = (
-      process.env.ENCLAW_ENMS_STRUCTURED_MODEL_ALLOWED_HOSTS ?? ""
-    )
+    const allowedHosts = (readProfileModelEnv(profile, "ALLOWED_HOSTS") ?? "")
       .split(",")
       .map((value) => value.trim().toLowerCase())
       .filter(Boolean);
@@ -252,7 +287,7 @@ function getOpenAiCompatibleConfig(): {
     apiKey,
     model,
     maxTokens: readPositiveInt(
-      process.env.ENCLAW_ENMS_STRUCTURED_MODEL_MAX_TOKENS,
+      readProfileModelEnv(profile, "MAX_TOKENS"),
       1_200,
       256,
       2_000,
@@ -292,6 +327,36 @@ function collectFactPaths(
   return paths;
 }
 
+function buildKnowledgeBundle(documents: EnmsPromptDocument[]): string {
+  const cacheKey = documents
+    .map(
+      (document) =>
+        `${document.path}:${document.sha256}:${document.content.length}`,
+    )
+    .join("|");
+  const cached = promptKnowledgeBundleCache.get(cacheKey);
+  if (cached !== undefined) {
+    promptKnowledgeBundleCache.delete(cacheKey);
+    promptKnowledgeBundleCache.set(cacheKey, cached);
+    return cached;
+  }
+
+  const bundle = documents
+    .map(
+      (document) =>
+        `<DOCUMENT path="${document.path}" sha256="${document.sha256}">\n${document.content}\n</DOCUMENT>`,
+    )
+    .join("\n\n");
+  promptKnowledgeBundleCache.set(cacheKey, bundle);
+  if (promptKnowledgeBundleCache.size > MAX_PROMPT_BUNDLE_CACHE_ITEMS) {
+    const oldestKey = promptKnowledgeBundleCache.keys().next().value;
+    if (oldestKey) {
+      promptKnowledgeBundleCache.delete(oldestKey);
+    }
+  }
+  return bundle;
+}
+
 function buildPrompt(
   input: EnmsStructuredAgentInput,
   availableFactPaths: string[],
@@ -302,12 +367,15 @@ function buildPrompt(
   }
 
   const task = input.task.trim().slice(0, MAX_TASK_LENGTH);
-  const knowledge = input.documents
-    .map(
-      (document) =>
-        `<DOCUMENT path="${document.path}" sha256="${document.sha256}">\n${document.content}\n</DOCUMENT>`,
+  const knowledge = buildKnowledgeBundle(input.documents);
+  const factRefExamples = availableFactPaths.slice(0, 8);
+  const preferredFactRefExamples = availableFactPaths
+    .filter((path) =>
+      /summary|baseline|evidence|metric|metrics|series|cards|rank|latest|alert|bill|contract|demand|powerFactor|carbon/i.test(
+        path,
+      ),
     )
-    .join("\n\n");
+    .slice(0, 8);
 
   return [
     "你是 EnMS 專用、唯讀、無工具的能源分析 Agent。",
@@ -320,12 +388,16 @@ function buildPrompt(
     "錯誤示例：「需量為 82.3 kW」「設備 02:81:2F:50:DE:4D 異常」「缺契約容量但仍接近契約警戒」「最高用電場域就是效率最佳場域」。正確做法是只回目前任務且有 factRefs 支持的定性結論；資料不足時直接說無法判斷。",
     "只回傳單一 JSON object，不得使用 Markdown、HTML、URL、SQL 或 code fence。",
     "factRefs 的每一項必須逐字使用 AVAILABLE_FACT_PATHS 內的完整路徑，不得加 facts.、JSONPath 前綴或自行創造欄位。",
+    "每一個 finding / recommendation 至少引用 1 個 FACT_REF_EXAMPLES 或 AVAILABLE_FACT_PATHS 中存在的路徑；若沒有可支持該句的 factRef，刪除該句而不是創造 factRef。",
     'JSON schema: {"summary":"string","findings":[{"text":"string","factRefs":["existing.path"]}],"recommendations":[{"text":"string","factRefs":["existing.path"]}],"confidence":"low|medium|high","knowledgeRefs":["exact/document/path.md"]}',
     `mode=${input.mode}`,
     `pageKey=${input.pageKey}`,
     `intent=${input.intent}`,
     `<TASK>${task}</TASK>`,
     `<DETERMINISTIC_BASELINE>${input.deterministicSummary}</DETERMINISTIC_BASELINE>`,
+    `<FACT_REF_EXAMPLES>${JSON.stringify(
+      preferredFactRefExamples.length ? preferredFactRefExamples : factRefExamples,
+    )}</FACT_REF_EXAMPLES>`,
     `<AVAILABLE_FACT_PATHS>${JSON.stringify(availableFactPaths)}</AVAILABLE_FACT_PATHS>`,
     `<AUTHORIZED_FACTS_JSON>${factsJson}</AUTHORIZED_FACTS_JSON>`,
     `<ALLOWLISTED_KNOWLEDGE>\n${knowledge}\n</ALLOWLISTED_KNOWLEDGE>`,
@@ -367,6 +439,15 @@ function hasExactKeys(
   );
 }
 
+function removeUnsupportedMetricFragments(value: string): string {
+  return value
+    .replace(/[^。！？；;，,]*已授權指標值[^。！？；;，,]*(?:[，,；;]\s*)?/g, "")
+    .replace(/[，,；;]\s*([。！？])/g, "$1")
+    .replace(/\s*([。！？；;，,])\s*/g, "$1")
+    .replace(/^[，,；;。！？\s]+|[，,；;。！？\s]+$/g, "")
+    .trim();
+}
+
 function sanitizeNarrativeText(value: unknown): string {
   if (typeof value !== "string") {
     throw new Error("Structured narrative text must be a string");
@@ -404,6 +485,10 @@ function sanitizeNarrativeText(value: unknown): string {
       "近期",
     )
     .replace(
+      /(?:最近|過去|近)\s*[零〇一二三四五六七八九十百千萬億兩廿卅]+\s*(?:日|天|小時|分鐘|分|月|年)/gi,
+      "近期",
+    )
+    .replace(
       /[+-]?[0-9][0-9,.]*\s*(?:kWh|kW|kVA|kvar|MWh|MW|%|％|元|度)\b/gi,
       "已授權指標值",
     )
@@ -420,9 +505,11 @@ function sanitizeNarrativeText(value: unknown): string {
     .replace(/(?:已授權指標值\s*){2,}/g, "已授權指標值")
     .replace(/\s{2,}/g, " ")
     .trim();
+  text = removeUnsupportedMetricFragments(text);
   if (
     !text ||
     text.length > MAX_TEXT_LENGTH ||
+    text.includes("已授權指標值") ||
     /\p{N}/u.test(text)
   ) {
     throw new Error("Structured narrative normalization failed");
@@ -810,14 +897,14 @@ async function runOpenAiCompatibleStructuredModel(
   input: EnmsStructuredAgentInput,
   fetchImpl: typeof globalThis.fetch,
 ): Promise<EnmsStructuredNarrative> {
-  const config = getOpenAiCompatibleConfig();
+  const config = getOpenAiCompatibleConfig("structured_answer");
   const timeoutController = new AbortController();
   const timeout = setTimeout(
     () =>
       timeoutController.abort(
         new DOMException("Model request timed out", "TimeoutError"),
       ),
-    getTimeoutMs(input.mode),
+    getTimeoutMs(input.mode, "structured_answer"),
   );
   const signal = input.signal
     ? AbortSignal.any([input.signal, timeoutController.signal])
@@ -898,14 +985,14 @@ async function runOpenAiCompatibleGeneralChat(
   input: EnmsGeneralChatInput,
   fetchImpl: typeof globalThis.fetch,
 ): Promise<EnmsGeneralChatAnswer> {
-  const config = getOpenAiCompatibleConfig();
+  const config = getOpenAiCompatibleConfig("general_chat");
   const timeoutController = new AbortController();
   const timeout = setTimeout(
     () =>
       timeoutController.abort(
         new DOMException("Model request timed out", "TimeoutError"),
       ),
-    getTimeoutMs("chat"),
+    getTimeoutMs("chat", "general_chat"),
   );
   const signal = input.signal
     ? AbortSignal.any([input.signal, timeoutController.signal])
@@ -992,7 +1079,7 @@ export async function runEnmsStructuredAgent(
     throw new DOMException("Request aborted", "AbortError");
   }
 
-  if (getStructuredModelTransport() === "openai-compatible") {
+  if (getStructuredModelTransport("structured_answer") === "openai-compatible") {
     return runOpenAiCompatibleStructuredModel(
       input,
       dependencies.fetch ?? globalThis.fetch,
@@ -1017,7 +1104,7 @@ export async function runEnmsStructuredAgent(
     ENMS_GATEWAY_SCOPES,
     true,
   );
-  const timeoutMs = getTimeoutMs(input.mode);
+  const timeoutMs = getTimeoutMs(input.mode, "structured_answer");
 
   return await new Promise<EnmsStructuredNarrative>((resolve, reject) => {
     const reader = createInterface({ input: child.stdout! });
@@ -1147,7 +1234,7 @@ export async function runEnmsGeneralChatAgent(
     throw new DOMException("Request aborted", "AbortError");
   }
 
-  if (getStructuredModelTransport() === "openai-compatible") {
+  if (getStructuredModelTransport("general_chat") === "openai-compatible") {
     return runOpenAiCompatibleGeneralChat(
       input,
       dependencies.fetch ?? globalThis.fetch,
@@ -1170,7 +1257,7 @@ export async function runEnmsGeneralChatAgent(
     ENMS_GENERAL_CHAT_SCOPES,
     true,
   );
-  const timeoutMs = getTimeoutMs("chat");
+  const timeoutMs = getTimeoutMs("chat", "general_chat");
 
   return await new Promise<EnmsGeneralChatAnswer>((resolve, reject) => {
     const reader = createInterface({ input: child.stdout! });

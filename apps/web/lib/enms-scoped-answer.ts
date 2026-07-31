@@ -1013,34 +1013,52 @@ function answerCommonMetric(
   }
 
   if (definition.fallbackFromOpportunities) {
-    const opportunities = getCaseInsensitive(facts, "opportunities");
-    if (Array.isArray(opportunities)) {
-      const lines = opportunities
-        .map(asRecord)
-        .map((item) => {
-          const name = sanitizeText(getCaseInsensitive(item, "name"));
-          const note = sanitizeText(getCaseInsensitive(item, "note"));
-          const value = getNumber(item, "value");
-          const score =
-            value === null ? "" : `（指標分數 ${formatNumber(value)}）`;
-          return [name ? `${name}${score}` : "", note].filter(Boolean).join("：");
-        })
-        .filter(Boolean)
-        .slice(0, 3);
-      if (lines.length > 0) {
-        return {
-          answerKind: "summary",
-          matchedFactPaths: ["facts.opportunities"],
-          text: [
-            `可驗證節能線索：\n${lines.map((item) => `- ${item}`).join("\n")}`,
-            `資料時間範圍：${sanitizeText(context.evidence?.timeRange) || "EnMS 未提供"}。`,
-          ].join("\n\n"),
-        };
-      }
+    const opportunityAnswer = answerEfficiencyOpportunities(message, context, facts);
+    if (opportunityAnswer) {
+      return opportunityAnswer;
     }
   }
 
   return buildMissingAnswer(context, definition.label);
+}
+
+function answerEfficiencyOpportunities(
+  message: string,
+  context: EnmsScopedAnswerContext,
+  facts: Record<string, unknown>,
+): EnmsScopedAnswerResult | null {
+  if (!matchesEnmsChatSemanticRoute("efficiency_advice", message)) {
+    return null;
+  }
+
+  const opportunities = getCaseInsensitive(facts, "opportunities");
+  if (!Array.isArray(opportunities)) {
+    return null;
+  }
+
+  const lines = opportunities
+    .map(asRecord)
+    .map((item) => {
+      const name = sanitizeText(getCaseInsensitive(item, "name"));
+      const note = sanitizeText(getCaseInsensitive(item, "note"));
+      const value = getNumber(item, "value");
+      const score = value === null ? "" : `（指標分數 ${formatNumber(value)}）`;
+      return [name ? `${name}${score}` : "", note].filter(Boolean).join("：");
+    })
+    .filter(Boolean)
+    .slice(0, 3);
+  if (lines.length === 0) {
+    return null;
+  }
+
+  return {
+    answerKind: "summary",
+    matchedFactPaths: ["facts.opportunities"],
+    text: [
+      `可驗證節能線索與建議：\n${lines.map((item) => `- ${item}`).join("\n")}`,
+      `資料時間範圍：${sanitizeText(context.evidence?.timeRange) || "EnMS 未提供"}。`,
+    ].join("\n\n"),
+  };
 }
 
 function answerCard(
@@ -1122,6 +1140,7 @@ export function buildEnmsScopedAnswer(params: {
     timeRangeAnswer,
     latestDataAnswer,
     answerAccount(message, params.context, facts, params.scope),
+    answerEfficiencyOpportunities(message, params.context, facts),
     answerCommonMetric(message, params.context, facts),
     answerCard(message, params.context),
   ].filter((answer): answer is EnmsScopedAnswerResult => answer !== null);

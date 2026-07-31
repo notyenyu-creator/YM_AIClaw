@@ -88,8 +88,10 @@ export type EnmsChatQueryPlan = {
   confidence: "low" | "medium" | "high";
   allowDbFacts: boolean;
   allowGeneralAI: boolean;
+  selectedCapabilities: EnmsChatSemanticRouteKey[];
   primaryPageKey: EnmsPageKey;
   selectedPageKeys: EnmsPageKey[];
+  needClarification: boolean;
   matchedRoutes: Array<{
     key: EnmsChatSemanticRouteKey;
     pageKey: EnmsPageKey;
@@ -812,8 +814,10 @@ export function buildEnmsChatQueryPlan(message: string): EnmsChatQueryPlan {
       confidence: "low",
       allowDbFacts: false,
       allowGeneralAI: true,
+      selectedCapabilities: [],
       primaryPageKey: "nlq",
       selectedPageKeys: [],
+      needClarification: false,
       matchedRoutes: [],
       maxContexts: 0,
       sourceOfTruth:
@@ -826,6 +830,9 @@ export function buildEnmsChatQueryPlan(message: string): EnmsChatQueryPlan {
   const primaryRoute = matchedRoutes.find((route) =>
     route.pageKey === selectedPageKeys[0]
   ) ?? matchedRoutes[0];
+  const selectedCapabilities = unique(
+    matchedRoutes.map((route) => route.key),
+  ).slice(0, 8) as EnmsChatSemanticRouteKey[];
   return {
     contractVersion: ENMS_CHAT_PLAN_CONTRACT_VERSION,
     registryVersion: ENMS_CAPABILITY_REGISTRY_VERSION,
@@ -837,8 +844,13 @@ export function buildEnmsChatQueryPlan(message: string): EnmsChatQueryPlan {
     confidence: matchedRoutes.length > 0 ? "high" : "medium",
     allowDbFacts: true,
     allowGeneralAI: false,
+    selectedCapabilities,
     primaryPageKey: primaryRoute.pageKey,
     selectedPageKeys,
+    needClarification: shouldClarifyEnmsChatQuestion(
+      normalizedMessage,
+      selectedCapabilities,
+    ),
     matchedRoutes: matchedRoutes.slice(0, 8).map((route) => ({
       key: route.key,
       pageKey: route.pageKey,
@@ -857,6 +869,18 @@ function prioritizeEnmsChatRoutes(
   routes: EnmsChatSemanticRoute[],
   normalizedMessage: string,
 ): EnmsChatSemanticRoute[] {
+  if (isEnmsDeviceLookupQuestion(normalizedMessage)) {
+    return routes.slice().sort((left, right) => {
+      if (left.key === "device_lookup" && right.key !== "device_lookup") {
+        return -1;
+      }
+      if (right.key === "device_lookup" && left.key !== "device_lookup") {
+        return 1;
+      }
+      return 0;
+    });
+  }
+
   if (!isEnmsSiteBenchmarkingQuestion(normalizedMessage)) {
     return routes;
   }
@@ -877,6 +901,28 @@ function prioritizeEnmsChatRoutes(
     }
     return 0;
   });
+}
+
+function shouldClarifyEnmsChatQuestion(
+  normalizedMessage: string,
+  selectedCapabilities: EnmsChatSemanticRouteKey[],
+): boolean {
+  if (
+    selectedCapabilities.includes("device_lookup") &&
+    !/(?:主電表|主電錶|總表|總電表|總電錶|子電表|子電錶|分表|standalone|獨立|迴路|回路|ch|circuit|mac|address|位址|地址|\d)/i
+      .test(normalizedMessage)
+  ) {
+    return true;
+  }
+
+  if (
+    selectedCapabilities.includes("billing") &&
+    /哪個月|幾月|指定月份|上個月|上月|去年/i.test(normalizedMessage)
+  ) {
+    return false;
+  }
+
+  return false;
 }
 
 function isEnmsSiteBenchmarkingQuestion(normalizedMessage: string): boolean {
@@ -907,6 +953,18 @@ function getRouteFirstMentionIndex(
       /(?:資料|讀值|紀錄|記錄|時序|電表|db|資料庫|enms|meter|data).{0,12}(?:最新|最後|最近|更新到|截至)/i,
       /(?:資料|讀值|紀錄|記錄|時序|電表|db|資料庫|enms|meter|data).{0,12}幾月幾號/i,
       /幾月幾號.{0,12}(?:資料|讀值|紀錄|記錄|時序|電表|db|資料庫|enms|meter|data)/i,
+    ]
+      .map((regex) => normalizedMessage.search(regex))
+      .filter((index) => index >= 0);
+    if (regexMentions.length > 0) {
+      return Math.min(...regexMentions);
+    }
+  }
+
+  if (route.key === "device_lookup") {
+    const regexMentions = [
+      /(?:主電表|主電錶|總表|總電表|總電錶|子電表|子電錶|分表|獨立設備|獨立電表|standalone|迴路|回路|電表|設備|mac|address|位址|地址|circuit|meter).{0,12}(?:對應|是哪|是什麼|哪台|哪個設備|設備名稱|設備別名|主檔|綁定|mapping|註冊|屬於)/i,
+      /(?:對應|是哪|是什麼|哪台|哪個設備|設備名稱|設備別名|主檔|綁定|mapping|註冊|屬於).{0,12}(?:主電表|主電錶|總表|總電表|總電錶|子電表|子電錶|分表|獨立設備|獨立電表|standalone|迴路|回路|電表|設備|mac|address|位址|地址|circuit|meter)/i,
     ]
       .map((regex) => normalizedMessage.search(regex))
       .filter((index) => index >= 0);

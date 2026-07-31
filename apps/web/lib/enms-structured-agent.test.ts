@@ -223,7 +223,7 @@ describe("EnMS structured agent", () => {
     ).toThrow();
   });
 
-  it("removes model-restated identifiers and numbers from narrative text", () => {
+  it("removes model-restated numbers instead of exposing placeholders", () => {
     const parsed = JSON.parse(validOutput());
     parsed.summary =
       "電號 04-82-1677-11-6 最近 30 日最高需量 82.3 kW，契約容量尚未設定。";
@@ -236,17 +236,15 @@ describe("EnMS structured agent", () => {
       },
     );
 
-    expect(result.summary).toContain("目前授權帳號");
-    expect(result.summary).toContain("近期");
-    expect(result.summary).toContain("已授權指標值");
-    expect(result.summary).not.toMatch(/[0-9]/);
-    expect(result.summary).not.toContain("04-82-1677-11-6");
+    expect(result.summary).toContain("契約容量尚未設定");
+    expect(result.summary).not.toContain("82.3");
+    expect(result.summary).not.toContain("已授權指標值");
   });
 
   it("redacts unlabeled MAC and account identifiers before numeric normalization", () => {
     const parsed = JSON.parse(validOutput());
     parsed.summary =
-      "設備 02:81:2F:50:DE:4D 與 04043717102 的負載需要持續觀察。";
+      "設備 02:AA:BB:CC:DD:EE 與 99999999999 的負載需要持續觀察。";
 
     const result = parseEnmsStructuredNarrative(
       JSON.stringify(parsed),
@@ -483,6 +481,62 @@ describe("EnMS structured agent", () => {
       "Bearer server-secret",
     );
     expect(requestInit.redirect).toBe("error");
+  });
+
+  it("lets general chat use its own model profile without changing structured answers", async () => {
+    process.env.ENCLAW_ENMS_STRUCTURED_MODEL_TRANSPORT =
+      "openai-compatible";
+    process.env.ENCLAW_ENMS_STRUCTURED_MODEL_BASE_URL =
+      "http://structured-model.internal/v1";
+    process.env.ENCLAW_ENMS_STRUCTURED_MODEL_API_KEY = "structured-secret";
+    process.env.ENCLAW_ENMS_STRUCTURED_MODEL_NAME = "gx10-router";
+    process.env.ENCLAW_ENMS_GENERAL_CHAT_MODEL_TRANSPORT =
+      "openai-compatible";
+    process.env.ENCLAW_ENMS_GENERAL_CHAT_MODEL_BASE_URL =
+      "http://general-model.internal/v1";
+    process.env.ENCLAW_ENMS_GENERAL_CHAT_MODEL_API_KEY = "general-secret";
+    process.env.ENCLAW_ENMS_GENERAL_CHAT_MODEL_NAME = "gpt-4.1-mini";
+    process.env.ENCLAW_ENMS_GENERAL_CHAT_MODEL_MAX_TOKENS = "512";
+    const fetchImpl = vi.fn(async (_url: URL, _init?: RequestInit) => {
+      return new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                content: JSON.stringify({
+                  answer: "一般問題使用 general chat profile 回答。",
+                  confidence: "high",
+                }),
+              },
+            },
+          ],
+        }),
+        { status: 200 },
+      );
+    });
+
+    const result = await runEnmsGeneralChatAgent(
+      { task: "請用一句話說明資料治理" },
+      {
+        spawn: vi.fn(() => createProcessHandle().handle),
+        callRpc: vi.fn(),
+        createId: () => "unused",
+        fetch: fetchImpl as typeof globalThis.fetch,
+      },
+    );
+
+    expect(result.text).toContain("general chat profile");
+    const [url, init] = fetchImpl.mock.calls[0];
+    expect(String(url)).toBe("http://general-model.internal/v1/chat/completions");
+    if (typeof init?.body !== "string") {
+      throw new Error("Expected JSON string request body");
+    }
+    const requestBody = JSON.parse(init.body);
+    expect(requestBody.model).toBe("gpt-4.1-mini");
+    expect(requestBody.max_tokens).toBe(512);
+    expect((init.headers as Record<string, string>).Authorization).toBe(
+      "Bearer general-secret",
+    );
   });
 
   it("fails closed when direct structured model configuration is incomplete", async () => {

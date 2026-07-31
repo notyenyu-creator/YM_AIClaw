@@ -177,7 +177,7 @@ describe("POST /api/enms/chat", () => {
         conversationId: "conv-1",
         scope: {
           userId: "UserA",
-          companyNo: "Pingroun",
+          companyNo: "TEST-COMPANY",
           allSites: false,
           siteFilterRequired: true,
           siteIds: ["site-1"],
@@ -206,7 +206,7 @@ describe("POST /api/enms/chat", () => {
         conversationId: "conv-scoped",
         scope: {
           userId: "UserA",
-          companyNo: "Pingroun",
+          companyNo: "TEST-COMPANY",
           allSites: false,
           siteFilterRequired: true,
           siteIds: ["site-1"],
@@ -282,7 +282,7 @@ describe("POST /api/enms/chat", () => {
         conversationId: "conv-bundle",
         scope: {
           userId: "UserA",
-          companyNo: "Pingroun",
+          companyNo: "TEST-COMPANY",
           allSites: false,
           siteFilterRequired: true,
           siteIds: ["site-1"],
@@ -384,7 +384,7 @@ describe("POST /api/enms/chat", () => {
         conversationId: "conv-device-demand",
         scope: {
           userId: "UserA",
-          companyNo: "Pingroun",
+          companyNo: "TEST-COMPANY",
           allSites: false,
           siteFilterRequired: true,
           siteIds: ["site-1"],
@@ -407,8 +407,8 @@ describe("POST /api/enms/chat", () => {
                     macAddress: "MAC-A",
                     address: "2",
                     circuitSeq: 1,
-                    accountNumber: "04043717102",
-                    siteName: "阿里山",
+                    accountNumber: "TEST-PA-001",
+                    siteName: "TEST-SITE-A",
                     identityKey: "MAC-A|2|1",
                   },
                 ],
@@ -491,7 +491,7 @@ describe("POST /api/enms/chat", () => {
         conversationId: "conv-ranking-demand",
         scope: {
           userId: "UserA",
-          companyNo: "Pingroun",
+          companyNo: "TEST-COMPANY",
           allSites: false,
           siteFilterRequired: true,
           siteIds: ["site-1"],
@@ -598,7 +598,7 @@ describe("POST /api/enms/chat", () => {
         conversationId: "conv-ranking-billing",
         scope: {
           userId: "UserA",
-          companyNo: "Pingroun",
+          companyNo: "TEST-COMPANY",
           allSites: false,
           siteFilterRequired: true,
           siteIds: ["site-1"],
@@ -686,7 +686,7 @@ describe("POST /api/enms/chat", () => {
         conversationId: "conv-ranking-missing-billing",
         scope: {
           userId: "UserA",
-          companyNo: "Pingroun",
+          companyNo: "TEST-COMPANY",
           allSites: false,
           siteFilterRequired: true,
           siteIds: ["site-1"],
@@ -789,7 +789,7 @@ describe("POST /api/enms/chat", () => {
         conversationId: "conv-eff-advice",
         scope: {
           userId: "UserA",
-          companyNo: "Pingroun",
+          companyNo: "TEST-COMPANY",
           allSites: false,
           siteFilterRequired: true,
           siteIds: ["site-1"],
@@ -889,7 +889,7 @@ describe("POST /api/enms/chat", () => {
         conversationId: "conv-multi-metric",
         scope: {
           userId: "UserA",
-          companyNo: "Pingroun",
+          companyNo: "TEST-COMPANY",
           allSites: false,
           siteFilterRequired: true,
           siteIds: ["site-1"],
@@ -998,7 +998,7 @@ describe("POST /api/enms/chat", () => {
           {
             role: "assistant",
             content:
-              "授權範圍內最新一筆 EnMS 時序資料時間：2026/7/22 10:00:00，電號 04043717102。",
+              "授權範圍內最新一筆 EnMS 時序資料時間：2026/7/22 10:00:00，電號 TEST-PA-001。",
           },
         ],
         scopedContext: {
@@ -1232,7 +1232,7 @@ describe("POST /api/enms/chat", () => {
         conversationId: "conv-bundle-primary",
         scope: {
           userId: "UserA",
-          companyNo: "Pingroun",
+          companyNo: "TEST-COMPANY",
           allSites: false,
           siteFilterRequired: true,
           siteIds: ["site-1"],
@@ -1389,14 +1389,14 @@ describe("POST /api/enms/chat", () => {
     const { POST } = await import("./route.js");
     const response = await POST(
       buildRequest({
-        message: "電號 04043717102 最新的一筆資料是幾月幾號？",
+        message: "電號 TEST-PA-001 最新的一筆資料是幾月幾號？",
         scopedContext: {
           pageKey: "nlq",
           status: "empty",
           facts: {
             latestDataAt: "2026-07-22T02:00:00.000Z",
             account: {
-              accountNumber: "04043717102",
+              accountNumber: "TEST-PA-001",
             },
           },
           evidence: {
@@ -1456,8 +1456,8 @@ describe("POST /api/enms/chat", () => {
                 address: "2",
                 circuitSeq: 1,
                 meterRole: "Sub",
-                accountNumber: "04043717102",
-                siteName: "阿里山",
+                accountNumber: "TEST-PA-001",
+                siteName: "TEST-SITE-A",
               },
             ],
           },
@@ -1489,6 +1489,79 @@ describe("POST /api/enms/chat", () => {
     expect(structuredAgentMocks.run).not.toHaveBeenCalled();
     expect(json.answerContract.structuredModelAttempted).toBe(false);
     expect(json.answerContract.structuredModelApplied).toBe(false);
+  });
+
+  it("filters device lookup answers by requested main-meter role", async () => {
+    process.env.ENCLAW_ENMS_STRUCTURED_AGENT_ENABLED = "1";
+    structuredAgentMocks.enabled.mockReturnValue(true);
+    const { POST } = await import("./route.js");
+    const response = await POST(
+      buildRequest({
+        message: "主電表是哪個？",
+        scopedContext: {
+          pageKey: "nlq",
+          status: "ready",
+          facts: {
+            deviceMappings: [
+              {
+                label: "總表 · MAC-MAIN / 位址 1 / 迴路 1",
+                deviceAlias: "總表",
+                macAddress: "MAC-MAIN",
+                address: "1",
+                circuitSeq: 1,
+                meterRole: "Main",
+                accountNumber: "TEST-PA-001",
+                siteName: "TEST-SITE-A",
+              },
+              {
+                label: "冰機 CH1 · MAC-SUB / 位址 2 / 迴路 1",
+                deviceAlias: "冰機 CH1",
+                macAddress: "MAC-SUB",
+                address: "2",
+                circuitSeq: 1,
+                meterRole: "Submeter",
+                accountNumber: "TEST-PA-001",
+                siteName: "TEST-SITE-A",
+              },
+              {
+                label: "獨立水泵 · MAC-STANDALONE / 位址 3 / 迴路 1",
+                deviceAlias: "獨立水泵",
+                macAddress: "MAC-STANDALONE",
+                address: "3",
+                circuitSeq: 1,
+                meterRole: "Standalone",
+                accountNumber: "TEST-PA-002",
+                siteName: "TEST-SITE-B",
+              },
+            ],
+          },
+          evidence: {
+            dataSources: ["ai_meter_v1"],
+            queryScope: "siteCount=1",
+            confidence: "high",
+          },
+        },
+        guardrails: {
+          mode: "readonly",
+          factsAlreadyScopedByEnms: true,
+          noSqlFromClient: true,
+          noHtml: true,
+          semanticViewsOnly: true,
+          requireEvidence: true,
+        },
+      }),
+    );
+    const json = await response.json();
+    const blocks = JSON.stringify(json.blocks);
+
+    expect(response.status).toBe(200);
+    expect(json.answerContract.answerKind).toBe("device_lookup");
+    expect(blocks).toContain("總表");
+    expect(blocks).toContain("角色 Main");
+    expect(blocks).not.toContain("冰機 CH1");
+    expect(blocks).not.toContain("獨立水泵");
+    expect(structuredAgentMocks.run).not.toHaveBeenCalled();
+    expect(json.answerContract.structuredModelAttempted).toBe(false);
   });
 
   it("does not append structured analysis for precise meter ranking answers", async () => {
@@ -1871,7 +1944,7 @@ describe("POST /api/enms/chat", () => {
           pageKey: "eff",
           status: "ready",
           facts: {
-            account: { accountNumber: "04043717102" },
+            account: { accountNumber: "TEST-PA-001" },
             metrics: {
               latestBillMonth: "11506",
               latestBillAmountNtd: 45678,

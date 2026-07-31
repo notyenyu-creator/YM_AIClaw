@@ -93,6 +93,10 @@ describe("EnMS capability registry", () => {
       "迴路1 是對應哪個設備？",
     )).toBe(true);
     expect(matchesEnmsChatSemanticRoute(
+      "device_lookup",
+      "主電表是哪個？",
+    )).toBe(true);
+    expect(matchesEnmsChatSemanticRoute(
       "meter_ranking",
       "迴路1 是對應哪個設備？",
     )).toBe(false);
@@ -172,6 +176,23 @@ describe("EnMS capability registry", () => {
       key: "device_lookup",
       pageKey: "nlq",
     });
+    expect(deviceLookupPlan.selectedCapabilities).toContain("device_lookup");
+    expect(deviceLookupPlan.needClarification).toBe(false);
+
+    const mainMeterLookupPlan = buildEnmsChatQueryPlan("主電表是哪個？");
+    expect(mainMeterLookupPlan).toMatchObject({
+      strategy: "single_scoped_facts",
+      allowDbFacts: true,
+      primaryPageKey: "nlq",
+      selectedPageKeys: ["nlq"],
+      needClarification: false,
+    });
+    expect(mainMeterLookupPlan.matchedRoutes[0]).toMatchObject({
+      key: "device_lookup",
+      pageKey: "nlq",
+    });
+    expect(mainMeterLookupPlan.selectedCapabilities).toContain("device_lookup");
+    expect(mainMeterLookupPlan.selectedCapabilities).not.toContain("meter_ranking");
 
     const meterRankingPlan = buildEnmsChatQueryPlan("哪個迴路最費電？");
     expect(meterRankingPlan).toMatchObject({
@@ -184,6 +205,9 @@ describe("EnMS capability registry", () => {
       key: "meter_ranking",
       pageKey: "nlq",
     });
+    expect(meterRankingPlan.selectedCapabilities).toContain("meter_ranking");
+    expect(meterRankingPlan.selectedCapabilities).not.toContain("device_lookup");
+    expect(meterRankingPlan.needClarification).toBe(false);
 
     for (const message of ["用電場域比較一下", "總用電各場域排名"]) {
       const siteBenchmarkingPlan = buildEnmsChatQueryPlan(message);
