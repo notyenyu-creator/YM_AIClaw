@@ -223,6 +223,36 @@ function shouldReusePriorYcrmScope(currentUserText: string): boolean {
   ].some((keyword) => current.includes(keyword));
 }
 
+function buildSourceOfTruthUnavailableReply(
+  plan: Parameters<typeof buildReadOnlyExecutionBlockedReply>[0],
+): string | null {
+  return buildReadOnlyExecutionBlockedReply({
+    ...plan,
+    blockedReason: "source_of_truth_unavailable",
+  });
+}
+
+function shouldStopOnUnavailableSourceOfTruth(
+  snapshot: {
+    availability: string;
+    source: string;
+    facts: readonly string[];
+    gaps: readonly string[];
+  } | null,
+): boolean {
+  if (!snapshot) {
+    return true;
+  }
+  return (
+    snapshot.availability === "blocked" ||
+    snapshot.source === "unavailable" ||
+    snapshot.facts.length === 0 ||
+    snapshot.gaps.some((gap) =>
+      /schema introspection returned 0 rows|connection|unavailable/i.test(gap),
+    )
+  );
+}
+
 function isLikelyChartRequest(userText: string): boolean {
   const current = userText.trim().toLowerCase();
   if (!current) {
@@ -368,6 +398,53 @@ function buildPlannerInputFromSession(
   }
 
   return input;
+}
+
+function buildEnmsPlannerMessageFromSession(
+  agentMessage: string,
+  messages: UIMessage[],
+  sessionMeta: ReturnType<typeof getSessionMeta>,
+  explicitCurrentSystemHint?: "enms" | "erp" | "ycrm" | "none" | null,
+): { message: string; isFollowup: boolean } {
+  const priorPreflight = sessionMeta?.enmsPlannerPreflight;
+  if (!priorPreflight?.shouldRouteToEnms) {
+    return { message: agentMessage, isFollowup: false };
+  }
+
+  if (
+    explicitCurrentSystemHint === "erp" ||
+    explicitCurrentSystemHint === "ycrm" ||
+    explicitCurrentSystemHint === "none"
+  ) {
+    return { message: agentMessage, isFollowup: false };
+  }
+
+  const previousUserMessage = messages
+    .slice(0, -1)
+    .toReversed()
+    .find((message) => message.role === "user");
+  const previousUserText = extractTextParts(previousUserMessage);
+
+  if (
+    !shouldAugmentPlannerMessageWithFollowupContext(
+      agentMessage,
+      previousUserText,
+    )
+  ) {
+    return { message: agentMessage, isFollowup: false };
+  }
+
+  return {
+    isFollowup: true,
+    message: [
+      "[EnMS session follow-up context]",
+      previousUserText,
+      "[/EnMS session follow-up context]",
+      agentMessage,
+      "",
+      "Treat this as an EnMS follow-up. Reuse the prior EnMS question scope and only answer from verified EnMS data.",
+    ].join("\n"),
+  };
 }
 
 function deriveSubagentInfo(
@@ -675,6 +752,12 @@ export async function POST(req: Request) {
     let suppressReportBlocks = false;
 
     if (!ycrmClaimed) {
+      const enmsPlannerMessage = buildEnmsPlannerMessageFromSession(
+        agentMessage,
+        messages,
+        sessionMeta,
+        currentSystemHint,
+      );
       const erpPreflight = buildErpContext({
         request: {
           user_message: agentMessage,
@@ -686,10 +769,15 @@ export async function POST(req: Request) {
       });
       const enmsPreflight = buildEnmsContext({
         request: {
-          user_message: agentMessage,
-          current_system_hint: currentSystemHint ?? null,
+          user_message: enmsPlannerMessage.message,
+          current_system_hint: enmsPlannerMessage.isFollowup
+            ? "enms"
+            : currentSystemHint ?? null,
         },
       });
+      const enmsDirectQueryMessage = enmsPlannerMessage.isFollowup
+        ? enmsPlannerMessage.message
+        : userText;
       const operationalRoute = selectOperationalDomainRoute({
         currentSystemHint: currentSystemHint ?? null,
         erpPreflight,
@@ -742,7 +830,10 @@ export async function POST(req: Request) {
             directAnswerMode = "verified_direct";
           } else {
             directAssistantReply =
-              buildReadOnlyExecutionBlockedReply(erpReadOnlyPlan);
+              buildReadOnlyExecutionBlockedReply(erpReadOnlyPlan) ??
+              (shouldStopOnUnavailableSourceOfTruth(erpBootstrapSnapshot)
+                ? buildSourceOfTruthUnavailableReply(erpReadOnlyPlan)
+                : null);
             if (directAssistantReply) {
               directAnswerMode = "system_direct";
             }
@@ -801,7 +892,7 @@ export async function POST(req: Request) {
             enmsReadOnlyPlan,
           );
           const verifiedDirectReply = await buildEnmsVerifiedDirectQueryAnswer({
-            userMessage: userText,
+            userMessage: enmsDirectQueryMessage,
           });
           if (verifiedDirectReply) {
             directAssistantReply = verifiedDirectReply;
@@ -810,7 +901,7 @@ export async function POST(req: Request) {
             directAssistantReply =
               buildReadOnlyExecutionBlockedReply(enmsReadOnlyPlan) ??
               buildEnmsDirectAnswer({
-                userMessage: userText,
+                userMessage: enmsDirectQueryMessage,
                 preflight: enmsPreflight,
                 snapshot: enmsBootstrapSnapshot,
               });
@@ -820,14 +911,14 @@ export async function POST(req: Request) {
           }
         } else {
           const verifiedDirectReply = await buildEnmsVerifiedDirectQueryAnswer({
-            userMessage: userText,
+            userMessage: enmsDirectQueryMessage,
           });
           if (verifiedDirectReply) {
             directAssistantReply = verifiedDirectReply;
             directAnswerMode = "verified_direct";
           } else {
             directAssistantReply = buildEnmsDirectAnswer({
-              userMessage: userText,
+              userMessage: enmsDirectQueryMessage,
               preflight: enmsPreflight,
               snapshot: enmsBootstrapSnapshot,
             });

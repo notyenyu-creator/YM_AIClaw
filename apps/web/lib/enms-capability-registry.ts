@@ -11,7 +11,7 @@ export const ENMS_INTEGRATION_CONTRACT_VERSION =
 export const ENMS_CHAT_CONTRACT_VERSION = "enms.ai.chat.v1";
 export const ENMS_CHAT_PLAN_CONTRACT_VERSION = "enms.ai.chat-plan.v1";
 export const ENMS_FACTS_SCHEMA_VERSION = "enms.ai.facts.v1";
-export const ENMS_CAPABILITY_REGISTRY_VERSION = "2026-07-27.1";
+export const ENMS_CAPABILITY_REGISTRY_VERSION = "2026-08-01.1";
 
 export type EnmsCapabilityKey =
   | "enms_runtime"
@@ -60,6 +60,7 @@ export type EnmsChatSemanticRouteKey =
   | "demand_risk"
   | "anomaly_root_cause"
   | "device_lookup"
+  | "site_metadata"
   | "meter_ranking"
   | "energy_usage_query"
   | "site_benchmarking"
@@ -75,6 +76,35 @@ export type EnmsChatSemanticRoute = {
   synonyms: string[];
   queryHint: string;
   preciseAnswerOnly?: boolean;
+};
+
+export type EnmsChatAnswerObligationKey =
+  | "latest_data"
+  | "site_metadata"
+  | "device_lookup"
+  | "meter_ranking"
+  | "total_energy_30d"
+  | "peak_demand_30d"
+  | "avg_power_factor_30d"
+  | "site_benchmarking"
+  | "billing"
+  | "carbon_emission"
+  | "efficiency_advice"
+  | "alert_governance"
+  | "anomaly_root_cause"
+  | "raw_trace";
+
+export type EnmsChatAnswerObligation = {
+  key: EnmsChatAnswerObligationKey;
+  label: string;
+  pageKey: EnmsPageKey;
+  capability: EnmsChatSemanticRouteKey;
+  answerKind: "time_range" | "site_metadata" | "device_lookup" | "ranking" | "demand" | "metric" | "billing" | "summary";
+  requiredFactPaths: string[];
+  chartRequired: boolean;
+  chartType: "bar" | "line" | "ranking" | "metric";
+  unit: string;
+  reason: string;
 };
 
 export type EnmsChatQueryPlan = {
@@ -99,6 +129,7 @@ export type EnmsChatQueryPlan = {
     queryHint: string;
   }>;
   maxContexts: number;
+  answerObligations: EnmsChatAnswerObligation[];
   sourceOfTruth: string;
   reason: string;
 };
@@ -286,6 +317,30 @@ const CHAT_SEMANTIC_ROUTES: readonly EnmsChatSemanticRoute[] = [
       "設備對應 電表主檔 迴路 MAC Address CircuitSeq ElectricityMeterId",
   },
   {
+    key: "site_metadata",
+    pageKey: "nlq",
+    intent: "natural_language_query",
+    synonyms: [
+      "案場",
+      "案場名稱",
+      "目前案場",
+      "場域名稱",
+      "目前場域",
+      "廠區名稱",
+      "目前廠區",
+      "分店名稱",
+      "據點名稱",
+      "站點名稱",
+      "公司名稱",
+      "客戶名稱",
+      "site name",
+      "current site",
+      "company name",
+    ],
+    queryHint: "案場名稱 場域名稱 公司名稱 site metadata current scope",
+    preciseAnswerOnly: true,
+  },
+  {
     key: "meter_ranking",
     pageKey: "nlq",
     intent: "natural_language_query",
@@ -345,8 +400,6 @@ const CHAT_SEMANTIC_ROUTES: readonly EnmsChatSemanticRoute[] = [
       "比較",
       "坪均",
       "人均",
-      "site name",
-      "company name",
     ],
     queryHint: "場域比較 排名 用電差異 能源績效 改善優先序",
   },
@@ -631,8 +684,12 @@ const ENMS_DOMAIN_ANCHORS = [
   "告警",
   "警報",
   "預警",
+  "案場",
   "場域",
   "廠區",
+  "分店",
+  "據點",
+  "站點",
   "迴路",
   "空調",
   "基載",
@@ -698,6 +755,9 @@ export function matchesEnmsChatSemanticRoute(
   if (routeKey === "device_lookup") {
     return isEnmsDeviceLookupQuestion(message);
   }
+  if (routeKey === "site_metadata") {
+    return isEnmsSiteMetadataQuestion(message);
+  }
   if (routeKey === "meter_ranking") {
     if (isEnmsDeviceLookupQuestion(message)) {
       return false;
@@ -705,6 +765,9 @@ export function matchesEnmsChatSemanticRoute(
     if (isEnmsSiteBenchmarkingQuestion(normalizeText(message))) {
       return false;
     }
+  }
+  if (routeKey === "site_benchmarking") {
+    return isEnmsSiteBenchmarkingQuestion(normalizeText(message));
   }
 
   const route = CHAT_SEMANTIC_ROUTES.find((candidate) =>
@@ -747,6 +810,43 @@ export function isEnmsDeviceLookupQuestion(message: string): boolean {
   return hasIdentityAnchor && hasLookupIntent && !isRankingIntent;
 }
 
+export function isEnmsSiteMetadataQuestion(message: string): boolean {
+  const normalizedMessage = normalizeText(message);
+  if (isGeneralSiteMetadataConceptQuestion(normalizedMessage)) {
+    return false;
+  }
+
+  const hasSiteAnchor =
+    /案場|場域|廠區|分店|據點|站點|site|location|company|公司|客戶/.test(
+      normalizedMessage,
+    );
+  const hasLookupIntent =
+    /名稱|名字|叫什麼|是哪|目前|現在|所在|所屬|有哪些|清單|列表|幾個|多少|name|current|which|what|our|my|我們|我司|本公司/.test(
+      normalizedMessage,
+    );
+  const hasMetricIntent =
+    /用電|耗電|能耗|總用電|總耗電|費電|需量|電費|碳排|告警|異常|節能|排名|排行|比較|benchmark|kwh|kw|金額|成本/.test(
+      normalizedMessage,
+    );
+
+  return hasSiteAnchor && hasLookupIntent && !hasMetricIntent;
+}
+
+function isGeneralSiteMetadataConceptQuestion(normalizedMessage: string): boolean {
+  const asksMeaning =
+    /什麼意思|定義|概念|何謂|what does .+ mean|meaning of|definition of/.test(
+      normalizedMessage,
+    );
+  const asksBareDefinition =
+    /^(請問)?\s*(案場|場域|廠區|分店|據點|站點|site|location|company|公司|客戶)\s*(是什麼|是甚麼|what is)\s*[?？]?$/.test(
+      normalizedMessage,
+    ) ||
+    /^(what is)\s+(site|location|company|customer)\s*[?？]?$/.test(
+      normalizedMessage,
+    );
+  return asksMeaning || asksBareDefinition;
+}
+
 export function isEnmsLatestDataQuestion(message: string): boolean {
   const normalizedMessage = normalizeText(message);
   return (
@@ -759,6 +859,282 @@ export function isEnmsLatestDataQuestion(message: string): boolean {
     /幾月幾號.{0,12}(?:資料|讀值|紀錄|記錄|時序|電表|db|資料庫|enms|meter|data)/i
       .test(normalizedMessage)
   );
+}
+
+function isEnmsChartRequested(message: string): boolean {
+  return /圖表|圖形|畫成圖|用圖|長條圖|折線圖|趨勢圖|排行榜|排名圖|chart|graph|visual/i
+    .test(message);
+}
+
+function hasMeterRankingSubject(message: string): boolean {
+  return /迴路|回路|電表|電錶|MAC|Address|位址|地址|CircuitSeq|circuit|meter/i
+    .test(message);
+}
+
+function buildEnmsChatAnswerObligations(
+  normalizedMessage: string,
+  matchedRoutes: EnmsChatSemanticRoute[],
+): EnmsChatAnswerObligation[] {
+  const chartRequired = isEnmsChartRequested(normalizedMessage);
+  const routeKeys = new Set(matchedRoutes.map((route) => route.key));
+  const obligations: EnmsChatAnswerObligation[] = [];
+  const add = (obligation: EnmsChatAnswerObligation) => {
+    if (!obligations.some((item) => item.key === obligation.key)) {
+      obligations.push(obligation);
+    }
+  };
+
+  if (routeKeys.has("latest_data")) {
+    add({
+      key: "latest_data",
+      label: "最新資料時間",
+      pageKey: "nlq",
+      capability: "latest_data",
+      answerKind: "time_range",
+      requiredFactPaths: [
+        "facts.latestDataAt",
+        "facts.metrics.latestDataAt",
+      ],
+      chartRequired: false,
+      chartType: "metric",
+      unit: "",
+      reason: "使用者詢問 EnMS 最新一筆資料或資料更新時間。",
+    });
+  }
+
+  if (routeKeys.has("site_metadata")) {
+    add({
+      key: "site_metadata",
+      label: "案場 / 場域資訊",
+      pageKey: "nlq",
+      capability: "site_metadata",
+      answerKind: "site_metadata",
+      requiredFactPaths: [
+        "facts.siteMetadata",
+        "facts.authorizedSites",
+        "facts.currentSite",
+      ],
+      chartRequired: false,
+      chartType: "metric",
+      unit: "",
+      reason: "使用者詢問目前案場、場域、公司或授權範圍 metadata。",
+    });
+  }
+
+  if (routeKeys.has("device_lookup")) {
+    add({
+      key: "device_lookup",
+      label: "設備 / 電表對應",
+      pageKey: "nlq",
+      capability: "device_lookup",
+      answerKind: "device_lookup",
+      requiredFactPaths: ["facts.deviceMappings"],
+      chartRequired: false,
+      chartType: "ranking",
+      unit: "",
+      reason: "使用者詢問迴路、電表、MAC 或 Address 的設備對應。",
+    });
+  }
+
+  if (
+    routeKeys.has("meter_ranking") &&
+    (hasMeterRankingSubject(normalizedMessage) ||
+      !routeKeys.has("site_benchmarking"))
+  ) {
+    add({
+      key: "meter_ranking",
+      label: "迴路 / 電表用電排名",
+      pageKey: "nlq",
+      capability: "meter_ranking",
+      answerKind: "ranking",
+      requiredFactPaths: [
+        "facts.meterRankingDetails",
+        "facts.ranking",
+        "facts.topLoads",
+      ],
+      chartRequired,
+      chartType: "bar",
+      unit: "kWh",
+      reason: "使用者詢問最耗電或用電排名，必須以授權迴路 / 電表 facts 排序。",
+    });
+  }
+
+  if (
+    routeKeys.has("energy_usage_query") ||
+    /總用電|總耗電|用電量|用電|耗電|能耗|kwh/i.test(normalizedMessage)
+  ) {
+    add({
+      key: "total_energy_30d",
+      label: "最近 30 天總用電",
+      pageKey: routeKeys.has("site_benchmarking") ? "bench" : "nlq",
+      capability: routeKeys.has("site_benchmarking")
+        ? "site_benchmarking"
+        : "energy_usage_query",
+      answerKind: "metric",
+      requiredFactPaths: [
+        "facts.metrics.totalConsumptionKwh30d",
+        "facts.siteRankings",
+        "facts.meterRankingDetails",
+      ],
+      chartRequired,
+      chartType: "bar",
+      unit: "kWh",
+      reason: "使用者要求總用電，需以 kWh facts 呈現，不可用需量 kW 取代。",
+    });
+  }
+
+  if (routeKeys.has("demand_risk") || /最大需量|需量|尖峰|kw|demand/i.test(normalizedMessage)) {
+    add({
+      key: "peak_demand_30d",
+      label: "最近 30 天最大需量",
+      pageKey: "demand",
+      capability: "demand_risk",
+      answerKind: "demand",
+      requiredFactPaths: [
+        "facts.metrics.peakDemandKw",
+        "facts.metrics.projectedPeakDemandKw",
+        "facts.metrics.contractCapacityKw",
+      ],
+      chartRequired,
+      chartType: "metric",
+      unit: "kW",
+      reason: "使用者要求最大需量或契約風險，需量是 kW 強度且不可加總。",
+    });
+  }
+
+  if (routeKeys.has("anomaly_root_cause") || /平均功率因數|功率因數|功因|power factor|pf/i.test(normalizedMessage)) {
+    add({
+      key: "avg_power_factor_30d",
+      label: "最近 30 天平均功率因數",
+      pageKey: "anomaly",
+      capability: "anomaly_root_cause",
+      answerKind: "metric",
+      requiredFactPaths: [
+        "facts.metrics.avgPowerFactor",
+        "facts.metrics.minPowerFactor",
+      ],
+      chartRequired,
+      chartType: "metric",
+      unit: "pf",
+      reason: "使用者要求功率因數，需以 0-1 區間指標與低功因規則判讀。",
+    });
+  }
+
+  if (routeKeys.has("site_benchmarking")) {
+    add({
+      key: "site_benchmarking",
+      label: "多場域 Benchmarking 排名與差異",
+      pageKey: "bench",
+      capability: "site_benchmarking",
+      answerKind: "ranking",
+      requiredFactPaths: [
+        "facts.siteRankings",
+        "facts.metrics.siteCount",
+      ],
+      chartRequired,
+      chartType: "bar",
+      unit: "kWh",
+      reason: "使用者要求多場域比較或 benchmarking，需以相同時間窗排名並說明差異。",
+    });
+  }
+
+  if (routeKeys.has("billing")) {
+    add({
+      key: "billing",
+      label: "電費 / 費率 / 帳單",
+      pageKey: "eff",
+      capability: "billing",
+      answerKind: "billing",
+      requiredFactPaths: [
+        "facts.billDetails",
+        "facts.latestBill",
+        "facts.metrics.averageRateNtdPerKwh",
+      ],
+      chartRequired,
+      chartType: "bar",
+      unit: "NTD",
+      reason: "使用者要求電費、帳單、費率或 ROI，缺資料時必須只標該項不足。",
+    });
+  }
+
+  if (routeKeys.has("efficiency_advice")) {
+    add({
+      key: /碳排|co2|carbon/i.test(normalizedMessage)
+        ? "carbon_emission"
+        : "efficiency_advice",
+      label: /碳排|co2|carbon/i.test(normalizedMessage)
+        ? "碳排放"
+        : "節能 / 能效建議",
+      pageKey: "eff",
+      capability: "efficiency_advice",
+      answerKind: "summary",
+      requiredFactPaths: [
+        "facts.metrics.totalConsumptionKwh30d",
+        "facts.opportunities",
+        "facts.metrics.carbonEmissionKg",
+      ],
+      chartRequired,
+      chartType: "bar",
+      unit: /碳排|co2|carbon/i.test(normalizedMessage) ? "kgCO2e" : "kWh",
+      reason: "使用者要求節能、能效、碳排或改善建議，需以可驗證 facts 與缺資料邊界回答。",
+    });
+  }
+
+  if (routeKeys.has("alert_governance")) {
+    add({
+      key: "alert_governance",
+      label: "Alert 智能治理",
+      pageKey: "alert",
+      capability: "alert_governance",
+      answerKind: "summary",
+      requiredFactPaths: [
+        "facts.alertGroups",
+        "facts.metrics.totalAlertCount30d",
+      ],
+      chartRequired,
+      chartType: "bar",
+      unit: "count",
+      reason: "使用者要求告警治理、分類、摘要或門檻建議。",
+    });
+  }
+
+  if (routeKeys.has("anomaly_root_cause") && !obligations.some((item) => item.key === "avg_power_factor_30d")) {
+    add({
+      key: "anomaly_root_cause",
+      label: "異常根因分析",
+      pageKey: "anomaly",
+      capability: "anomaly_root_cause",
+      answerKind: "summary",
+      requiredFactPaths: [
+        "facts.metrics.anomalyCount",
+        "facts.signals",
+      ],
+      chartRequired,
+      chartType: "line",
+      unit: "",
+      reason: "使用者要求異常或根因分析，需以異常訊號與規則 evidence 回答。",
+    });
+  }
+
+  if (routeKeys.has("raw_trace")) {
+    add({
+      key: "raw_trace",
+      label: "MQTT / raw trace",
+      pageKey: "nlq",
+      capability: "raw_trace",
+      answerKind: "summary",
+      requiredFactPaths: [
+        "facts.rawTrace",
+        "facts.latestDataAt",
+      ],
+      chartRequired: false,
+      chartType: "metric",
+      unit: "",
+      reason: "使用者要求 MQTT、Timescale 或 raw payload trace。",
+    });
+  }
+
+  return obligations.slice(0, 4);
 }
 
 export function buildEnmsIntentKeywordMap(): Record<EnmsIntent, string[]> {
@@ -795,7 +1171,7 @@ export function buildEnmsChatQueryPlan(message: string): EnmsChatQueryPlan {
         firstMentionAt: getRouteFirstMentionIndex(route, normalizedMessage),
       }))
       .filter((item) => item.firstMentionAt >= 0)
-      .sort((left, right) =>
+      .toSorted((left, right) =>
         left.firstMentionAt - right.firstMentionAt || left.index - right.index
       )
       .map((item) => item.route),
@@ -820,6 +1196,7 @@ export function buildEnmsChatQueryPlan(message: string): EnmsChatQueryPlan {
       needClarification: false,
       matchedRoutes: [],
       maxContexts: 0,
+      answerObligations: [],
       sourceOfTruth:
         "EnClaw Capability Registry / Context Builder; no EnMS facts required",
       reason:
@@ -833,6 +1210,10 @@ export function buildEnmsChatQueryPlan(message: string): EnmsChatQueryPlan {
   const selectedCapabilities = unique(
     matchedRoutes.map((route) => route.key),
   ).slice(0, 8) as EnmsChatSemanticRouteKey[];
+  const answerObligations = buildEnmsChatAnswerObligations(
+    normalizedMessage,
+    matchedRoutes,
+  );
   return {
     contractVersion: ENMS_CHAT_PLAN_CONTRACT_VERSION,
     registryVersion: ENMS_CAPABILITY_REGISTRY_VERSION,
@@ -858,6 +1239,7 @@ export function buildEnmsChatQueryPlan(message: string): EnmsChatQueryPlan {
       queryHint: route.queryHint,
     })),
     maxContexts: 4,
+    answerObligations,
     sourceOfTruth:
       "EnClaw Capability Registry / Context Builder -> EnMS API scoped ai_* facts",
     reason:
@@ -869,8 +1251,24 @@ function prioritizeEnmsChatRoutes(
   routes: EnmsChatSemanticRoute[],
   normalizedMessage: string,
 ): EnmsChatSemanticRoute[] {
+  if (isEnmsSiteMetadataQuestion(normalizedMessage)) {
+    return routes
+      .filter((route) =>
+        route.key === "site_metadata" || route.key === "latest_data"
+      )
+      .toSorted((left, right) => {
+        if (left.key === "site_metadata" && right.key !== "site_metadata") {
+          return -1;
+        }
+        if (right.key === "site_metadata" && left.key !== "site_metadata") {
+          return 1;
+        }
+        return 0;
+      });
+  }
+
   if (isEnmsDeviceLookupQuestion(normalizedMessage)) {
-    return routes.slice().sort((left, right) => {
+    return routes.toSorted((left, right) => {
       if (left.key === "device_lookup" && right.key !== "device_lookup") {
         return -1;
       }
@@ -878,6 +1276,27 @@ function prioritizeEnmsChatRoutes(
         return 1;
       }
       return 0;
+    });
+  }
+
+  if (isContextualPresentationQuestion(normalizedMessage)) {
+    const chartPriority: EnmsChatSemanticRouteKey[] = [
+      "site_benchmarking",
+      "meter_ranking",
+      "demand_risk",
+      "anomaly_root_cause",
+      "alert_governance",
+      "efficiency_advice",
+      "billing",
+      "energy_usage_query",
+      "latest_data",
+    ];
+    return routes.toSorted((left, right) => {
+      const leftRank = chartPriority.indexOf(left.key);
+      const rightRank = chartPriority.indexOf(right.key);
+      const safeLeftRank = leftRank >= 0 ? leftRank : chartPriority.length;
+      const safeRightRank = rightRank >= 0 ? rightRank : chartPriority.length;
+      return safeLeftRank - safeRightRank;
     });
   }
 
@@ -892,7 +1311,7 @@ function prioritizeEnmsChatRoutes(
     return routes;
   }
 
-  return routes.slice().sort((left, right) => {
+  return routes.toSorted((left, right) => {
     if (left.key === "site_benchmarking" && right.key === "energy_usage_query") {
       return -1;
     }
@@ -901,6 +1320,14 @@ function prioritizeEnmsChatRoutes(
     }
     return 0;
   });
+}
+
+function isContextualPresentationQuestion(normalizedMessage: string): boolean {
+  return (
+    normalizedMessage.includes("[conversation context]") &&
+    /圖表|圖形|畫成圖|用圖|長條圖|折線圖|趨勢圖|排行榜|排名圖|chart|graph|visual/i
+      .test(normalizedMessage)
+  );
 }
 
 function shouldClarifyEnmsChatQuestion(
@@ -927,7 +1354,7 @@ function shouldClarifyEnmsChatQuestion(
 
 function isEnmsSiteBenchmarkingQuestion(normalizedMessage: string): boolean {
   const hasSiteAnchor =
-    /場域|多場域|各場域|區域|各區域|廠區|分店|據點|site|benchmark/.test(
+    /案場|各案場|場域|多場域|各場域|區域|各區域|廠區|分店|據點|站點|site|benchmark/.test(
       normalizedMessage,
     );
   const hasComparisonIntent =
@@ -965,6 +1392,18 @@ function getRouteFirstMentionIndex(
     const regexMentions = [
       /(?:主電表|主電錶|總表|總電表|總電錶|子電表|子電錶|分表|獨立設備|獨立電表|standalone|迴路|回路|電表|設備|mac|address|位址|地址|circuit|meter).{0,12}(?:對應|是哪|是什麼|哪台|哪個設備|設備名稱|設備別名|主檔|綁定|mapping|註冊|屬於)/i,
       /(?:對應|是哪|是什麼|哪台|哪個設備|設備名稱|設備別名|主檔|綁定|mapping|註冊|屬於).{0,12}(?:主電表|主電錶|總表|總電表|總電錶|子電表|子電錶|分表|獨立設備|獨立電表|standalone|迴路|回路|電表|設備|mac|address|位址|地址|circuit|meter)/i,
+    ]
+      .map((regex) => normalizedMessage.search(regex))
+      .filter((index) => index >= 0);
+    if (regexMentions.length > 0) {
+      return Math.min(...regexMentions);
+    }
+  }
+
+  if (route.key === "site_metadata") {
+    const regexMentions = [
+      /(?:案場|場域|廠區|分店|據點|站點|site|location|company|公司|客戶).{0,12}(?:名稱|名字|叫什麼|是哪|是什麼|目前|現在|所在|所屬|有哪些|清單|列表|幾個|多少|name|current|which|what)/i,
+      /(?:名稱|名字|叫什麼|是哪|是什麼|目前|現在|所在|所屬|有哪些|清單|列表|幾個|多少|name|current|which|what).{0,12}(?:案場|場域|廠區|分店|據點|站點|site|location|company|公司|客戶)/i,
     ]
       .map((regex) => normalizedMessage.search(regex))
       .filter((index) => index >= 0);
@@ -1015,12 +1454,21 @@ export function buildEnmsScopedBundleContextMessage(
   }
 
   const suffix = getRequestedAccountSuffix(message);
+  const presentationSuffix =
+    /圖表|圖形|畫成圖|用圖|長條圖|折線圖|趨勢圖|排行榜|排名圖|chart|graph|visual/i
+      .test(message)
+      ? " 請用圖表呈現"
+      : "";
   if (pageKey !== "nlq") {
-    return `${route.queryHint}${suffix}`.replace(/\s+/g, " ").trim();
+    return `${route.queryHint}${suffix}${presentationSuffix}`
+      .replace(/\s+/g, " ")
+      .trim();
   }
 
   if (route.preciseAnswerOnly) {
-    return `${route.queryHint}${suffix}`.replace(/\s+/g, " ").trim();
+    return `${route.queryHint}${suffix}${presentationSuffix}`
+      .replace(/\s+/g, " ")
+      .trim();
   }
 
   return `${message} ${route.queryHint}${suffix}`

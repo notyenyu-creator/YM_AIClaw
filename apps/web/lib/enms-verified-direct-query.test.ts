@@ -804,7 +804,7 @@ describe("buildEnmsVerifiedDirectQueryAnswer", () => {
     expect(answer).toContain("最新區間 2026-01-02：用電 5,696.46 kWh");
   });
 
-  it("does not misroute site KPI questions into asset counts", async () => {
+  it("does not misroute site KPI questions into asset counts and emits charts when requested", async () => {
     const { duckdbQueryExternalPgAsyncDetailed } = await import("./workspace");
     vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockResolvedValueOnce({
       rows: [
@@ -825,12 +825,17 @@ describe("buildEnmsVerifiedDirectQueryAnswer", () => {
     );
 
     const answer = await buildEnmsVerifiedDirectQueryAnswer({
-      userMessage: "最近 30 天各場域總用電是多少？請做比較。",
+      userMessage:
+        "請查詢最近 30 天的總用電、最大需量、平均功率因數，並做多場域 benchmarking 排名與差異說明。請用圖表呈現",
     });
 
     expect(duckdbQueryExternalPgAsyncDetailed).toHaveBeenCalledTimes(1);
     expect(answer).toContain("最近 30 天場域 benchmarking");
     expect(answer).toContain("總用電 1,006,863 kWh");
+    expect(answer).toContain("```report-json");
+    expect(answer).toContain("\"enms-site-total-kwh-ranking\"");
+    expect(answer).toContain("\"enms-site-peak-kw-ranking\"");
+    expect(answer).toContain("\"enms-site-avg-pf-ranking\"");
     expect(answer).not.toContain("目前共有");
   });
 

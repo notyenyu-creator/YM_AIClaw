@@ -263,6 +263,7 @@ function requiredEvidenceForCapabilities(
     demand_risk: ["demand_trend", "contract_capacity_or_missing_boundary"],
     anomaly_root_cause: ["statistical_baseline", "power_quality_or_raw_signal_boundary"],
     device_lookup: ["meter_identity_mapping", "mac_address_circuit_or_clarification"],
+    site_metadata: ["site_scope_metadata", "company_or_site_identity", "authorized_site_scope"],
     meter_ranking: ["kwh_aggregation", "ranking_time_range", "meter_identity_mapping_or_missing_boundary"],
     energy_usage_query: ["energy_consumption_summary", "query_time_range"],
     site_benchmarking: ["site_scope", "kwh_or_demand_ranking"],

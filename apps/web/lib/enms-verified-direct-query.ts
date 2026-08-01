@@ -181,6 +181,21 @@ function includesAny(message: string, keywords: string[]) {
   return keywords.some((keyword) => message.includes(keyword.toLowerCase()));
 }
 
+function isChartPresentationRequest(message: string) {
+  const normalized = message.toLowerCase();
+  return includesAny(normalized, [
+    "圖表",
+    "chart",
+    "報表",
+    "長條圖",
+    "折線圖",
+    "圓餅圖",
+    "趨勢圖",
+    "用圖",
+    "畫圖",
+  ]);
+}
+
 function extractAccountNumber(message: string): string | null {
   const match = message.match(/\b\d{8,12}\b/);
   return match?.[0] ?? null;
@@ -1261,7 +1276,10 @@ function buildRecentAnomalyReport(
   return lines.join("\n");
 }
 
-function buildPeakDemandRankingReport(rows: SitePeakDemandRow[]) {
+function buildPeakDemandRankingReport(
+  rows: SitePeakDemandRow[],
+  options?: { includeChart?: boolean },
+) {
   if (rows.length === 0) {
     return [
       "根據本地 EnMS DB 查詢，最近 30 天沒有可統計的場域最大需量資料。",
@@ -1285,6 +1303,47 @@ function buildPeakDemandRankingReport(rows: SitePeakDemandRow[]) {
     "判讀建議：最大需量最高的場域優先檢查尖峰時段負載與可降載設備，避免後續契約容量風險擴大。",
     "查詢依據：max(DeviceDataSummaryView.MaxDemand)、DeviceDataSummaryView.RecordTime，並透過 ElectricityMeter / PowerAccounts / sites 對應場域。此回答只使用本地 EnMS DB。",
   );
+
+  if (options?.includeChart === true) {
+    const chartRows = rows.slice(0, 5).map((row, index) => ({
+      rank: index + 1,
+      site_name: row.site_name ?? "未對應場域",
+      peak_kw: round(toNumber(row.peak_kw), 2),
+      peak_time: row.peak_time ?? "",
+      meter_name: row.meter_name ?? "未知電表",
+      circuit_seq: row.circuit_seq ?? "n/a",
+    }));
+
+    lines.push(
+      "",
+      "```report-json",
+      JSON.stringify(
+        {
+          version: 1,
+          ...ENMS_REPORT_METADATA,
+          title: "最近 30 天場域最大需量排行",
+          description:
+            "以本地 EnMS DB verified rows 呈現各場域最近 30 天最大需量。",
+          panels: [
+            {
+              id: "enms-site-peak-demand-ranking",
+              title: "場域最大需量排行",
+              type: "bar",
+              rows: chartRows,
+              mapping: {
+                xAxis: "site_name",
+                yAxis: ["peak_kw"],
+              },
+              size: "full",
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+      "```",
+    );
+  }
 
   return lines.join("\n");
 }
@@ -1329,6 +1388,70 @@ function buildSiteBenchmarkReport(rows: SiteKpiRow[], userMessage: string) {
     "差異判讀：總用電高代表節能潛力較大；最大需量高代表契約容量與尖峰降載風險較高；平均功率因數低於 0.9 的場域，應優先檢查功因補償與感性負載。",
     "查詢依據：sum(DeviceDataSummaryView.TotalConsumption)、max(DeviceDataSummaryView.MaxDemand)、avg/min(DeviceDataSummaryView.*PowerFactor)，並透過 ElectricityMeter / PowerAccounts / sites 對應場域。此回答只使用本地 EnMS DB。",
   );
+
+  if (isChartPresentationRequest(userMessage)) {
+    const chartRows = rows.map((row, index) => ({
+      rank: index + 1,
+      site_name: row.site_name ?? "未對應場域",
+      total_kwh: round(toNumber(row.total_kwh), 2),
+      peak_kw: round(toNumber(row.peak_kw), 2),
+      avg_pf: round(toNumber(row.avg_pf), 4),
+      min_pf: round(toNumber(row.min_pf), 4),
+      point_count: round(toNumber(row.point_count), 0),
+    }));
+
+    lines.push(
+      "",
+      "```report-json",
+      JSON.stringify(
+        {
+          version: 1,
+          ...ENMS_REPORT_METADATA,
+          title: "最近 30 天場域 Benchmarking",
+          description:
+            "以本地 EnMS DB verified rows 呈現場域總用電、最大需量與平均功率因數。",
+          panels: [
+            {
+              id: "enms-site-total-kwh-ranking",
+              title: "場域總用電排行",
+              type: "bar",
+              rows: chartRows,
+              mapping: {
+                xAxis: "site_name",
+                yAxis: ["total_kwh"],
+              },
+              size: "full",
+            },
+            {
+              id: "enms-site-peak-kw-ranking",
+              title: "場域最大需量排行",
+              type: "bar",
+              rows: chartRows,
+              mapping: {
+                xAxis: "site_name",
+                yAxis: ["peak_kw"],
+              },
+              size: "full",
+            },
+            {
+              id: "enms-site-avg-pf-ranking",
+              title: "場域平均功率因數",
+              type: "bar",
+              rows: chartRows,
+              mapping: {
+                xAxis: "site_name",
+                yAxis: ["avg_pf"],
+              },
+              size: "full",
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+      "```",
+    );
+  }
 
   return lines.join("\n");
 }
@@ -2608,23 +2731,6 @@ export async function buildEnmsVerifiedDirectQueryAnswer(
     }
   }
 
-  if (isPeakDemandRankingRequest(userMessage)) {
-    try {
-      const result = await queryPeakDemandRankingRows();
-      if (result.error) {
-        throw new Error(result.error);
-      }
-      return buildPeakDemandRankingReport(result.rows);
-    } catch (error) {
-      const message =
-        error instanceof Error ? error.message : "unknown EnMS DB query error";
-      return [
-        `我判斷這是 EnMS 最近 30 天場域最大需量排行，已優先查本地 EnMS DB，但查詢時發生錯誤：${message}`,
-        "因此我不會改用外部網路資料或推測答案。請先確認 DeviceDataSummaryView 與主資料 join 是否可讀。",
-      ].join("\n");
-    }
-  }
-
   if (isSiteBenchmarkRequest(userMessage)) {
     try {
       const result = await querySiteKpiRows();
@@ -2637,6 +2743,25 @@ export async function buildEnmsVerifiedDirectQueryAnswer(
         error instanceof Error ? error.message : "unknown EnMS DB query error";
       return [
         `我判斷這是 EnMS 最近 30 天場域 KPI / benchmarking 查詢，已優先查本地 EnMS DB，但查詢時發生錯誤：${message}`,
+        "因此我不會改用外部網路資料或推測答案。請先確認 DeviceDataSummaryView 與主資料 join 是否可讀。",
+      ].join("\n");
+    }
+  }
+
+  if (isPeakDemandRankingRequest(userMessage)) {
+    try {
+      const result = await queryPeakDemandRankingRows();
+      if (result.error) {
+        throw new Error(result.error);
+      }
+      return buildPeakDemandRankingReport(result.rows, {
+        includeChart: isChartPresentationRequest(userMessage),
+      });
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "unknown EnMS DB query error";
+      return [
+        `我判斷這是 EnMS 最近 30 天場域最大需量排行，已優先查本地 EnMS DB，但查詢時發生錯誤：${message}`,
         "因此我不會改用外部網路資料或推測答案。請先確認 DeviceDataSummaryView 與主資料 join 是否可讀。",
       ].join("\n");
     }

@@ -1425,6 +1425,78 @@ describe("POST /api/enms/chat", () => {
     expect(json.answerContract.structuredModelApplied).toBe(false);
   });
 
+  it("does not append structured analysis for precise site metadata answers", async () => {
+    process.env.ENCLAW_ENMS_STRUCTURED_AGENT_ENABLED = "1";
+    structuredAgentMocks.enabled.mockReturnValue(true);
+    structuredAgentMocks.run.mockResolvedValue({
+      summary: "這段模型補充不應混入案場 metadata 答案。",
+      findings: [
+        {
+          text: "模型補充不應出現。",
+          factRefs: ["siteMetadata"],
+        },
+      ],
+      recommendations: [],
+      confidence: "high",
+      knowledgeRefs: ["skills/enms/SKILL.md"],
+    });
+    const { POST } = await import("./route.js");
+    const response = await POST(
+      buildRequest({
+        message: "目前案場名稱是什麼？",
+        scopedContext: {
+          pageKey: "nlq",
+          status: "ready",
+          facts: {
+            siteMetadata: {
+              companyNo: "COMPANY-A",
+              companyName: "屏榮食品股份有限公司",
+              currentSiteId: "SITE-A",
+              currentSite: {
+                siteId: "SITE-A",
+                siteName: "大溪廠",
+                companyNo: "COMPANY-A",
+              },
+              authorizedSites: [
+                {
+                  siteId: "SITE-A",
+                  siteName: "大溪廠",
+                  companyNo: "COMPANY-A",
+                },
+              ],
+              meterCount: 25,
+            },
+          },
+          evidence: {
+            dataSources: ["sites", "ComCompany", "ai_meter_v1"],
+            queryScope: "siteCount=1",
+            confidence: "high",
+          },
+        },
+        guardrails: {
+          mode: "readonly",
+          factsAlreadyScopedByEnms: true,
+          noSqlFromClient: true,
+          noHtml: true,
+          semanticViewsOnly: true,
+          requireEvidence: true,
+        },
+      }),
+    );
+    const json = await response.json();
+    const blocks = JSON.stringify(json.blocks);
+
+    expect(response.status).toBe(200);
+    expect(json.answerContract.answerKind).toBe("site_metadata");
+    expect(blocks).toContain("屏榮食品股份有限公司");
+    expect(blocks).toContain("大溪廠");
+    expect(blocks).toContain("授權電表迴路數");
+    expect(blocks).not.toContain("模型補充不應出現");
+    expect(structuredAgentMocks.run).not.toHaveBeenCalled();
+    expect(json.answerContract.structuredModelAttempted).toBe(false);
+    expect(json.answerContract.structuredModelApplied).toBe(false);
+  });
+
   it("does not append structured analysis for precise device lookup answers", async () => {
     process.env.ENCLAW_ENMS_STRUCTURED_AGENT_ENABLED = "1";
     structuredAgentMocks.enabled.mockReturnValue(true);
@@ -1624,6 +1696,433 @@ describe("POST /api/enms/chat", () => {
     expect(structuredAgentMocks.run).not.toHaveBeenCalled();
     expect(json.answerContract.structuredModelAttempted).toBe(false);
     expect(json.answerContract.structuredModelApplied).toBe(false);
+  });
+
+  it("returns a safe chart block for explicit scoped benchmarking chart requests", async () => {
+    const { POST } = await import("./route.js");
+    const response = await POST(
+      buildRequest({
+        message: "請查最近 30 天多場域 benchmarking 排名與差異，請用圖表呈現",
+        scopedContext: {
+          pageKey: "bench",
+          status: "ready",
+          facts: {
+            siteRankings: [
+              { name: "大溪廠", value: 13864.4 },
+              { name: "二廠", value: 8240.2 },
+            ],
+          },
+          evidence: {
+            dataSources: ["ai_energy_15m_v1"],
+            timeRange: "最近 30 日",
+            queryScope: "siteCount=2",
+            confidence: "high",
+          },
+        },
+        guardrails: {
+          mode: "readonly",
+          factsAlreadyScopedByEnms: true,
+          noSqlFromClient: true,
+          noHtml: true,
+          semanticViewsOnly: true,
+          requireEvidence: true,
+        },
+      }),
+    );
+    const json = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(json.answerContract.answerKind).toBe("ranking");
+    expect(json.blocks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "chart",
+          chartType: "bar",
+          unit: "kWh",
+          series: [
+            expect.objectContaining({
+              key: "facts.siteRankings",
+              points: [
+                expect.objectContaining({ label: "大溪廠", value: 13864.4 }),
+                expect.objectContaining({ label: "二廠", value: 8240.2 }),
+              ],
+            }),
+          ],
+        }),
+      ]),
+    );
+    expect(structuredAgentMocks.run).not.toHaveBeenCalled();
+  });
+
+  it("keeps scoped chart blocks for mixed benchmarking metric requests", async () => {
+    const { POST } = await import("./route.js");
+    const response = await POST(
+      buildRequest({
+        message:
+          "請查詢最近 30 天的總用電、最大需量、平均功率因數，並做多場域 benchmarking 排名與差異說明。請用圖表呈現",
+        scopedContext: {
+          pageKey: "bench",
+          status: "ready",
+          facts: {
+            metrics: {
+              peakDemandKw: 1386.44,
+              averagePowerFactor: 0.613,
+            },
+            siteRankings: [
+              { name: "大溪廠", value: 665217.19 },
+              { name: "二廠", value: 412000 },
+            ],
+          },
+          evidence: {
+            dataSources: ["ai_energy_15m_v1"],
+            timeRange: "最近 30 日",
+            queryScope: "siteCount=2",
+            confidence: "high",
+          },
+        },
+        guardrails: {
+          mode: "readonly",
+          factsAlreadyScopedByEnms: true,
+          noSqlFromClient: true,
+          noHtml: true,
+          semanticViewsOnly: true,
+          requireEvidence: true,
+        },
+      }),
+    );
+    const json = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(json.answerContract.answerKind).toBe("ranking");
+    expect(json.blocks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "chart",
+          chartType: "bar",
+          unit: "kWh",
+          series: [
+            expect.objectContaining({
+              key: "facts.siteRankings",
+              points: [
+                expect.objectContaining({ label: "大溪廠", value: 665217.19 }),
+                expect.objectContaining({ label: "二廠", value: 412000 }),
+              ],
+            }),
+          ],
+        }),
+      ]),
+    );
+    expect(JSON.stringify(json)).not.toContain("無法生成圖表");
+    expect(JSON.stringify(json)).not.toContain("Y-CRM 合約");
+    expect(structuredAgentMocks.run).not.toHaveBeenCalled();
+  });
+
+  it("keeps chart blocks within the block budget for verbose multi-context bundle answers", async () => {
+    const { POST } = await import("./route.js");
+    const response = await POST(
+      buildRequest({
+        message:
+          "請查詢最近 30 天的總用電、最大需量、平均功率因數，並做多場域 benchmarking 排名與差異說明。請幫我每一個都用圖表呈現",
+        chatPlan: {
+          contractVersion: "enms.ai.chat-plan.v1",
+          strategy: "multi_scoped_facts",
+          intent: "site_benchmarking",
+          confidence: "high",
+          allowDbFacts: true,
+          allowGeneralAI: false,
+          selectedCapabilities: [
+            "site_benchmarking",
+            "demand_risk",
+            "anomaly_root_cause",
+          ],
+          primaryPageKey: "bench",
+          selectedPageKeys: ["bench", "demand", "anomaly"],
+          needClarification: false,
+          maxContexts: 4,
+          answerObligations: [
+            {
+              key: "total_energy_30d",
+              label: "最近 30 天總用電",
+              pageKey: "bench",
+              capability: "site_benchmarking",
+              answerKind: "ranking",
+              requiredFactPaths: ["facts.siteRankings"],
+              chartRequired: true,
+              chartType: "bar",
+              unit: "kWh",
+            },
+            {
+              key: "peak_demand_30d",
+              label: "最近 30 天最大需量",
+              pageKey: "demand",
+              capability: "demand_risk",
+              answerKind: "demand",
+              requiredFactPaths: ["facts.metrics.peakDemandKw"],
+              chartRequired: true,
+              chartType: "metric",
+              unit: "kW",
+            },
+            {
+              key: "avg_power_factor_30d",
+              label: "最近 30 天平均功率因數",
+              pageKey: "anomaly",
+              capability: "anomaly_root_cause",
+              answerKind: "metric",
+              requiredFactPaths: ["facts.metrics.avgPowerFactor"],
+              chartRequired: true,
+              chartType: "metric",
+              unit: "pf",
+            },
+          ],
+        },
+        scopedFactsBundle: {
+          contractVersion: "enms.ai.page-insight.v1",
+          factsSchemaVersion: "enms.ai.facts.v1",
+          primaryPageKey: "bench",
+          contexts: [
+            {
+              contractVersion: "enms.ai.page-insight.v1",
+              factsSchemaVersion: "enms.ai.facts.v1",
+              pageKey: "bench",
+              status: "ready",
+              facts: {
+                siteRankings: [
+                  {
+                    name: "大溪廠",
+                    value: 664734.9,
+                    note: "資料粒度加總需量參考峰值 1,386.4 kW",
+                  },
+                ],
+              },
+              evidence: {
+                dataSources: ["ai_energy_15m_v1"],
+                timeRange: "07/02 00:45 - 07/29 01:45",
+                queryScope: "siteCount=1",
+                confidence: "high",
+              },
+            },
+            {
+              contractVersion: "enms.ai.page-insight.v1",
+              factsSchemaVersion: "enms.ai.facts.v1",
+              pageKey: "demand",
+              status: "ready",
+              facts: {
+                metrics: {
+                  currentDemandKw: 992.6,
+                  peakDemandKw: 1386.44,
+                  projectedPeakDemandKw: 998.6,
+                  contractCapacityKw: 3535,
+                  suggestedShedKw: 0,
+                },
+              },
+              evidence: {
+                dataSources: ["DeviceDataSummaryView"],
+                timeRange: "07/02 00:45 - 07/29 01:45",
+                queryScope: "powerAccountCount=1",
+                confidence: "high",
+              },
+            },
+            {
+              contractVersion: "enms.ai.page-insight.v1",
+              factsSchemaVersion: "enms.ai.facts.v1",
+              pageKey: "anomaly",
+              status: "ready",
+              facts: {
+                metrics: {
+                  avgPowerFactor: 0.613,
+                  minPowerFactor: 0.588,
+                },
+              },
+              evidence: {
+                dataSources: ["ai_anomaly_view"],
+                timeRange: "07/25 00:00 - 07/29 01:00",
+                queryScope: "meterCount=25",
+                confidence: "high",
+              },
+            },
+          ],
+        },
+        scopedContext: {
+          pageKey: "bench",
+          status: "ready",
+          facts: {
+            siteRankings: [
+              {
+                name: "大溪廠",
+                value: 664734.9,
+                note: "資料粒度加總需量參考峰值 1,386.4 kW",
+              },
+            ],
+          },
+          evidence: {
+            dataSources: ["ai_energy_15m_v1"],
+            timeRange: "07/02 00:45 - 07/29 01:45",
+            queryScope: "siteCount=1",
+            confidence: "high",
+          },
+        },
+        guardrails: {
+          mode: "readonly",
+          factsAlreadyScopedByEnms: true,
+          noSqlFromClient: true,
+          noHtml: true,
+          semanticViewsOnly: true,
+          requireEvidence: true,
+        },
+      }),
+    );
+    const json = await response.json();
+    const chartBlocks = json.blocks.filter(
+      (block: { type?: string }) => block.type === "chart",
+    );
+
+    expect(response.status).toBe(200);
+    expect(json.blocks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "chart",
+          chartType: "bar",
+          unit: "kWh",
+          series: [
+            expect.objectContaining({
+              key: "facts.siteRankings",
+              points: [
+                expect.objectContaining({ label: "大溪廠", value: 664734.9 }),
+              ],
+            }),
+          ],
+        }),
+      ]),
+    );
+    expect(chartBlocks.length).toBeGreaterThanOrEqual(3);
+    expect(chartBlocks.length).toBeLessThanOrEqual(4);
+    expect(chartBlocks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          chartType: "metric",
+          unit: "kW",
+        }),
+        expect.objectContaining({
+          chartType: "metric",
+          unit: "pf",
+        }),
+      ]),
+    );
+    expect(JSON.stringify(json.blocks)).toContain("【多場域比較】");
+    expect(JSON.stringify(json.blocks)).not.toContain("【自然語言查詢】");
+    expect(JSON.stringify(json.blocks)).toContain("【需量預測】");
+    expect(JSON.stringify(json.blocks)).toContain("【異常根因分析】");
+    expect(JSON.stringify(json.blocks)).toContain("平均功率因數：0.613");
+    expect(json.answerContract.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          pageKey: "bench",
+          answerKind: "ranking",
+          matchedFactPaths: ["facts.siteRankings"],
+        }),
+        expect.objectContaining({
+          pageKey: "demand",
+          answerKind: "demand",
+          matchedFactPaths: expect.arrayContaining([
+            "facts.metrics.peakDemandKw",
+          ]),
+        }),
+        expect.objectContaining({
+          pageKey: "anomaly",
+          answerKind: "metric",
+          matchedFactPaths: ["facts.metrics.avgPowerFactor"],
+        }),
+      ]),
+    );
+    expect(structuredAgentMocks.run).not.toHaveBeenCalled();
+  });
+
+  it("returns scoped chart blocks for contextual chart follow-ups", async () => {
+    const { POST } = await import("./route.js");
+    const response = await POST(
+      buildRequest({
+        message: "圖表呢？",
+        history: [
+          {
+            role: "user",
+            content: "今天天氣如何？請不要畫 EnMS 圖表。",
+          },
+          {
+            role: "assistant",
+            content: "這是一般問題，不應使用 EnMS scoped facts。",
+          },
+        ],
+        chatPlan: {
+          contractVersion: "enms.ai.chat-plan.v1",
+          strategy: "single_scoped_facts",
+          intent: "site_benchmarking",
+          confidence: "high",
+          allowDbFacts: true,
+          allowGeneralAI: false,
+          selectedCapabilities: ["site_benchmarking"],
+          primaryPageKey: "bench",
+          selectedPageKeys: ["bench"],
+          needClarification: false,
+          maxContexts: 1,
+        },
+        scopedFactsBundle: {
+          contractVersion: "enms.ai.page-insight.v1",
+          factsSchemaVersion: "enms.ai.facts.v1",
+          primaryPageKey: "bench",
+          contexts: [
+            {
+              contractVersion: "enms.ai.page-insight.v1",
+              factsSchemaVersion: "enms.ai.facts.v1",
+              pageKey: "bench",
+              status: "ready",
+              facts: {
+                siteRankings: [
+                  { name: "大溪廠", value: 13864.4 },
+                  { name: "二廠", value: 8240.2 },
+                ],
+              },
+              evidence: {
+                dataSources: ["ai_energy_15m_v1"],
+                timeRange: "最近 30 日",
+                queryScope: "siteCount=2",
+                confidence: "high",
+              },
+            },
+          ],
+        },
+        guardrails: {
+          mode: "readonly",
+          factsAlreadyScopedByEnms: true,
+          noSqlFromClient: true,
+          noHtml: true,
+          semanticViewsOnly: true,
+          requireEvidence: true,
+        },
+      }),
+    );
+    const json = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(json.answerContract.chatFactsBundle.pageKeys).toEqual(["bench"]);
+    expect(json.blocks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "chart",
+          chartType: "bar",
+          unit: "kWh",
+          series: [
+            expect.objectContaining({
+              key: "facts.siteRankings",
+              points: [
+                expect.objectContaining({ label: "大溪廠", value: 13864.4 }),
+                expect.objectContaining({ label: "二廠", value: 8240.2 }),
+              ],
+            }),
+          ],
+        }),
+      ]),
+    );
+    expect(JSON.stringify(json)).not.toContain("無法生成圖表");
   });
 
   it("filters unsupported Chat claims and never appends the model summary", async () => {

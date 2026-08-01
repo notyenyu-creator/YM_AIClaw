@@ -60,6 +60,24 @@ function buildContext(
           identityKey: "MAC-B|4|1",
         },
       ],
+      siteMetadata: {
+        companyNo: "COMPANY-A",
+        companyName: "屏榮食品股份有限公司",
+        currentSiteId: "site001",
+        currentSite: {
+          siteId: "site001",
+          siteName: "大溪廠",
+          companyNo: "COMPANY-A",
+        },
+        authorizedSites: [
+          {
+            siteId: "site001",
+            siteName: "大溪廠",
+            companyNo: "COMPANY-A",
+          },
+        ],
+        meterCount: 25,
+      },
       account: {
         accountNumber: "04043717102",
       },
@@ -97,6 +115,59 @@ describe("buildEnmsScopedAnswer", () => {
     expect(result.matchedFactPaths).toContain(
       "facts.metrics.latestBillAmountNtd",
     );
+  });
+
+  it("answers current site metadata from scoped facts instead of general AI", () => {
+    const result = buildEnmsScopedAnswer({
+      message: "你可以幫我看看目前案場名稱是什麼嗎？",
+      context: buildContext({ pageKey: "nlq" }),
+    });
+
+    expect(result.answerKind).toBe("site_metadata");
+    expect(result.text).toContain("屏榮食品股份有限公司");
+    expect(result.text).toContain("大溪廠");
+    expect(result.text).toContain("授權電表迴路數：25");
+    expect(result.matchedFactPaths).toContain("facts.siteMetadata");
+  });
+
+  it("prioritizes current site when multiple authorized sites exist", () => {
+    const result = buildEnmsScopedAnswer({
+      message: "目前案場名稱是什麼？",
+      context: buildContext({
+        pageKey: "nlq",
+        facts: {
+          ...buildContext().facts,
+          siteMetadata: {
+            companyNo: "COMPANY-A",
+            companyName: "測試公司",
+            currentSiteId: "SITE-B",
+            currentSite: {
+              siteId: "SITE-B",
+              siteName: "目前場域",
+              companyNo: "COMPANY-A",
+            },
+            authorizedSites: [
+              {
+                siteId: "SITE-A",
+                siteName: "其他場域",
+                companyNo: "COMPANY-A",
+              },
+              {
+                siteId: "SITE-B",
+                siteName: "目前場域",
+                companyNo: "COMPANY-A",
+              },
+            ],
+            meterCount: 3,
+          },
+        },
+      }),
+    });
+
+    expect(result.answerKind).toBe("site_metadata");
+    expect(result.text).toContain("目前場域 / 案場：目前場域");
+    expect(result.text).toContain("授權可見場域數：2");
+    expect(result.text).toContain("其他場域");
   });
 
   it("answers requested account billing from bill details instead of global metrics", () => {
@@ -290,6 +361,60 @@ describe("buildEnmsScopedAnswer", () => {
     expect(result.answerKind).toBe("ranking");
     expect(result.text).toContain("#2 B 場域：1,200");
     expect(result.text).not.toContain("A 場域：2,000");
+  });
+
+  it("adds a safe chart block for explicit EnMS benchmarking chart requests", () => {
+    const result = buildEnmsScopedAnswer({
+      message: "請查最近 30 天多場域 benchmarking 排名，請用圖表呈現",
+      context: buildContext({ pageKey: "bench" }),
+    });
+
+    expect(result.answerKind).toBe("ranking");
+    expect(result.matchedFactPaths).toContain("facts.siteRankings");
+    expect(result.blocks).toEqual([
+      expect.objectContaining({
+        type: "chart",
+        chartType: "bar",
+        unit: "kWh",
+        series: [
+          expect.objectContaining({
+            key: "facts.siteRankings",
+            points: [
+              expect.objectContaining({ label: "A 場域", value: 2000 }),
+              expect.objectContaining({ label: "B 場域", value: 1200 }),
+            ],
+          }),
+        ],
+      }),
+    ]);
+  });
+
+  it("keeps benchmarking chart output for mixed energy, demand, and power-factor requests", () => {
+    const result = buildEnmsScopedAnswer({
+      message:
+        "請查詢最近 30 天的總用電、最大需量、平均功率因數，並做多場域 benchmarking 排名與差異說明。請用圖表呈現",
+      context: buildContext({ pageKey: "bench" }),
+    });
+
+    expect(result.answerKind).toBe("ranking");
+    expect(result.matchedFactPaths).toContain("facts.siteRankings");
+    expect(result.text).toContain("#1 A 場域：2,000 kWh");
+    expect(result.blocks).toEqual([
+      expect.objectContaining({
+        type: "chart",
+        chartType: "bar",
+        unit: "kWh",
+        series: [
+          expect.objectContaining({
+            key: "facts.siteRankings",
+            points: [
+              expect.objectContaining({ label: "A 場域", value: 2000 }),
+              expect.objectContaining({ label: "B 場域", value: 1200 }),
+            ],
+          }),
+        ],
+      }),
+    ]);
   });
 
   it("prioritizes meter ranking facts for circuit consumption questions", () => {

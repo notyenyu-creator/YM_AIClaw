@@ -139,4 +139,92 @@ describe("POST /api/enms/chat/plan", () => {
       expect(json.selectedPageKeys).toEqual(["nlq"]);
     }
   });
+
+  it("uses recent context for short chart follow-ups without widening general questions", async () => {
+    process.env.ENCLAW_ENMS_API_KEY = DEFAULT_API_KEY;
+    const { POST } = await import("./route.js");
+
+    const history = [
+      {
+        role: "user",
+        content:
+          "請查詢最近 30 天的總用電、最大需量、平均功率因數，並做多場域 benchmarking 排名與差異說明。",
+      },
+      {
+        role: "assistant",
+        content:
+          "根據 EnMS scoped facts，多場域 benchmarking 顯示大溪廠用電最高。",
+      },
+    ];
+    const chartFollowUpResponse = await POST(
+      buildRequest({
+        message: "圖表呢？",
+        history,
+      }),
+    );
+    const chartFollowUpJson = await chartFollowUpResponse.json();
+
+    expect(chartFollowUpResponse.status).toBe(200);
+    expect([
+      "single_scoped_facts",
+      "multi_scoped_facts_bundle",
+    ]).toContain(chartFollowUpJson.strategy);
+    expect(chartFollowUpJson.allowDbFacts).toBe(true);
+    expect(chartFollowUpJson.primaryPageKey).toBe("bench");
+    expect(chartFollowUpJson.selectedPageKeys).toContain("bench");
+    expect(chartFollowUpJson.selectedCapabilities).toContain(
+      "site_benchmarking",
+    );
+
+    const weatherResponse = await POST(
+      buildRequest({
+        message: "今天天氣如何？",
+        history,
+      }),
+    );
+    const weatherJson = await weatherResponse.json();
+
+    expect(weatherResponse.status).toBe(200);
+    expect(weatherJson.strategy).toBe("general_ai");
+    expect(weatherJson.allowDbFacts).toBe(false);
+    expect(weatherJson.selectedPageKeys).toEqual([]);
+  });
+
+  it("returns answer obligations for composite chart prompts", async () => {
+    process.env.ENCLAW_ENMS_API_KEY = DEFAULT_API_KEY;
+    const { POST } = await import("./route.js");
+    const response = await POST(
+      buildRequest({
+        message:
+          "請查詢最近 30 天的總用電、最大需量、平均功率因數，並做多場域 benchmarking 排名與差異說明。請幫我每一個都用圖表呈現",
+      }),
+    );
+    const json = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(json.allowDbFacts).toBe(true);
+    expect(json.answerObligations).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          key: "total_energy_30d",
+          chartRequired: true,
+          unit: "kWh",
+        }),
+        expect.objectContaining({
+          key: "peak_demand_30d",
+          chartRequired: true,
+          unit: "kW",
+        }),
+        expect.objectContaining({
+          key: "avg_power_factor_30d",
+          chartRequired: true,
+          unit: "pf",
+        }),
+        expect.objectContaining({
+          key: "site_benchmarking",
+          chartRequired: true,
+        }),
+      ]),
+    );
+  });
 });

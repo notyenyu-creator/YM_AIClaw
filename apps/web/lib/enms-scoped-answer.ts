@@ -1,6 +1,7 @@
 import {
   isEnmsDeviceLookupQuestion,
   isEnmsLatestDataQuestion,
+  isEnmsSiteMetadataQuestion,
   matchesEnmsChatSemanticRoute,
 } from "./enms-capability-registry";
 
@@ -53,6 +54,7 @@ export type EnmsScopedAnswerResult = {
     | "billing"
     | "demand"
     | "device_lookup"
+    | "site_metadata"
     | "ranking"
     | "account"
     | "time_range"
@@ -60,6 +62,25 @@ export type EnmsScopedAnswerResult = {
     | "summary"
     | "missing";
   matchedFactPaths: string[];
+  blocks?: EnmsScopedAnswerBlock[];
+};
+
+export type EnmsScopedAnswerBlock = {
+  type: "chart";
+  label?: string;
+  chartType: "bar" | "line" | "ranking" | "metric";
+  unit?: string;
+  series: Array<{
+    key: string;
+    label: string;
+    type: "bar" | "line" | "ranking" | "metric";
+    points: Array<{
+      label: string;
+      value: number;
+      timestamp?: string | null;
+      tone?: string;
+    }>;
+  }>;
 };
 
 type NamedValue = {
@@ -81,6 +102,21 @@ type DeviceMapping = {
   accountName: string;
   siteName: string;
   identityKey: string;
+};
+
+type SiteMetadataSite = {
+  siteId: string;
+  siteName: string;
+  companyNo: string;
+};
+
+type SiteMetadata = {
+  companyNo: string;
+  companyName: string;
+  currentSiteId: string;
+  currentSite: SiteMetadataSite | null;
+  authorizedSites: SiteMetadataSite[];
+  meterCount: number | null;
 };
 
 type RequestedMeterRole = {
@@ -239,6 +275,49 @@ function readDeviceMappings(value: unknown): DeviceMapping[] {
     .filter((item): item is DeviceMapping => item !== null);
 }
 
+function readSiteMetadataSite(value: unknown): SiteMetadataSite | null {
+  const record = asRecord(value);
+  const siteId = sanitizeText(getCaseInsensitive(record, "siteId"));
+  const siteName = sanitizeText(getCaseInsensitive(record, "siteName"));
+  const companyNo = sanitizeText(getCaseInsensitive(record, "companyNo"));
+  if (!siteId && !siteName) {
+    return null;
+  }
+
+  return {
+    siteId,
+    siteName,
+    companyNo,
+  };
+}
+
+function readSiteMetadata(value: unknown): SiteMetadata {
+  const record = asRecord(value);
+  const authorizedSitesValue =
+    getCaseInsensitive(record, "authorizedSites") ??
+    getCaseInsensitive(record, "sites");
+  const authorizedSites = Array.isArray(authorizedSitesValue)
+    ? authorizedSitesValue
+      .map(readSiteMetadataSite)
+      .filter((item): item is SiteMetadataSite => item !== null)
+    : [];
+  const currentSite =
+    readSiteMetadataSite(getCaseInsensitive(record, "currentSite")) ??
+    (authorizedSites.length === 1 ? authorizedSites[0] : null);
+  const rawMeterCount = getCaseInsensitive(record, "meterCount");
+
+  return {
+    companyNo: sanitizeText(getCaseInsensitive(record, "companyNo")),
+    companyName: sanitizeText(getCaseInsensitive(record, "companyName")),
+    currentSiteId: sanitizeText(getCaseInsensitive(record, "currentSiteId")),
+    currentSite,
+    authorizedSites,
+    meterCount: typeof rawMeterCount === "number" && Number.isFinite(rawMeterCount)
+      ? rawMeterCount
+      : null,
+  };
+}
+
 function collectAccountNumbers(
   value: unknown,
   depth = 0,
@@ -283,6 +362,34 @@ function findRequestedCircuitSeq(message: string): number | null {
 
   const value = Number(match[1]);
   return Number.isFinite(value) ? value : null;
+}
+
+function isChartRequested(message: string): boolean {
+  return /圖表|圖形|長條圖|折線圖|趨勢圖|排行榜|排名圖|chart|graph|visual/i.test(message);
+}
+
+function buildMetricChartBlock(
+  label: string,
+  unit: string,
+  key: string,
+  points: Array<{ label: string; value: number; tone?: string }>,
+): EnmsScopedAnswerBlock {
+  return {
+    type: "chart",
+    label,
+    chartType: "metric",
+    unit,
+    series: [
+      {
+        key,
+        label,
+        type: "metric",
+        points: points
+          .filter((point) => Number.isFinite(point.value))
+          .slice(0, 6),
+      },
+    ],
+  };
 }
 
 function findRequestedMeterRole(message: string): RequestedMeterRole | null {
@@ -596,12 +703,32 @@ function answerDemand(
         ? `趨勢推估尖峰高於契約容量 ${formatNumber(projectedPeak - contractCapacity, "kW")}，需人工確認超約風險。`
         : `趨勢推估尖峰仍低於契約容量 ${formatNumber(contractCapacity - projectedPeak, "kW")}。`
       : "";
+  const chartBlocks = isChartRequested(message)
+    ? [
+        buildMetricChartBlock(
+          "需量指標",
+          "kW",
+          "facts.metrics.demandKpi",
+          available.map((definition) => ({
+            label: definition.label,
+            value: definition.value as number,
+            tone:
+              definition.path === "contractCapacityKw"
+                ? "danger"
+                : definition.path === "projectedPeakDemandKw"
+                  ? "purple"
+                  : "blue",
+          })),
+        ),
+      ]
+    : [];
 
   return {
     answerKind: "demand",
     matchedFactPaths: available.map(
       (definition) => `facts.metrics.${definition.path}`,
     ),
+    blocks: chartBlocks,
     text: [
       available
         .map(
@@ -634,8 +761,14 @@ function answerRanking(
   ) {
     return null;
   }
+  const asksSiteBenchmarking =
+    /場域|案場|各場域|各案場|多場域|區域|廠區|據點|站點|site|benchmark/i
+      .test(message) &&
+    /比較|排名|排行|benchmark|總用電|用電|耗電|耗能|平均功率因數|功率因數/i
+      .test(message);
   if (
     /需量|kw|demand/i.test(message) &&
+    !asksSiteBenchmarking &&
     !/迴路|回路|電表|mac|address|位址|地址|circuit|meter/i.test(message)
   ) {
     return null;
@@ -722,10 +855,37 @@ function answerRanking(
   const selected = requestedRank
     ? sorted.slice(startIndex, startIndex + 1)
     : sorted.slice(0, 5);
+  const chartPoints = selected
+    .filter((item) => item.value !== null)
+    .map((item) => ({
+      label: item.name,
+      value: item.value ?? 0,
+      tone: lowestFirst ? "green" : "blue",
+    }));
+  const chartBlocks: EnmsScopedAnswerBlock[] =
+    isChartRequested(message) && chartPoints.length > 0
+      ? [
+          {
+            type: "chart",
+            label: asksMeterRanking ? "迴路 / 電表排名" : "場域 Benchmarking 排名",
+            chartType: "bar",
+            unit: valueUnit,
+            series: [
+              {
+                key: source.path.replace(/[^a-z0-9_.-]/gi, "_").slice(0, 80),
+                label: asksMeterRanking ? "迴路 / 電表排名" : "場域排名",
+                type: "bar",
+                points: chartPoints,
+              },
+            ],
+          },
+        ]
+      : [];
 
   return {
     answerKind: "ranking",
     matchedFactPaths: [source.path],
+    blocks: chartBlocks,
     text: [
       selected
         .map((item, index) => {
@@ -819,6 +979,60 @@ function answerDeviceLookup(
     ]
       .filter(Boolean)
       .join("\n\n"),
+  };
+}
+
+function answerSiteMetadata(
+  message: string,
+  context: EnmsScopedAnswerContext,
+  facts: Record<string, unknown>,
+): EnmsScopedAnswerResult | null {
+  if (!isEnmsSiteMetadataQuestion(message)) {
+    return null;
+  }
+
+  const metadata = readSiteMetadata(getCaseInsensitive(facts, "siteMetadata"));
+  const lines: string[] = [];
+  if (metadata.companyName) {
+    lines.push(
+      `公司 / 客戶：${metadata.companyName}${metadata.companyNo ? `（${metadata.companyNo}）` : ""}`,
+    );
+  } else if (metadata.companyNo) {
+    lines.push(`公司代碼：${metadata.companyNo}`);
+  }
+
+  const currentSiteName = metadata.currentSite?.siteName;
+  const currentSiteId = metadata.currentSite?.siteId || metadata.currentSiteId;
+  if (currentSiteName) {
+    lines.push(
+      `目前場域 / 案場：${currentSiteName}${currentSiteId ? `（${currentSiteId}）` : ""}`,
+    );
+  }
+
+  if (metadata.authorizedSites.length > 0) {
+    lines.push(`授權可見場域數：${metadata.authorizedSites.length}`);
+    lines.push(
+      ...metadata.authorizedSites.slice(0, 8).map((site) =>
+        `- ${site.siteName || site.siteId || "未命名場域"}${site.siteId ? `（${site.siteId}）` : ""}`
+      ),
+    );
+  }
+
+  if (metadata.meterCount !== null) {
+    lines.push(`授權電表迴路數：${NUMBER_FORMAT.format(metadata.meterCount)} 筆`);
+  }
+
+  if (lines.length === 0) {
+    return buildMissingAnswer(context, "公司 / 場域 / 案場名稱");
+  }
+
+  return {
+    answerKind: "site_metadata",
+    matchedFactPaths: ["facts.siteMetadata"],
+    text: [
+      lines.join("\n"),
+      `資料時間範圍：${sanitizeText(context.evidence?.timeRange) || "EnMS 授權 scope metadata"}`,
+    ].join("\n\n"),
   };
 }
 
@@ -994,32 +1208,55 @@ function answerCommonMetric(
       fallbackFromOpportunities: true,
     },
   ];
-  const definition = definitions.find((item) => item.matches(message));
-  if (!definition) {
+  const matchingDefinitions = definitions.filter((item) => item.matches(message));
+  if (matchingDefinitions.length === 0) {
     return null;
   }
 
-  for (const path of definition.paths) {
-    const value = getNumber(metrics, path);
-    if (value !== null) {
-      const label = definition.pathLabels?.[path] ?? definition.label;
-      const unit = definition.pathUnits?.[path] ?? definition.unit;
-      return {
-        answerKind: "metric",
-        matchedFactPaths: [`facts.metrics.${path}`],
-        text: `${label}：${formatNumber(value, unit)}。\n\n資料時間範圍：${sanitizeText(context.evidence?.timeRange) || "EnMS 未提供"}。`,
-      };
+  for (const definition of matchingDefinitions) {
+    for (const path of definition.paths) {
+      const value = getNumber(metrics, path);
+      if (value !== null) {
+        const label = definition.pathLabels?.[path] ?? definition.label;
+        const unit = definition.pathUnits?.[path] ?? definition.unit;
+        const chartUnit = unit || (/功率因數|功因/.test(label) ? "pf" : "");
+        const matchedFactPath = `facts.metrics.${path}`;
+        return {
+          answerKind: "metric",
+          matchedFactPaths: [matchedFactPath],
+          blocks: isChartRequested(message)
+            ? [
+              buildMetricChartBlock(
+                label,
+                chartUnit,
+                matchedFactPath,
+                  [
+                    {
+                      label,
+                      value,
+                      tone: /功率因數|功因/.test(label) ? "green" : "blue",
+                    },
+                  ],
+                ),
+              ]
+            : [],
+          text: `${label}：${formatNumber(value, unit)}。\n\n資料時間範圍：${sanitizeText(context.evidence?.timeRange) || "EnMS 未提供"}。`,
+        };
+      }
     }
   }
 
-  if (definition.fallbackFromOpportunities) {
+  const opportunityDefinition = matchingDefinitions.find(
+    (definition) => definition.fallbackFromOpportunities,
+  );
+  if (opportunityDefinition) {
     const opportunityAnswer = answerEfficiencyOpportunities(message, context, facts);
     if (opportunityAnswer) {
       return opportunityAnswer;
     }
   }
 
-  return buildMissingAnswer(context, definition.label);
+  return buildMissingAnswer(context, matchingDefinitions[0].label);
 }
 
 function answerEfficiencyOpportunities(
@@ -1096,8 +1333,13 @@ export function buildEnmsScopedAnswer(params: {
   const timeRangeAnswer = latestDataAnswer
     ? null
     : answerTimeRange(message, params.context);
+  const siteMetadataAnswer = answerSiteMetadata(message, params.context, facts);
 
   if (params.context.status !== "ready") {
+    if (params.context.status === "empty" && siteMetadataAnswer) {
+      return siteMetadataAnswer;
+    }
+
     if (params.context.status === "empty" && latestDataAnswer) {
       return latestDataAnswer;
     }
@@ -1134,6 +1376,7 @@ export function buildEnmsScopedAnswer(params: {
 
   const answers = [
     answerBilling(message, params.context, facts),
+    siteMetadataAnswer,
     answerDeviceLookup(message, params.context, facts),
     answerRanking(message, params.context, facts),
     answerDemand(message, params.context, facts),

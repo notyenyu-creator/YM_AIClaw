@@ -642,6 +642,108 @@ describe("Chat session planner persistence integration", () => {
 		expect(sessionJson.session?.enmsPlannerContextPack?.live_query_steps).toContain("join_site_gateway_company_scope");
 	});
 
+	it("keeps EnMS continuity for follow-up chart requests and emits verified report-json", async () => {
+		seedSession("s-enms-chart-followup");
+
+		const { POST } = await import("./route.js");
+		const { startRun, createSyntheticCompletedRun } = await import("@/lib/active-runs");
+		const { duckdbQueryExternalPgAsyncDetailed } = await import("@/lib/workspace");
+
+		vi.mocked(duckdbQueryExternalPgAsyncDetailed).mockReset();
+		mockEnmsDetailedQueryWithBootstrap(
+			vi.mocked(duckdbQueryExternalPgAsyncDetailed),
+			[
+				{
+					site_name: "大溪廠",
+					meter_name: "MVCB 總電",
+					circuit_seq: 1,
+					peak_kw: 1386.44,
+					peak_time: "2026-07-27 01:15:00+00",
+				},
+				{
+					site_name: "(未對應場域)",
+					meter_name: "Area_2_PUMP_2",
+					circuit_seq: 1,
+					peak_kw: 124,
+					peak_time: "2026-07-13 06:15:00+00",
+				},
+			],
+		);
+
+		const firstQuestion =
+			"請查詢最近 30 天場域最大需量排行，列出時間與來源電表。";
+
+		await POST(new Request("http://localhost/api/chat", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				sessionId: "s-enms-chart-followup",
+				messages: [
+					{
+						id: "m1",
+						role: "user",
+						parts: [
+							{
+								type: "text",
+								text: firstQuestion,
+							},
+						],
+					},
+				],
+			}),
+		}));
+
+		expect(createSyntheticCompletedRun).toHaveBeenCalledTimes(1);
+		const firstAnswer =
+			vi.mocked(createSyntheticCompletedRun).mock.calls[0]?.[0]?.text ?? "";
+		expect(firstAnswer).toContain("最近 30 天場域最大需量排行");
+		expect(firstAnswer).not.toContain("```report-json");
+
+		vi.mocked(startRun).mockClear();
+		vi.mocked(createSyntheticCompletedRun).mockClear();
+
+		await POST(new Request("http://localhost/api/chat", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				sessionId: "s-enms-chart-followup",
+				messages: [
+					{
+						id: "m1",
+						role: "user",
+						parts: [{ type: "text", text: firstQuestion }],
+					},
+					{
+						id: "m2",
+						role: "assistant",
+						parts: [{ type: "text", text: firstAnswer }],
+					},
+					{
+						id: "m3",
+						role: "user",
+						parts: [
+							{
+								type: "text",
+								text: "可以幫我用圖表呈現嗎？",
+							},
+						],
+					},
+				],
+			}),
+		}));
+
+		expect(startRun).not.toHaveBeenCalled();
+		expect(createSyntheticCompletedRun).toHaveBeenCalledTimes(1);
+		const followupAnswer =
+			vi.mocked(createSyntheticCompletedRun).mock.calls[0]?.[0]?.text ?? "";
+		expect(followupAnswer).toContain("```report-json");
+		expect(followupAnswer).toContain("enms-site-peak-demand-ranking");
+		expect(followupAnswer).toContain("大溪廠");
+		expect(followupAnswer).not.toContain("Y-CRM 合約");
+		expect(followupAnswer).not.toContain("請提供具體的查詢條件");
+		expect(followupAnswer).not.toContain("使用者要求用圖表呈現");
+	});
+
 	it("decorates Y-CRM read-only requests with the unified execution plan but leaves write intents out", async () => {
 		seedSession("s-ycrm-unified");
 		fileStore.set(

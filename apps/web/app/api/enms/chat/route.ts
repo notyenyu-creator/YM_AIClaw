@@ -18,6 +18,7 @@ import {
   isEnmsPageKey,
   loadEnmsKnowledgeBundle,
   loadEnmsPromptDocuments,
+  type EnmsPageKey,
   type EnmsKnowledgeBundle,
 } from "@/lib/enms-capability-registry";
 import {
@@ -30,6 +31,7 @@ import { getEnmsS2sApiKey } from "@/lib/enms-s2s-auth";
 import { buildEnmsDirectAnswer } from "@/lib/enms-direct-answer";
 import {
   buildEnmsScopedAnswer,
+  type EnmsScopedAnswerBlock,
   type EnmsScopedAnswerResult,
 } from "@/lib/enms-scoped-answer";
 import { buildEnmsVerifiedDirectQueryAnswer } from "@/lib/enms-verified-direct-query";
@@ -49,8 +51,10 @@ export const runtime = "nodejs";
 const MAX_MESSAGE_LENGTH = 2000;
 const MAX_HISTORY_ITEMS = 8;
 const MAX_HISTORY_CONTENT_LENGTH = 1000;
-const MAX_BLOCKS = 8;
+const MAX_BLOCKS = 12;
 const MAX_BLOCK_TEXT_LENGTH = 1200;
+const DEFAULT_MAX_CHART_BLOCKS = 2;
+const EXPLICIT_MAX_CHART_BLOCKS = 4;
 
 type EnmsBridgeHistoryItem = {
   role?: string;
@@ -143,6 +147,20 @@ type EnmsChatPlan = {
   selectedPageKeys?: string[];
   maxContexts?: number;
   sourceOfTruth?: string;
+  answerObligations?: EnmsChatAnswerObligation[];
+};
+
+type EnmsChatAnswerObligation = {
+  key?: string;
+  label?: string;
+  pageKey?: string;
+  capability?: string;
+  answerKind?: string;
+  requiredFactPaths?: string[];
+  chartRequired?: boolean;
+  chartType?: "bar" | "line" | "ranking" | "metric";
+  unit?: string;
+  reason?: string;
 };
 
 type EnmsBridgeRequest = {
@@ -159,12 +177,31 @@ type EnmsBridgeRequest = {
 
 type AIAssistantBlock = {
   type:
-    "paragraph" | "warning" | "citation" | "metric" | "actionLink" | "miniBars";
+    | "paragraph"
+    | "warning"
+    | "citation"
+    | "metric"
+    | "actionLink"
+    | "miniBars"
+    | "chart";
   text?: string;
   label?: string;
   value?: string;
   tone?: string;
   route?: string;
+  chartType?: "bar" | "line" | "ranking" | "metric";
+  unit?: string;
+  series?: Array<{
+    key: string;
+    label: string;
+    type: "bar" | "line" | "ranking" | "metric";
+    points: Array<{
+      label: string;
+      value: number;
+      timestamp?: string | null;
+      tone?: string;
+    }>;
+  }>;
   items?: Array<{
     name: string;
     value: string;
@@ -172,6 +209,13 @@ type AIAssistantBlock = {
     tone: string;
   }>;
 };
+
+const ALLOWED_ASSISTANT_CHART_TYPES = new Set([
+  "bar",
+  "line",
+  "ranking",
+  "metric",
+]);
 
 type EnmsAnswerSource =
   | "verified_query"
@@ -219,7 +263,8 @@ function shouldAppendStructuredAnalysis(answer: EnmsScopedAnswerResult): boolean
     answer.answerKind === "billing" ||
     answer.answerKind === "device_lookup" ||
     answer.answerKind === "missing" ||
-    answer.answerKind === "ranking"
+    answer.answerKind === "ranking" ||
+    answer.answerKind === "site_metadata"
   );
 }
 
@@ -465,6 +510,119 @@ function buildEffectiveMessage(
   ].join("\n");
 }
 
+function isScopedPresentationRequest(message: string): boolean {
+  const normalized = message.trim().toLowerCase();
+  if (
+    /什麼是|是什麼|何謂|定義|概念|what is|definition|meaning/i.test(
+      normalized,
+    )
+  ) {
+    return false;
+  }
+
+  return /圖表|圖形|畫成圖|用圖|長條圖|折線圖|排行榜|排名圖|表格|整理成表|chart|graph|visual/i
+    .test(normalized);
+}
+
+function chatPlanSelectsPage(
+  plan: EnmsChatPlan | null | undefined,
+  pageKey: string | undefined,
+): boolean {
+  if (
+    plan?.contractVersion !== ENMS_CHAT_PLAN_CONTRACT_VERSION ||
+    !isEnmsPageKey(pageKey)
+  ) {
+    return false;
+  }
+
+  return (
+    plan.primaryPageKey === pageKey ||
+    (Array.isArray(plan.selectedPageKeys) &&
+      plan.selectedPageKeys.includes(pageKey))
+  );
+}
+
+function getSafeAnswerObligations(
+  plan: EnmsChatPlan | null | undefined,
+): EnmsChatAnswerObligation[] {
+  if (
+    plan?.contractVersion !== ENMS_CHAT_PLAN_CONTRACT_VERSION ||
+    !Array.isArray(plan.answerObligations)
+  ) {
+    return [];
+  }
+
+  return plan.answerObligations
+    .filter((obligation) => obligation && typeof obligation === "object")
+    .filter((obligation) =>
+      !obligation.pageKey || isEnmsPageKey(obligation.pageKey),
+    )
+    .slice(0, EXPLICIT_MAX_CHART_BLOCKS);
+}
+
+function isExplicitMultiChartRequest(
+  message: string,
+  obligations: EnmsChatAnswerObligation[],
+): boolean {
+  return obligations.filter((obligation) => obligation.chartRequired).length > 2 ||
+    /每一個都用圖|每個都用圖|每一項.*圖|全部.*圖表|都用圖表|每個.*圖表/i.test(
+      message,
+    );
+}
+
+function getMaxChartBlocks(
+  message: string,
+  plan: EnmsChatPlan | null | undefined,
+): number {
+  const obligations = getSafeAnswerObligations(plan);
+  return isExplicitMultiChartRequest(message, obligations)
+    ? EXPLICIT_MAX_CHART_BLOCKS
+    : DEFAULT_MAX_CHART_BLOCKS;
+}
+
+function getObligationsForPage(
+  plan: EnmsChatPlan | null | undefined,
+  pageKey: string | undefined,
+): EnmsChatAnswerObligation[] {
+  if (!isEnmsPageKey(pageKey)) {
+    return [];
+  }
+
+  return getSafeAnswerObligations(plan).filter(
+    (obligation) => obligation.pageKey === pageKey,
+  );
+}
+
+function buildScopedFactsQuestion(
+  body: EnmsBridgeRequest,
+  message: string,
+  pageKey: string | undefined,
+): string {
+  const baseQuestion = hasEnmsChatSemanticRouteForPage(message, pageKey)
+    ? buildEnmsScopedBundleContextMessage(message, pageKey)
+    : message;
+
+  const obligations = getObligationsForPage(body.chatPlan, pageKey);
+  if (obligations.length > 0) {
+    const labels = obligations
+      .map((obligation) => sanitizePlainText(obligation.label, 80))
+      .filter(Boolean)
+      .join("、");
+    return `${baseQuestion}\n請針對此頁 scoped facts 回答：${labels}。${
+      obligations.some((obligation) => obligation.chartRequired)
+        ? "若 facts 足夠，請輸出對應圖表。"
+        : ""
+    }`;
+  }
+
+  if (isScopedPresentationRequest(message) && chatPlanSelectsPage(body.chatPlan, pageKey)) {
+    const definition = getEnmsPageDefinition(pageKey as EnmsPageKey);
+    return `${definition.prompt} 請用圖表呈現`;
+  }
+
+  return message;
+}
+
 function classifyBlockTone(text: string): "warning" | "paragraph" {
   return /錯誤|失敗|無法|尚未|缺少|不能|不會|未就緒|未啟用|拒絕|越權/.test(text)
     ? "warning"
@@ -491,6 +649,49 @@ function textToBlocks(text: string): AIAssistantBlock[] {
     type: classifyBlockTone(paragraph),
     text: trimText(paragraph, MAX_BLOCK_TEXT_LENGTH),
   }));
+}
+
+function scopedAnswerBlocksToAssistantBlocks(
+  blocks: EnmsScopedAnswerBlock[] | undefined,
+  maxBlocks = DEFAULT_MAX_CHART_BLOCKS,
+): AIAssistantBlock[] {
+  return (blocks ?? [])
+    .filter((block) => block.type === "chart")
+    .slice(0, Math.max(0, maxBlocks))
+    .map((block) => ({
+      type: "chart" as const,
+      label: sanitizePlainText(block.label, 120),
+      chartType: sanitizeAssistantChartType(block.chartType),
+      unit: sanitizePlainText(block.unit, 40),
+      series: block.series
+        .slice(0, 4)
+        .map((series) => ({
+          key: sanitizePlainText(series.key, 80),
+          label: sanitizePlainText(series.label, 120),
+          type: sanitizeAssistantChartType(series.type),
+          points: series.points
+            .filter((point) => Number.isFinite(point.value))
+            .slice(0, 12)
+            .map((point) => ({
+              label: sanitizePlainText(point.label, 120),
+              value: point.value,
+              timestamp: point.timestamp ?? null,
+              tone: sanitizePlainText(point.tone, 40),
+            }))
+            .filter((point) => point.label),
+        }))
+        .filter((series) => series.key && series.points.length > 0),
+    }))
+    .filter((block) => block.series && block.series.length > 0);
+}
+
+function sanitizeAssistantChartType(
+  chartType: unknown,
+): "bar" | "line" | "ranking" | "metric" {
+  return typeof chartType === "string" &&
+    ALLOWED_ASSISTANT_CHART_TYPES.has(chartType)
+    ? (chartType as "bar" | "line" | "ranking" | "metric")
+    : "bar";
 }
 
 function buildCitationBlock(
@@ -540,12 +741,18 @@ function buildAnswer(params: {
     answerKind: EnmsScopedAnswerResult["answerKind"];
     matchedFactPaths: string[];
   }>;
+  extraBlocks?: AIAssistantBlock[];
 }): Response {
   const safeAnswerText = sanitizePlainText(
     params.text,
     MAX_BLOCK_TEXT_LENGTH * MAX_BLOCKS,
   );
-  const blocks = textToBlocks(safeAnswerText);
+  const extraBlocks = (params.extraBlocks ?? []).slice(0, MAX_BLOCKS - 1);
+  const textBlockLimit = Math.max(1, MAX_BLOCKS - extraBlocks.length);
+  const blocks = [
+    ...textToBlocks(safeAnswerText).slice(0, textBlockLimit),
+    ...extraBlocks,
+  ];
   const answerSource = params.answerSource ?? "runtime";
   const bundleContexts = params.scopedFactsBundle?.contexts ?? [];
   const evidenceContexts = bundleContexts.length > 0
@@ -754,7 +961,8 @@ function buildBundleAnswerText(
       const pageName = isEnmsPageKey(context.pageKey)
         ? getEnmsPageDefinition(context.pageKey).name
         : "EnMS 資料";
-      return `【${pageName}】\n${scopedAnswer.text}`;
+      const compactText = scopedAnswer.text.replace(/\n{2,}/g, "\n");
+      return `【${pageName}】\n${compactText}`;
     }),
   ].join("\n\n");
 }
@@ -780,11 +988,20 @@ function selectBundleAnswerCandidates(
   const latestDataQuestion = isEnmsLatestDataQuestion(message);
 
   for (const context of contexts) {
-    if (!hasEnmsChatSemanticRouteForPage(message, context.pageKey)) {
+    const canUseContext =
+      hasEnmsChatSemanticRouteForPage(message, context.pageKey) ||
+      (isScopedPresentationRequest(message) &&
+        chatPlanSelectsPage(body.chatPlan, context.pageKey));
+    if (!canUseContext) {
       continue;
     }
+    const scopedQuestion = buildScopedFactsQuestion(
+      body,
+      message,
+      context.pageKey,
+    );
     const scopedAnswer = buildEnmsScopedAnswer({
-      message: buildEnmsScopedBundleContextMessage(message, context.pageKey),
+      message: scopedQuestion,
       context,
       scope: body.scope ?? undefined,
     });
@@ -846,7 +1063,12 @@ async function buildScopedFactsBundleAnswer(
   if (
     candidates.length === 0 &&
     contexts.every(
-      (context) => !hasEnmsChatSemanticRouteForPage(message, context.pageKey),
+      (context) =>
+        !hasEnmsChatSemanticRouteForPage(message, context.pageKey) &&
+        !(
+          isScopedPresentationRequest(message) &&
+          chatPlanSelectsPage(body.chatPlan, context.pageKey)
+        ),
     )
   ) {
     return buildGeneralNoMatchAnswer(body, preflight, message, signal);
@@ -881,7 +1103,7 @@ async function buildScopedFactsBundleAnswer(
   const scopedAnswer =
     candidates[0]?.scopedAnswer ??
     buildEnmsScopedAnswer({
-      message,
+      message: buildScopedFactsQuestion(body, message, primaryContext.pageKey),
       context: primaryContext,
       scope: body.scope ?? undefined,
     });
@@ -967,6 +1189,14 @@ async function buildScopedFactsBundleAnswer(
     }
   }
 
+  const maxChartBlocks = getMaxChartBlocks(message, body.chatPlan);
+  const scopedChartBlocks = (candidates.length > 0
+    ? candidates.flatMap((candidate) =>
+      scopedAnswerBlocksToAssistantBlocks(candidate.scopedAnswer.blocks, maxChartBlocks),
+    )
+    : scopedAnswerBlocksToAssistantBlocks(scopedAnswer.blocks, maxChartBlocks))
+    .slice(0, maxChartBlocks);
+
   return buildAnswer({
     conversationId: body.conversationId,
     preflight,
@@ -987,6 +1217,7 @@ async function buildScopedFactsBundleAnswer(
     structuredModelApplied,
     intentOverride: getChatPlanIntentOverride(body.chatPlan),
     text,
+    extraBlocks: scopedChartBlocks,
   });
 }
 
@@ -1029,7 +1260,7 @@ async function buildScopedFactsAnswer(
     });
   }
   const scopedAnswer = buildEnmsScopedAnswer({
-    message,
+    message: buildScopedFactsQuestion(body, message, scopedContext.pageKey),
     context: scopedContext,
     scope: body.scope ?? undefined,
   });
@@ -1111,6 +1342,10 @@ async function buildScopedFactsAnswer(
     structuredModelApplied,
     intentOverride: getChatPlanIntentOverride(body.chatPlan),
     text,
+    extraBlocks: scopedAnswerBlocksToAssistantBlocks(
+      scopedAnswer.blocks,
+      getMaxChartBlocks(message, body.chatPlan),
+    ),
   });
 }
 
@@ -1232,7 +1467,12 @@ export async function POST(req: Request) {
   }
 
   if (trustedScopedContext) {
-    return buildScopedFactsAnswer(body, preflight, message, req.signal);
+    return buildScopedFactsAnswer(
+      body,
+      preflight,
+      message,
+      req.signal,
+    );
   }
 
   const directQueryPolicyNotice = buildDirectQueryPolicyNotice(body.guardrails);

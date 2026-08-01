@@ -71,6 +71,7 @@ describe("EnMS capability registry", () => {
       "demand_risk",
       "anomaly_root_cause",
       "device_lookup",
+      "site_metadata",
       "meter_ranking",
       "energy_usage_query",
       "site_benchmarking",
@@ -97,6 +98,10 @@ describe("EnMS capability registry", () => {
       "主電表是哪個？",
     )).toBe(true);
     expect(matchesEnmsChatSemanticRoute(
+      "site_metadata",
+      "目前案場名稱是什麼？",
+    )).toBe(true);
+    expect(matchesEnmsChatSemanticRoute(
       "meter_ranking",
       "迴路1 是對應哪個設備？",
     )).toBe(false);
@@ -112,6 +117,9 @@ describe("EnMS capability registry", () => {
       "今天天氣如何？",
       "請用一句話解釋什麼是資料治理",
       "最新天氣如何？",
+      "公司是什麼？",
+      "客戶是什麼？",
+      "site 是什麼意思？",
     ]) {
       const plan = buildEnmsChatQueryPlan(message);
 
@@ -194,6 +202,36 @@ describe("EnMS capability registry", () => {
     expect(mainMeterLookupPlan.selectedCapabilities).toContain("device_lookup");
     expect(mainMeterLookupPlan.selectedCapabilities).not.toContain("meter_ranking");
 
+    const siteMetadataPlan = buildEnmsChatQueryPlan("你可以幫我看看目前案場名稱是什麼嗎？");
+    expect(siteMetadataPlan).toMatchObject({
+      strategy: "single_scoped_facts",
+      allowDbFacts: true,
+      primaryPageKey: "nlq",
+      selectedPageKeys: ["nlq"],
+      needClarification: false,
+    });
+    expect(siteMetadataPlan.matchedRoutes[0]).toMatchObject({
+      key: "site_metadata",
+      pageKey: "nlq",
+    });
+    expect(siteMetadataPlan.selectedCapabilities).toContain("site_metadata");
+    expect(siteMetadataPlan.selectedCapabilities).not.toContain("site_benchmarking");
+
+    for (const message of ["current site name", "company name", "目前公司名稱是什麼？"]) {
+      const metadataPlan = buildEnmsChatQueryPlan(message);
+      expect(metadataPlan).toMatchObject({
+        strategy: "single_scoped_facts",
+        allowDbFacts: true,
+        primaryPageKey: "nlq",
+        selectedPageKeys: ["nlq"],
+      });
+      expect(metadataPlan.selectedCapabilities).toContain("site_metadata");
+      expect(metadataPlan.selectedCapabilities).not.toContain("site_benchmarking");
+      expect(matchesEnmsChatSemanticRoute("site_benchmarking", message)).toBe(
+        false,
+      );
+    }
+
     const meterRankingPlan = buildEnmsChatQueryPlan("哪個迴路最費電？");
     expect(meterRankingPlan).toMatchObject({
       strategy: "single_scoped_facts",
@@ -209,7 +247,7 @@ describe("EnMS capability registry", () => {
     expect(meterRankingPlan.selectedCapabilities).not.toContain("device_lookup");
     expect(meterRankingPlan.needClarification).toBe(false);
 
-    for (const message of ["用電場域比較一下", "總用電各場域排名"]) {
+    for (const message of ["用電場域比較一下", "總用電各場域排名", "各案場用電比較"]) {
       const siteBenchmarkingPlan = buildEnmsChatQueryPlan(message);
       expect(siteBenchmarkingPlan).toMatchObject({
         allowDbFacts: true,
@@ -245,6 +283,53 @@ describe("EnMS capability registry", () => {
       primaryPageKey: "nlq",
       selectedPageKeys: ["nlq", "anomaly", "alert", "bench"],
     });
+  });
+
+  it("creates per-metric obligations for composite benchmarking chart prompts", () => {
+    const plan = buildEnmsChatQueryPlan(
+      "請查詢最近 30 天的總用電、最大需量、平均功率因數，並做多場域 benchmarking 排名與差異說明。請幫我每一個都用圖表呈現",
+    );
+
+    expect(plan.strategy).toBe("multi_scoped_facts_bundle");
+    expect(plan.allowDbFacts).toBe(true);
+    expect(plan.allowGeneralAI).toBe(false);
+    expect(plan.selectedPageKeys).toEqual(
+      expect.arrayContaining(["bench", "demand", "anomaly", "nlq"]),
+    );
+    expect(plan.selectedCapabilities).toEqual(
+      expect.arrayContaining([
+        "site_benchmarking",
+        "demand_risk",
+        "anomaly_root_cause",
+      ]),
+    );
+    expect(plan.answerObligations.map((item) => item.key)).toEqual(
+      expect.arrayContaining([
+        "total_energy_30d",
+        "peak_demand_30d",
+        "avg_power_factor_30d",
+        "site_benchmarking",
+      ]),
+    );
+    expect(plan.answerObligations).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          key: "total_energy_30d",
+          chartRequired: true,
+          unit: "kWh",
+        }),
+        expect.objectContaining({
+          key: "peak_demand_30d",
+          chartRequired: true,
+          unit: "kW",
+        }),
+        expect.objectContaining({
+          key: "avg_power_factor_30d",
+          chartRequired: true,
+          unit: "pf",
+        }),
+      ]),
+    );
   });
 
   it("routes EnMS raw-data prompt injection attempts through scoped facts", () => {
