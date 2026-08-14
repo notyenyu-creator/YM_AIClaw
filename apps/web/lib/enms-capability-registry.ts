@@ -5,13 +5,17 @@ import { dirname, join, normalize, resolve, sep } from "node:path";
 
 import type { EnmsIntent } from "./enms-context-builder";
 import type { EnmsContextPack } from "./enms-context-pack";
+import {
+  applyEnmsSemanticGraphToPlan,
+  type EnmsSemanticGraphPlan,
+} from "./enms-semantic-graph";
 
 export const ENMS_INTEGRATION_CONTRACT_VERSION =
   "enms.ai.page-insight.v1";
 export const ENMS_CHAT_CONTRACT_VERSION = "enms.ai.chat.v1";
 export const ENMS_CHAT_PLAN_CONTRACT_VERSION = "enms.ai.chat-plan.v1";
 export const ENMS_FACTS_SCHEMA_VERSION = "enms.ai.facts.v1";
-export const ENMS_CAPABILITY_REGISTRY_VERSION = "2026-08-01.1";
+export const ENMS_CAPABILITY_REGISTRY_VERSION = "2026-08-13.1";
 
 export type EnmsCapabilityKey =
   | "enms_runtime"
@@ -58,6 +62,12 @@ export type EnmsPageDefinition = {
 export type EnmsChatSemanticRouteKey =
   | "latest_data"
   | "demand_risk"
+  | "today_demand_point"
+  | "daily_peak_demand_point"
+  | "same_slot_demand"
+  | "monthly_peak_demand_point"
+  | "daily_consumption_point"
+  | "forecast_readiness"
   | "anomaly_root_cause"
   | "device_lookup"
   | "site_metadata"
@@ -66,6 +76,7 @@ export type EnmsChatSemanticRouteKey =
   | "site_benchmarking"
   | "alert_governance"
   | "efficiency_advice"
+  | "efficiency_power_factor"
   | "billing"
   | "raw_trace";
 
@@ -85,10 +96,19 @@ export type EnmsChatAnswerObligationKey =
   | "meter_ranking"
   | "total_energy_30d"
   | "peak_demand_30d"
+  | "today_demand_point"
+  | "daily_peak_demand_point"
+  | "same_slot_demand"
+  | "monthly_peak_demand_point"
+  | "daily_consumption_point"
+  | "forecast_readiness"
   | "avg_power_factor_30d"
+  | "anomaly_summary"
   | "site_benchmarking"
   | "billing"
   | "carbon_emission"
+  | "efficiency_summary"
+  | "efficiency_power_factor"
   | "efficiency_advice"
   | "alert_governance"
   | "anomaly_root_cause"
@@ -130,6 +150,7 @@ export type EnmsChatQueryPlan = {
   }>;
   maxContexts: number;
   answerObligations: EnmsChatAnswerObligation[];
+  semanticGraph?: EnmsSemanticGraphPlan;
   sourceOfTruth: string;
   reason: string;
 };
@@ -275,6 +296,113 @@ const CHAT_SEMANTIC_ROUTES: readonly EnmsChatSemanticRoute[] = [
     queryHint: "目前需量 契約容量 超約風險 趨勢推估尖峰 降載建議",
   },
   {
+    key: "today_demand_point",
+    pageKey: "demand",
+    intent: "demand_forecast",
+    synonyms: [
+      "最新資料日24小時",
+      "最新資料日 24 小時",
+      "24小時分頁",
+      "24 小時分頁",
+      "日內需量",
+      "today24h",
+      "today demand",
+    ],
+    queryHint:
+      "最新資料日 24 小時 actualDemand 指定時間 15 分鐘需量 kW",
+    preciseAnswerOnly: true,
+  },
+  {
+    key: "daily_peak_demand_point",
+    pageKey: "demand",
+    intent: "demand_forecast",
+    synonyms: [
+      "指定日期最高需量",
+      "指定日期最大需量",
+      "某日最高需量",
+      "某日最大需量",
+      "日最高需量",
+      "日最大需量",
+      "daily peak demand",
+      "date peak demand",
+    ],
+    queryHint:
+      "最新資料日 24 小時 actualDemand 指定日期 全日 15 分鐘需量取最大 kW",
+    preciseAnswerOnly: true,
+  },
+  {
+    key: "same_slot_demand",
+    pageKey: "demand",
+    intent: "demand_forecast",
+    synonyms: [
+      "同時段",
+      "同時段最高",
+      "同時段需量",
+      "7日同時段",
+      "七日同時段",
+      "同日最高需量參考",
+      "same slot",
+      "same-slot",
+    ],
+    queryHint:
+      "7日同時段需量 sameSlotDemand kW dailyPeakReference 指定日期 同時段比較",
+    preciseAnswerOnly: true,
+  },
+  {
+    key: "monthly_peak_demand_point",
+    pageKey: "demand",
+    intent: "demand_forecast",
+    synonyms: [
+      "本月契約",
+      "本月最高需量",
+      "本月最大需量",
+      "這個月最高需量",
+      "當月最高需量",
+      "monthly peak demand",
+      "dailyPeakDemand",
+    ],
+    queryHint:
+      "本月契約 dailyPeakDemand 本月每日最高需量 哪一天 多少 kW",
+    preciseAnswerOnly: true,
+  },
+  {
+    key: "daily_consumption_point",
+    pageKey: "demand",
+    intent: "demand_forecast",
+    synonyms: [
+      "30日總覽",
+      "30 日總覽",
+      "三十日總覽",
+      "每日用電",
+      "日用電",
+      "最高用電日",
+      "用電最高日",
+      "指定日期用電量",
+      "dailyConsumption",
+      "daily consumption",
+    ],
+    queryHint:
+      "30日總覽 dailyConsumption 指定日期 或最高用電日 每日用電量 kWh",
+    preciseAnswerOnly: true,
+  },
+  {
+    key: "forecast_readiness",
+    pageKey: "demand",
+    intent: "demand_forecast",
+    synonyms: [
+      "forecast準備度",
+      "forecast 準備度",
+      "預測準備度",
+      "完整度",
+      "外部變因",
+      "歷史長度",
+      "契約容量分數",
+    ],
+    queryHint:
+      "Forecast 準備度 forecastReadiness 歷史長度 完整度 契約容量 外部變因 分數",
+    preciseAnswerOnly: true,
+  },
+  {
     key: "anomaly_root_cause",
     pageKey: "anomaly",
     intent: "anomaly_detection",
@@ -284,6 +412,8 @@ const CHAT_SEMANTIC_ROUTES: readonly EnmsChatSemanticRoute[] = [
       "故障",
       "異常偵測",
       "根因分析",
+      "偏移",
+      "偏移點",
       "三相",
       "功率因數",
       "功因",
@@ -349,6 +479,7 @@ const CHAT_SEMANTIC_ROUTES: readonly EnmsChatSemanticRoute[] = [
       "最耗電",
       "耗電最高",
       "用電最高",
+      "最高用電",
       "耗能最高",
       "迴路排名",
       "迴路排行",
@@ -453,6 +584,25 @@ const CHAT_SEMANTIC_ROUTES: readonly EnmsChatSemanticRoute[] = [
       "quickwin",
     ],
     queryHint: "能效 節能 節電 省電 節省 quick win 基載 設備效率 改善建議",
+  },
+  {
+    key: "efficiency_power_factor",
+    pageKey: "eff",
+    intent: "efficiency_analysis",
+    synonyms: [
+      "能效功率因數",
+      "能效功因",
+      "節能功率因數",
+      "節能功因",
+      "能效分頁功率因數",
+      "能效分頁功因",
+      "節能分頁功率因數",
+      "節能分頁功因",
+      "efficiency power factor",
+    ],
+    queryHint:
+      "能效節能 averagePowerFactor 功率因數 standbyConsumptionRatio",
+    preciseAnswerOnly: true,
   },
   {
     key: "billing",
@@ -749,6 +899,11 @@ export function matchesEnmsChatSemanticRoute(
   routeKey: EnmsChatSemanticRouteKey,
   message: string,
 ): boolean {
+  const normalizedMessage = normalizeText(message);
+  if (isGeneralEnmsConceptQuestion(normalizedMessage)) {
+    return false;
+  }
+
   if (routeKey === "latest_data") {
     return isEnmsLatestDataQuestion(message);
   }
@@ -762,12 +917,39 @@ export function matchesEnmsChatSemanticRoute(
     if (isEnmsDeviceLookupQuestion(message)) {
       return false;
     }
-    if (isEnmsSiteBenchmarkingQuestion(normalizeText(message))) {
+    if (isEnmsSiteBenchmarkingQuestion(normalizedMessage)) {
       return false;
     }
   }
   if (routeKey === "site_benchmarking") {
-    return isEnmsSiteBenchmarkingQuestion(normalizeText(message));
+    return isEnmsSiteBenchmarkingQuestion(normalizedMessage);
+  }
+  if (routeKey === "same_slot_demand") {
+    return isEnmsSameSlotDemandQuestion(normalizedMessage);
+  }
+  if (routeKey === "today_demand_point") {
+    return isEnmsTodayDemandPointQuestion(normalizedMessage);
+  }
+  if (routeKey === "daily_peak_demand_point") {
+    return isEnmsDailyPeakDemandPointQuestion(normalizedMessage);
+  }
+  if (routeKey === "monthly_peak_demand_point") {
+    return isEnmsMonthlyPeakDemandPointQuestion(normalizedMessage);
+  }
+  if (routeKey === "daily_consumption_point") {
+    return isEnmsDailyConsumptionPointQuestion(normalizedMessage);
+  }
+  if (routeKey === "forecast_readiness") {
+    return isEnmsForecastReadinessQuestion(normalizedMessage);
+  }
+  if (routeKey === "efficiency_power_factor") {
+    return isEnmsEfficiencyPowerFactorQuestion(normalizedMessage);
+  }
+  if (
+    routeKey === "anomaly_root_cause" &&
+    isEnmsEfficiencyPowerFactorQuestion(normalizedMessage)
+  ) {
+    return false;
   }
 
   const route = CHAT_SEMANTIC_ROUTES.find((candidate) =>
@@ -777,7 +959,6 @@ export function matchesEnmsChatSemanticRoute(
     return false;
   }
 
-  const normalizedMessage = normalizeText(message);
   const matched = route.synonyms.some((synonym) =>
     normalizedMessage.includes(synonym.toLowerCase())
   );
@@ -792,6 +973,25 @@ export function matchesEnmsChatSemanticRoute(
   return true;
 }
 
+function isGeneralEnmsConceptQuestion(normalizedMessage: string): boolean {
+  const conceptTerms =
+    /需量|功率因數|功因|契約容量|mqtt|mosquitto|mac(?:\s*address)?|address|電表|電錶|kwh|kw|用電|耗電|能耗|節能|省電|能源效率|能效|告警|警報|電費|費率|台電帳單|帳單|billing|tariff|alert|energy usage|energy saving|efficiency|timescale|duckdb|semantic graph|graphrag/i;
+  const definitionIntent =
+    /什麼是|何謂|定義|概念|是什麼意思|代表什麼|請解釋|解釋一下|what is|define|definition of|meaning of/i;
+  const bareTermDefinition =
+    /^(?:請問|請解釋|解釋一下|幫我說明)?\s*(?:需量|功率因數|功因|契約容量|mqtt|mosquitto|mac(?:\s*address)?|address|電表|電錶|kwh|kw|用電|耗電|能耗|節能|省電|能源效率|能效|告警|警報|電費|費率|台電帳單|帳單|billing|tariff|alert|timescale|duckdb)\s*(?:是什麼|是甚麼|是啥|what is)\s*[?？]?\s*$/i;
+
+  if (
+    (definitionIntent.test(normalizedMessage) &&
+      conceptTerms.test(normalizedMessage)) ||
+    bareTermDefinition.test(normalizedMessage)
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
 export function isEnmsDeviceLookupQuestion(message: string): boolean {
   const normalizedMessage = normalizeText(message);
   const hasIdentityAnchor =
@@ -803,7 +1003,7 @@ export function isEnmsDeviceLookupQuestion(message: string): boolean {
       normalizedMessage,
     );
   const isRankingIntent =
-    /最費電|最耗電|耗電最高|用電最高|耗能最高|排行|排名/.test(
+    /最費電|最耗電|耗電最高|用電最高|最高用電|耗能最高|排行|排名/.test(
       normalizedMessage,
     );
 
@@ -861,6 +1061,135 @@ export function isEnmsLatestDataQuestion(message: string): boolean {
   );
 }
 
+function isEnmsSameSlotDemandQuestion(normalizedMessage: string): boolean {
+  if (isEnmsSameSlotUsageRankingQuestion(normalizedMessage)) {
+    return false;
+  }
+
+  return /同時段|7\s*日同時段|七日同時段|same[-\s]?slot/i.test(
+    normalizedMessage,
+  ) && /需量|最大|最高|尖峰|kw|demand|peak/i.test(normalizedMessage);
+}
+
+function isEnmsTodayDemandPointQuestion(normalizedMessage: string): boolean {
+  if (
+    isEnmsSameSlotDemandQuestion(normalizedMessage) ||
+    isEnmsDailyPeakDemandPointQuestion(normalizedMessage) ||
+    isEnmsMonthlyPeakDemandPointQuestion(normalizedMessage) ||
+    isEnmsDailyConsumptionPointQuestion(normalizedMessage)
+  ) {
+    return false;
+  }
+
+  const hasTodayViewAnchor =
+    /最新資料日\s*24\s*小時|24\s*小時分頁|日內需量|today24h|today demand/i.test(
+      normalizedMessage,
+    );
+  const hasTimePoint =
+    /\d{1,2}\s*[:：]\s*\d{2}/.test(normalizedMessage) ||
+    /\d{1,2}\s*(?:月|\/|-)\s*\d{1,2}\s*(?:日|號)?/.test(normalizedMessage);
+  const hasDemandIntent = /需量|(?:^|[^a-z])kw(?:$|[^a-z])|demand|實際需量|最新需量/i.test(
+    normalizedMessage,
+  );
+  return hasDemandIntent && (hasTodayViewAnchor || hasTimePoint);
+}
+
+function isEnmsDailyPeakDemandPointQuestion(normalizedMessage: string): boolean {
+  if (
+    isEnmsSameSlotDemandQuestion(normalizedMessage) ||
+    isEnmsMonthlyPeakDemandPointQuestion(normalizedMessage) ||
+    isEnmsDailyConsumptionPointQuestion(normalizedMessage)
+  ) {
+    return false;
+  }
+
+  const hasRequestedDate =
+    /\d{1,2}\s*(?:月|\/|-)\s*\d{1,2}\s*(?:日|號)?/.test(
+      normalizedMessage,
+    );
+  const hasPeakDemandIntent =
+    /最高需量|最大需量|尖峰需量|需量.{0,8}(最高|最大|尖峰)|peak demand|demand peak/i.test(
+      normalizedMessage,
+    );
+  const hasEnergyIntent =
+    /用電量|總用電|耗電|能耗|kwh|consumption/i.test(normalizedMessage);
+  return hasRequestedDate && hasPeakDemandIntent && !hasEnergyIntent;
+}
+
+function isEnmsMonthlyPeakDemandPointQuestion(normalizedMessage: string): boolean {
+  const hasMonthlyViewAnchor =
+    /本月契約|本月|這個月|當月|monthly/i.test(normalizedMessage);
+  const hasPeakDemandIntent =
+    /最高需量|最大需量|需量.{0,8}(最高|最大)|peak demand|monthly peak/i.test(
+      normalizedMessage,
+    );
+  const asksPoint =
+    /哪一天|哪天|幾月幾日|幾號|日期|時間|多少|幾\s*kw|幾kw/i.test(
+      normalizedMessage,
+    );
+  return hasMonthlyViewAnchor && hasPeakDemandIntent && asksPoint;
+}
+
+function isEnmsDailyConsumptionPointQuestion(normalizedMessage: string): boolean {
+  if (isEnmsMeterOrDeviceRankingQuestion(normalizedMessage)) {
+    return false;
+  }
+
+  const hasSummaryViewAnchor =
+    /30\s*日總覽|三十日總覽|每日用電|日用電|daily consumption/i.test(
+      normalizedMessage,
+    );
+  const hasRequestedDate =
+    /\d{1,2}\s*(?:月|\/|-)\s*\d{1,2}\s*(?:日|號)?/.test(
+      normalizedMessage,
+    );
+  const hasEnergyIntent =
+    /用電量|總用電|耗電|能耗|kwh|consumption/i.test(normalizedMessage);
+  return hasEnergyIntent &&
+    (hasSummaryViewAnchor ||
+      hasRequestedDate ||
+      isEnmsDailyConsumptionPeakQuestion(normalizedMessage));
+}
+
+function isEnmsDailyConsumptionPeakQuestion(normalizedMessage: string): boolean {
+  if (isEnmsMeterOrDeviceRankingQuestion(normalizedMessage)) {
+    return false;
+  }
+
+  const asksDate =
+    /哪一天|哪天|哪日|哪個日期|幾月幾日|幾號|日期|day|date/i.test(
+      normalizedMessage,
+    );
+  const hasPeakIntent =
+    /最高|最大|最多|peak|highest|max/i.test(normalizedMessage);
+  const hasEnergyIntent =
+    /用電量|總用電|耗電|能耗|kwh|energy|consumption/i.test(
+      normalizedMessage,
+    );
+  return asksDate && hasPeakIntent && hasEnergyIntent;
+}
+
+function isEnmsForecastReadinessQuestion(normalizedMessage: string): boolean {
+  return /forecast\s*準備度|預測準備度|完整度|外部變因|歷史長度|契約容量分數/i
+    .test(normalizedMessage) &&
+    /forecast|預測|準備度|分數|score/i.test(normalizedMessage);
+}
+
+function isEnmsEfficiencyPowerFactorQuestion(normalizedMessage: string): boolean {
+  return /平均功率因數|功率因數|功因|power factor|pf/i.test(
+    normalizedMessage,
+  ) &&
+    /(?:能效|節能|節電|省電|節能挖掘|efficiency|saving).{0,8}(?:分頁|頁面|tab)|(?:分頁|頁面|tab).{0,8}(?:能效|節能|節電|省電|節能挖掘|efficiency|saving)/i.test(
+      normalizedMessage,
+    );
+}
+
+function isEnmsSameSlotUsageRankingQuestion(normalizedMessage: string): boolean {
+  return /同時段|same[-\s]?slot/i.test(normalizedMessage) &&
+    /迴路|回路|電表|電錶|設備|circuit|meter/i.test(normalizedMessage) &&
+    /用電|耗電|費電|能耗|kwh|排名|排行|哪個|最高/i.test(normalizedMessage);
+}
+
 function isEnmsChartRequested(message: string): boolean {
   return /圖表|圖形|畫成圖|用圖|長條圖|折線圖|趨勢圖|排行榜|排名圖|chart|graph|visual/i
     .test(message);
@@ -869,6 +1198,18 @@ function isEnmsChartRequested(message: string): boolean {
 function hasMeterRankingSubject(message: string): boolean {
   return /迴路|回路|電表|電錶|MAC|Address|位址|地址|CircuitSeq|circuit|meter/i
     .test(message);
+}
+
+function isEnmsMeterOrDeviceRankingQuestion(normalizedMessage: string): boolean {
+  const hasMeterSubject =
+    /迴路|回路|電表|電錶|設備|電表別名|設備別名|mac|address|位址|地址|circuit|meter|device/i
+      .test(normalizedMessage);
+  const hasRankingIntent =
+    /最費電|最耗電|耗電最高|用電最高|最高用電|耗能最高|排名|排行|top|ranking/i
+      .test(normalizedMessage);
+  const hasEnergyMetric =
+    /用電|耗電|費電|能耗|kwh|energy|consumption/i.test(normalizedMessage);
+  return hasMeterSubject && hasRankingIntent && hasEnergyMetric;
 }
 
 function buildEnmsChatAnswerObligations(
@@ -936,8 +1277,130 @@ function buildEnmsChatAnswerObligations(
     });
   }
 
+  if (routeKeys.has("same_slot_demand")) {
+    add({
+      key: "same_slot_demand",
+      label: "指定日期同時段需量",
+      pageKey: "demand",
+      capability: "same_slot_demand",
+      answerKind: "demand",
+      requiredFactPaths: [
+        "facts.activeDemandView.key",
+        "facts.activeDemandView.formula",
+        "chartSeries.sameSlotDemand",
+        "chartSeries.dailyPeakReference",
+      ],
+      chartRequired,
+      chartType: "line",
+      unit: "kW",
+      reason: "使用者詢問指定日期或 7 日同時段需量，必須以 kW same-slot demand facts 回答，不可改用 kWh 排名。",
+    });
+  }
+
+  if (routeKeys.has("daily_peak_demand_point")) {
+    add({
+      key: "daily_peak_demand_point",
+      label: "指定日期最高需量",
+      pageKey: "demand",
+      capability: "daily_peak_demand_point",
+      answerKind: "demand",
+      requiredFactPaths: [
+        "facts.activeDemandView.key",
+        "facts.activeDemandView.formula",
+        "chartSeries.actualDemand",
+        "chartSeries.contractCapacity",
+      ],
+      chartRequired,
+      chartType: "line",
+      unit: "kW",
+      reason: "使用者詢問指定日期最高需量，必須在該日期 actualDemand kW 點位中取最大，不可回單點或 kWh 排名。",
+    });
+  }
+
+  if (routeKeys.has("today_demand_point")) {
+    add({
+      key: "today_demand_point",
+      label: "最新資料日 24 小時需量",
+      pageKey: "demand",
+      capability: "today_demand_point",
+      answerKind: "demand",
+      requiredFactPaths: [
+        "facts.activeDemandView.key",
+        "facts.activeDemandView.formula",
+        "chartSeries.actualDemand",
+        "chartSeries.contractCapacity",
+      ],
+      chartRequired,
+      chartType: "line",
+      unit: "kW",
+      reason: "使用者詢問最新資料日 24 小時分頁的指定時間需量，必須使用 actualDemand kW facts，不可改用最新資料時間或 30 日摘要。",
+    });
+  }
+
+  if (routeKeys.has("monthly_peak_demand_point")) {
+    add({
+      key: "monthly_peak_demand_point",
+      label: "本月最高需量",
+      pageKey: "demand",
+      capability: "monthly_peak_demand_point",
+      answerKind: "demand",
+      requiredFactPaths: [
+        "facts.activeDemandView.key",
+        "facts.activeDemandView.formula",
+        "chartSeries.dailyPeakDemand",
+        "chartSeries.contractCapacity",
+      ],
+      chartRequired,
+      chartType: "line",
+      unit: "kW",
+      reason: "使用者詢問本月契約分頁的最高需量日期與數值，必須使用 dailyPeakDemand kW facts，不可用趨勢推估或 kWh 排名取代。",
+    });
+  }
+
+  if (routeKeys.has("daily_consumption_point")) {
+    const asksPeakDay = isEnmsDailyConsumptionPeakQuestion(normalizedMessage);
+    add({
+      key: "daily_consumption_point",
+      label: asksPeakDay ? "最高用電日" : "指定日期每日用電量",
+      pageKey: "demand",
+      capability: "daily_consumption_point",
+      answerKind: "metric",
+      requiredFactPaths: [
+        "facts.activeDemandView.key",
+        "facts.activeDemandView.formula",
+        "chartSeries.dailyConsumption",
+      ],
+      chartRequired,
+      chartType: "line",
+      unit: "kWh",
+      reason: asksPeakDay
+        ? "使用者詢問哪一天用電量最高，必須使用 dailyConsumption kWh facts 取最高日，不可改用迴路排行。"
+        : "使用者詢問 30 日總覽中指定日期用電量，必須使用 dailyConsumption kWh facts，不可改用迴路排行。",
+    });
+  }
+
+  if (routeKeys.has("forecast_readiness")) {
+    add({
+      key: "forecast_readiness",
+      label: "Forecast 準備度",
+      pageKey: "demand",
+      capability: "forecast_readiness",
+      answerKind: "metric",
+      requiredFactPaths: [
+        "facts.activeDemandView.key",
+        "facts.activeDemandView.formula",
+        "chartSeries.forecastReadiness",
+      ],
+      chartRequired,
+      chartType: "metric",
+      unit: "score",
+      reason: "使用者詢問 Forecast 準備度分頁，必須回覆歷史長度、完整度、契約容量、外部變因等準備度分數。",
+    });
+  }
+
   if (
     routeKeys.has("meter_ranking") &&
+    !routeKeys.has("daily_consumption_point") &&
     (hasMeterRankingSubject(normalizedMessage) ||
       !routeKeys.has("site_benchmarking"))
   ) {
@@ -960,8 +1423,9 @@ function buildEnmsChatAnswerObligations(
   }
 
   if (
-    routeKeys.has("energy_usage_query") ||
-    /總用電|總耗電|用電量|用電|耗電|能耗|kwh/i.test(normalizedMessage)
+    !routeKeys.has("daily_consumption_point") &&
+    (routeKeys.has("energy_usage_query") ||
+      /總用電|總耗電|用電量|耗電|能耗|kwh/i.test(normalizedMessage))
   ) {
     add({
       key: "total_energy_30d",
@@ -983,7 +1447,14 @@ function buildEnmsChatAnswerObligations(
     });
   }
 
-  if (routeKeys.has("demand_risk") || /最大需量|需量|尖峰|kw|demand/i.test(normalizedMessage)) {
+  if (
+    routeKeys.has("demand_risk") ||
+    (!routeKeys.has("same_slot_demand") &&
+      !routeKeys.has("today_demand_point") &&
+      !routeKeys.has("daily_consumption_point") &&
+      !routeKeys.has("monthly_peak_demand_point") &&
+      /最大需量|需量|尖峰|(?:^|[^a-z])kw(?:$|[^a-z])|demand/i.test(normalizedMessage))
+  ) {
     add({
       key: "peak_demand_30d",
       label: "最近 30 天最大需量",
@@ -1002,7 +1473,53 @@ function buildEnmsChatAnswerObligations(
     });
   }
 
-  if (routeKeys.has("anomaly_root_cause") || /平均功率因數|功率因數|功因|power factor|pf/i.test(normalizedMessage)) {
+  if (
+    routeKeys.has("anomaly_root_cause") &&
+    /異常|根因|偵測|偏離|偏移|偏移點|類異常|最大需量偏離|最大偏移/i.test(normalizedMessage)
+  ) {
+    add({
+      key: "anomaly_summary",
+      label: "異常根因摘要",
+      pageKey: "anomaly",
+      capability: "anomaly_root_cause",
+      answerKind: "summary",
+      requiredFactPaths: [
+        "facts.metrics.anomalyCount",
+        "facts.metrics.deviationPercent",
+        "facts.metrics.avgPowerFactor",
+        "facts.metrics.minPowerFactor",
+        "facts.signals",
+      ],
+      chartRequired,
+      chartType: "line",
+      unit: "",
+      reason: "使用者詢問異常根因分析分頁摘要或最大偏移點，需回覆異常類別數、最大偏離、時間點與功率因數 evidence。",
+    });
+  }
+
+  if (routeKeys.has("efficiency_power_factor")) {
+    add({
+      key: "efficiency_power_factor",
+      label: "能效分頁功率因數",
+      pageKey: "eff",
+      capability: "efficiency_power_factor",
+      answerKind: "metric",
+      requiredFactPaths: [
+        "facts.metrics.averagePowerFactor",
+        "facts.metrics.standbyConsumptionRatio",
+      ],
+      chartRequired,
+      chartType: "metric",
+      unit: "pf",
+      reason: "使用者詢問能效節能分頁的功率因數，需使用 eff facts，不可改用 anomaly facts。",
+    });
+  }
+
+  if (
+    !routeKeys.has("efficiency_power_factor") &&
+    (routeKeys.has("anomaly_root_cause") ||
+      /平均功率因數|功率因數|功因|power factor|pf/i.test(normalizedMessage))
+  ) {
     add({
       key: "avg_power_factor_30d",
       label: "最近 30 天平均功率因數",
@@ -1057,13 +1574,23 @@ function buildEnmsChatAnswerObligations(
     });
   }
 
-  if (routeKeys.has("efficiency_advice")) {
+  const hasEfficiencySummaryScope =
+    /00:00-06:00|夜間|待機|節能線索|優先序|opportunities|基載|quick ?win|改善建議|節能建議|省電建議|碳排|co2|carbon/i
+      .test(normalizedMessage);
+  if (
+    routeKeys.has("efficiency_advice") &&
+    (!routeKeys.has("efficiency_power_factor") || hasEfficiencySummaryScope)
+  ) {
     add({
       key: /碳排|co2|carbon/i.test(normalizedMessage)
         ? "carbon_emission"
+        : /平均功率因數|功率因數|功因|00:00-06:00|夜間|待機|節能線索|優先序|opportunities|efficiency/i.test(normalizedMessage)
+        ? "efficiency_summary"
         : "efficiency_advice",
       label: /碳排|co2|carbon/i.test(normalizedMessage)
         ? "碳排放"
+        : /平均功率因數|功率因數|功因|00:00-06:00|夜間|待機|節能線索|優先序|opportunities|efficiency/i.test(normalizedMessage)
+        ? "能效節能摘要"
         : "節能 / 能效建議",
       pageKey: "eff",
       capability: "efficiency_advice",
@@ -1098,7 +1625,12 @@ function buildEnmsChatAnswerObligations(
     });
   }
 
-  if (routeKeys.has("anomaly_root_cause") && !obligations.some((item) => item.key === "avg_power_factor_30d")) {
+  if (
+    routeKeys.has("anomaly_root_cause") &&
+    !obligations.some((item) =>
+      item.key === "avg_power_factor_30d" || item.key === "anomaly_summary"
+    )
+  ) {
     add({
       key: "anomaly_root_cause",
       label: "異常根因分析",
@@ -1214,7 +1746,7 @@ export function buildEnmsChatQueryPlan(message: string): EnmsChatQueryPlan {
     normalizedMessage,
     matchedRoutes,
   );
-  return {
+  return applyEnmsSemanticGraphToPlan({
     contractVersion: ENMS_CHAT_PLAN_CONTRACT_VERSION,
     registryVersion: ENMS_CAPABILITY_REGISTRY_VERSION,
     strategy:
@@ -1244,7 +1776,7 @@ export function buildEnmsChatQueryPlan(message: string): EnmsChatQueryPlan {
       "EnClaw Capability Registry / Context Builder -> EnMS API scoped ai_* facts",
     reason:
       "命中 EnMS domain capability，EnMS API 應依 selectedPageKeys 建立授權 scoped facts bundle。",
-  };
+  });
 }
 
 function prioritizeEnmsChatRoutes(
@@ -1279,13 +1811,73 @@ function prioritizeEnmsChatRoutes(
     });
   }
 
+  if (isEnmsSameSlotDemandQuestion(normalizedMessage)) {
+    return routes
+      .filter((route) => route.key === "same_slot_demand");
+  }
+
+  if (isEnmsDailyPeakDemandPointQuestion(normalizedMessage)) {
+    return routes
+      .filter((route) => route.key === "daily_peak_demand_point");
+  }
+
+  if (isEnmsTodayDemandPointQuestion(normalizedMessage)) {
+    return routes
+      .filter((route) => route.key === "today_demand_point");
+  }
+
+  if (isEnmsMonthlyPeakDemandPointQuestion(normalizedMessage)) {
+    return routes
+      .filter((route) => route.key === "monthly_peak_demand_point");
+  }
+
+  if (isEnmsDailyConsumptionPointQuestion(normalizedMessage)) {
+    return routes
+      .filter((route) => route.key === "daily_consumption_point");
+  }
+
+  if (isEnmsForecastReadinessQuestion(normalizedMessage)) {
+    return routes
+      .filter((route) => route.key === "forecast_readiness");
+  }
+
+  if (isEnmsEfficiencyPowerFactorQuestion(normalizedMessage)) {
+    return routes
+      .filter((route) =>
+        route.key === "efficiency_power_factor" ||
+        route.key === "efficiency_advice"
+      )
+      .toSorted((left, right) => {
+        if (
+          left.key === "efficiency_power_factor" &&
+          right.key !== "efficiency_power_factor"
+        ) {
+          return -1;
+        }
+        if (
+          right.key === "efficiency_power_factor" &&
+          left.key !== "efficiency_power_factor"
+        ) {
+          return 1;
+        }
+        return 0;
+      });
+  }
+
   if (isContextualPresentationQuestion(normalizedMessage)) {
     const chartPriority: EnmsChatSemanticRouteKey[] = [
       "site_benchmarking",
+      "today_demand_point",
+      "daily_peak_demand_point",
+      "same_slot_demand",
+      "monthly_peak_demand_point",
+      "daily_consumption_point",
+      "forecast_readiness",
       "meter_ranking",
       "demand_risk",
       "anomaly_root_cause",
       "alert_governance",
+      "efficiency_power_factor",
       "efficiency_advice",
       "billing",
       "energy_usage_query",
@@ -1353,6 +1945,10 @@ function shouldClarifyEnmsChatQuestion(
 }
 
 function isEnmsSiteBenchmarkingQuestion(normalizedMessage: string): boolean {
+  if (isEnmsMeterOrDeviceRankingQuestion(normalizedMessage)) {
+    return false;
+  }
+
   const hasSiteAnchor =
     /案場|各案場|場域|多場域|各場域|區域|各區域|廠區|分店|據點|站點|site|benchmark/.test(
       normalizedMessage,
@@ -1404,6 +2000,43 @@ function getRouteFirstMentionIndex(
     const regexMentions = [
       /(?:案場|場域|廠區|分店|據點|站點|site|location|company|公司|客戶).{0,12}(?:名稱|名字|叫什麼|是哪|是什麼|目前|現在|所在|所屬|有哪些|清單|列表|幾個|多少|name|current|which|what)/i,
       /(?:名稱|名字|叫什麼|是哪|是什麼|目前|現在|所在|所屬|有哪些|清單|列表|幾個|多少|name|current|which|what).{0,12}(?:案場|場域|廠區|分店|據點|站點|site|location|company|公司|客戶)/i,
+    ]
+      .map((regex) => normalizedMessage.search(regex))
+      .filter((index) => index >= 0);
+    if (regexMentions.length > 0) {
+      return Math.min(...regexMentions);
+    }
+  }
+
+  if (route.key === "efficiency_power_factor") {
+    const regexMentions = [
+      /(?:能效|節能|節電|省電|節能挖掘|efficiency|saving).{0,16}(?:平均功率因數|功率因數|功因|power factor|pf)/i,
+      /(?:平均功率因數|功率因數|功因|power factor|pf).{0,16}(?:能效|節能|節電|省電|節能挖掘|efficiency|saving)/i,
+    ]
+      .map((regex) => normalizedMessage.search(regex))
+      .filter((index) => index >= 0);
+    if (regexMentions.length > 0) {
+      return Math.min(...regexMentions);
+    }
+  }
+
+  if (route.key === "daily_peak_demand_point") {
+    const regexMentions = [
+      /\d{1,2}\s*(?:月|\/|-)\s*\d{1,2}\s*(?:日|號)?.{0,16}(?:最高需量|最大需量|尖峰需量|需量.{0,8}(?:最高|最大|尖峰)|peak demand|demand peak)/i,
+      /(?:最高需量|最大需量|尖峰需量|需量.{0,8}(?:最高|最大|尖峰)|peak demand|demand peak).{0,16}\d{1,2}\s*(?:月|\/|-)\s*\d{1,2}\s*(?:日|號)?/i,
+    ]
+      .map((regex) => normalizedMessage.search(regex))
+      .filter((index) => index >= 0);
+    if (regexMentions.length > 0) {
+      return Math.min(...regexMentions);
+    }
+  }
+
+  if (route.key === "daily_consumption_point") {
+    const regexMentions = [
+      /(?:哪一天|哪天|哪日|哪個日期|幾月幾日|幾號|日期|day|date).{0,18}(?:用電量|總用電|耗電|能耗|kwh|energy|consumption).{0,18}(?:最高|最大|最多|peak|highest|max)/i,
+      /(?:用電量|總用電|耗電|能耗|kwh|energy|consumption).{0,18}(?:最高|最大|最多|peak|highest|max).{0,18}(?:哪一天|哪天|哪日|哪個日期|幾月幾日|幾號|日期|day|date)/i,
+      /(?:最高|最大|最多|peak|highest|max).{0,18}(?:用電量|總用電|耗電|能耗|kwh|energy|consumption).{0,18}(?:哪一天|哪天|哪日|哪個日期|幾月幾日|幾號|日期|day|date)/i,
     ]
       .map((regex) => normalizedMessage.search(regex))
       .filter((index) => index >= 0);

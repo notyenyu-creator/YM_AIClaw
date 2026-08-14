@@ -129,6 +129,36 @@ EnMS already proves the pattern:
 
 This is the clearest proof-of-concept for a DB-first execution pipeline.
 
+### 4a. Lightweight EnMS semantic graph contract
+The EnClaw EnMS domain adapter now has a lightweight semantic graph registry:
+
+- implementation: `apps/web/lib/enms-semantic-graph.ts`
+- scope: capability / metric / formula / fact-path / chart / knowledge relation mapping
+- rollout: `ENMS_SEMANTIC_GRAPH_SHADOW=true` first, then controlled enable
+  with `ENMS_SEMANTIC_GRAPH_ENABLED=true`
+- controlled rollout: optional
+  `ENMS_SEMANTIC_GRAPH_CAPABILITIES=same_slot_demand,daily_peak_demand_point,site_benchmarking`
+- runtime metadata: semantic graph plans report `coverage` as `complete`,
+  `partial`, or `none`, plus missing/skipped contract keys, so controlled
+  rollout cannot look fully enabled when only part of the contract is active.
+- integrity check: regression tests validate that graph edges resolve to known
+  nodes, all required EnMS obligations have contracts, and the graph does not
+  contain customer MACs, raw table names, or runtime scoped facts.
+
+The graph is **not** a new database and is **not** a new source of truth.
+It does not store customer readings, raw time-series, MAC inventories, or authorization facts.
+
+Its purpose is to strengthen the existing eight-core loop:
+
+- EnMS-specific Runtime: expose optional planner metadata behind feature flags
+- Context Builder: map natural-language intents into capability contracts
+- Context Pack: attach only the required formulas, fact paths, wiki, and playbook references
+- Review Flow: route wrong or high-value cases into reviewable drafts
+- Data Governance: keep EnMS scoped facts as the only runtime data source
+- Analytics Module Integration: bind metrics to vetted formulas and page-level obligations
+- Chart Output: bind chart type, units, and fact references to the same obligation
+- Wiki Writeback: promote only reviewed learning drafts into durable knowledge
+
 ### 5. Reviewable knowledge loop
 The learning draft / promotion / writeback flow already shows how answers can be reviewed and promoted into durable system knowledge.
 
@@ -185,6 +215,10 @@ Future step, requires approval if behavior changes are introduced:
 - shared verified execution interface,
 - shared chart rendering contract,
 - shared evidence metadata contract.
+
+Semantic graph contracts can become one implementation of the shared query-plan
+contract, but should remain lightweight until the registry becomes too large for
+versioned TypeScript / JSON definitions.
 
 ### Phase 3: expand verified execution coverage
 Future step, requires approval:

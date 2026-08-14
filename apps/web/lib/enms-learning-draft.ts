@@ -260,6 +260,12 @@ function requiredEvidenceForCapabilities(
   ];
   const capabilityEvidence: Record<EnmsChatSemanticRouteKey, string[]> = {
     latest_data: ["latest_data_timestamp", "query_time_range"],
+    today_demand_point: ["today_24h_actual_demand_series", "requested_time", "demand_kw_unit"],
+    daily_peak_demand_point: ["today_24h_actual_demand_series", "requested_date", "max_not_sum_demand_formula", "demand_kw_unit"],
+    same_slot_demand: ["same_slot_demand_series", "daily_peak_reference", "demand_kw_unit"],
+    monthly_peak_demand_point: ["daily_peak_demand_series", "contract_capacity_reference", "demand_kw_unit"],
+    daily_consumption_point: ["daily_consumption_series", "requested_date", "energy_kwh_unit"],
+    forecast_readiness: ["forecast_readiness_score", "missing_feature_boundary", "shadow_mode_requirement"],
     demand_risk: ["demand_trend", "contract_capacity_or_missing_boundary"],
     anomaly_root_cause: ["statistical_baseline", "power_quality_or_raw_signal_boundary"],
     device_lookup: ["meter_identity_mapping", "mac_address_circuit_or_clarification"],
@@ -269,6 +275,7 @@ function requiredEvidenceForCapabilities(
     site_benchmarking: ["site_scope", "kwh_or_demand_ranking"],
     alert_governance: ["alert_history_or_empty_state", "threshold_context"],
     efficiency_advice: ["kwh_or_power_factor_signal", "billing_or_cost_missing_boundary"],
+    efficiency_power_factor: ["power_factor_summary", "low_power_factor_intervals", "efficiency_context"],
     billing: ["bill_history_or_missing_boundary", "account_scope"],
     raw_trace: ["mqtt_topic_or_raw_table", "meter_identity_mapping"],
   };

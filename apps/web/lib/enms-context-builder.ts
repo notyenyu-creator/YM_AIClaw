@@ -147,6 +147,18 @@ function hasNegatedEnergyAnalysis(message: string): boolean {
   return /(不要|別|勿|不用|不看|不查|不要查|不要分析|不分析|先不要分析).{0,20}(耗電|用電|能耗|能源|電表|場域能耗|需量|功率因數|功因|超約|契約容量)/i.test(message);
 }
 
+function asksMeterOrDeviceRanking(normalizedMessage: string): boolean {
+  const hasMeterSubject =
+    /迴路|回路|電表|電錶|設備|電表別名|設備別名|mac|address|位址|地址|circuit|meter|device/i
+      .test(normalizedMessage);
+  const hasRankingIntent =
+    /最費電|最耗電|耗電最高|用電最高|最高用電|耗能最高|排名|排行|top|ranking/i
+      .test(normalizedMessage);
+  const hasEnergyMetric =
+    /用電|耗電|費電|能耗|kwh|energy|consumption/i.test(normalizedMessage);
+  return hasMeterSubject && hasRankingIntent && hasEnergyMetric;
+}
+
 export function detectEnmsIntent(message: string): {
   intent: EnmsIntent;
   matchedKeywords: string[];
@@ -181,7 +193,9 @@ export function detectEnmsIntent(message: string): {
       normalizedMessage.includes("比較") ||
       normalizedMessage.includes("最差") ||
       normalizedMessage.includes("低於建議值"));
+  const asksMeterRanking = asksMeterOrDeviceRanking(normalizedMessage);
   const asksSiteBenchmarking =
+    !asksMeterRanking &&
     (normalizedMessage.includes("場域") ||
       normalizedMessage.includes("各場域") ||
       normalizedMessage.includes("多場域") ||

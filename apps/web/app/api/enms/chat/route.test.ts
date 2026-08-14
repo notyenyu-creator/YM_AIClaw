@@ -1071,13 +1071,14 @@ describe("POST /api/enms/chat", () => {
     );
     const json = await response.json();
     const payload = JSON.stringify(json);
+    const visibleBlocksText = JSON.stringify(json.blocks);
 
     expect(response.status).toBe(200);
     expect(json.intent).toBe("general_question");
     expect(json.citations[0].source).toBe("general_ai");
-    expect(json.evidence.queryScope).toBe("一般 AI 回覆；未讀取 EnMS scoped facts");
-    expect(payload).toContain("intent=general_question");
-    expect(payload).not.toContain("intent=demand_forecast");
+    expect(json.evidence.queryScope).toBe("一般 AI 回覆；未讀取 EnMS 授權資料");
+    expect(visibleBlocksText).not.toContain("intent=");
+    expect(visibleBlocksText).not.toContain("confidence=");
     expect(payload).toContain("我目前沒有即時天氣查詢工具");
     expect(payload).not.toContain("2026/7/22 10:00:00");
     expect(payload).not.toContain("5% what-if 年化金額");

@@ -695,28 +695,28 @@ function sanitizeAssistantChartType(
 }
 
 function buildCitationBlock(
-  preflight: EnmsPlannerPreflight,
-  snapshot: DomainBootstrapSnapshot | null,
+  _preflight: EnmsPlannerPreflight,
+  _snapshot: DomainBootstrapSnapshot | null,
   answerSource: EnmsAnswerSource,
-  intent: string = preflight.intent,
+  _intent?: string,
 ): AIAssistantBlock {
   const sourceLabel: Record<EnmsAnswerSource, string> = {
-    verified_query: "來源：EnMS PostgreSQL / TimescaleDB verified query。",
-    scoped_facts: "來源：EnMS 已授權 scoped facts，由 EnClaw 分析。",
-    context_snapshot: "來源：EnClaw EnMS DB context snapshot。",
-    runtime: "來源：EnClaw EnMS runtime。",
+    verified_query: "來源：EnMS 已驗證查詢結果。",
+    scoped_facts: "來源：EnMS 授權資料，由 EnClaw 分析；已套用口徑驗證。",
+    context_snapshot: "來源：EnMS 資料快照。",
+    runtime: "來源：EnClaw 分析流程。",
     blocked: "來源：EnClaw 安全邊界；本次未執行資料查詢。",
     no_match:
-      "來源：EnClaw intent routing；目前未命中可安全查詢的 verified query。",
+      "來源：EnClaw 問題判斷；目前未命中可安全查詢的 EnMS 資料。",
     general_ai:
-      "來源：一般 AI 模型；本次未使用 EnMS scoped facts。",
+      "來源：一般 AI 模型；本次未使用 EnMS 授權資料。",
   };
 
   const source = sourceLabel[answerSource] ?? sourceLabel.runtime;
 
   return {
     type: "citation",
-    text: `${source} intent=${intent} / confidence=${preflight.confidence}`,
+    text: source,
   };
 }
 
@@ -802,10 +802,10 @@ function buildAnswer(params: {
       {
         label:
           answerSource === "scoped_facts"
-            ? "EnMS Scoped Facts + EnClaw Context Pack"
+            ? "EnMS 授權資料 + 能管語意口徑驗證"
             : answerSource === "general_ai"
-              ? "General AI"
-            : "EnClaw EnMS Runtime",
+              ? "一般 AI"
+            : "EnClaw 能管分析流程",
         source: answerSource,
         timeRange:
           timeRange ||
@@ -815,8 +815,8 @@ function buildAnswer(params: {
     evidence: {
       dataSources: [
         answerSource === "general_ai"
-          ? "General AI model (no EnMS facts)"
-          : "EnClaw EnMS planner/context",
+          ? "一般 AI 模型（未讀取 EnMS 授權資料）"
+          : "EnClaw 能管語意分析",
         ...evidenceContexts.flatMap((context) =>
           sanitizeStringList(context.evidence?.dataSources),
         ),
@@ -828,7 +828,7 @@ function buildAnswer(params: {
         answerSource === "context_snapshot"
           ? ["EnMS PostgreSQL/TimescaleDB"]
           : []),
-        ...(answerSource === "scoped_facts" ? ["EnMS API scoped facts"] : []),
+        ...(answerSource === "scoped_facts" ? ["EnMS API 授權資料"] : []),
         ...(params.snapshot?.facts.length ? ["Domain bootstrap snapshot"] : []),
       ]
         .filter((value, index, all) => all.indexOf(value) === index)
@@ -837,7 +837,7 @@ function buildAnswer(params: {
         ? "不使用 EnMS 資料"
         : timeRange || "依問題語意與資料可用性判定",
       queryScope: answerSource === "general_ai"
-        ? "一般 AI 回覆；未讀取 EnMS scoped facts"
+        ? "一般 AI 回覆；未讀取 EnMS 授權資料"
         : queryScope || summarizeScope(params.scope),
       confidence:
         confidence ||
@@ -905,7 +905,7 @@ async function buildGeneralNoMatchAnswer(
   signal: AbortSignal,
 ): Promise<Response> {
   let text = [
-    "這題不是 EnMS 能管資料問題，因此我沒有使用 EnMS scoped facts、DB 或任何電表資料。",
+    "這題不是 EnMS 能管資料問題，因此我沒有使用 EnMS 授權資料、DB 或任何電表資料。",
     "目前一般 AI 模型暫時不可用；為避免編造答案，請稍後再試，或改問能管相關問題。",
   ].join("\n\n");
   let structuredModelAttempted = false;

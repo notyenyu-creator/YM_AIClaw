@@ -142,12 +142,32 @@ export async function GET(req: Request) {
         "selectedPageKeys",
         "matchedRoutes",
         "answerObligations",
+        "semanticGraph",
+      ],
+      optionalResponse: [
+        "semanticGraph",
+      ],
+      metadataOnly: [
+        "semanticGraph",
+      ],
+      semanticGraphFields: [
+        "version",
+        "mode",
+        "applied",
+        "coverage",
+        "missingContractKeys",
+        "skippedContractKeys",
+        "requiredFactPaths",
+        "chartTypes",
+        "knowledgeRefs",
       ],
     },
     security: {
       apiKeyPolicy: "required",
       dataPolicy:
         "planner only; does not query EnMS DB, DuckDB, semantic views, or external tools",
+      semanticGraphPolicy:
+        "optional planner metadata only; never a data source and never a replacement for scoped facts",
     },
   });
 }
