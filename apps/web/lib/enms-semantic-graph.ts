@@ -123,6 +123,12 @@ const GRAPH_NODES: EnmsSemanticGraphNode[] = [
     description: "回答 30 日總覽分頁中指定日期或最高用電日的每日 kWh 用電量。",
   },
   {
+    id: "capability:period_energy_total",
+    kind: "capability",
+    label: "指定月份總用電",
+    description: "回答指定月份、本月或上月整個本地日曆月的 kWh 用電加總。",
+  },
+  {
     id: "capability:forecast_readiness",
     kind: "capability",
     label: "Forecast 準備度",
@@ -255,6 +261,12 @@ const GRAPH_NODES: EnmsSemanticGraphNode[] = [
     description: "最大需量以同一電號 / billing reference 的時間桶取最大，不把不同時間點相加。",
   },
   {
+    id: "formula:baseline_deviation_percent",
+    kind: "formula",
+    label: "基準偏離率",
+    description: "偏離率 = (實際需量 - 歷史基準需量) / 歷史基準需量 × 100%，需同一時間點或同口徑基準比較。",
+  },
+  {
     id: "formula:energy_sum_same_window",
     kind: "formula",
     label: "同窗用電加總",
@@ -334,6 +346,9 @@ const GRAPH_EDGES: EnmsSemanticGraphEdge[] = [
   { from: "capability:daily_consumption_point", to: "metric:energy_kwh", relation: "answers_with" },
   { from: "capability:daily_consumption_point", to: "formula:energy_sum_same_window", relation: "computed_by" },
   { from: "capability:daily_consumption_point", to: "chart:demand_line", relation: "renders_as" },
+  { from: "capability:period_energy_total", to: "metric:energy_kwh", relation: "answers_with" },
+  { from: "capability:period_energy_total", to: "formula:energy_sum_same_window", relation: "computed_by" },
+  { from: "capability:period_energy_total", to: "chart:metric_card", relation: "renders_as" },
   { from: "capability:forecast_readiness", to: "metric:demand_kw", relation: "governed_by" },
   { from: "capability:forecast_readiness", to: "chart:demand_line", relation: "renders_as" },
   { from: "capability:energy_usage_query", to: "metric:energy_kwh", relation: "answers_with" },
@@ -517,6 +532,29 @@ const CAPABILITY_CONTRACTS: EnmsSemanticGraphCapabilityContract[] = [
     ],
   },
   {
+    key: "period_energy_total",
+    pageKey: "demand",
+    obligationKeys: ["period_energy_total"],
+    units: ["kWh"],
+    requiredFactPaths: [
+      "facts.periodEnergyTotal",
+      "facts.metrics.periodEnergyTotalKwh",
+      "facts.metrics.periodEnergyLabel",
+    ],
+    chartTypes: ["metric", "bar"],
+    knowledgeRefs: [
+      "skills/enms/SKILL.md",
+      "wiki/entities/energy/ENMS_DEMAND_FORECAST_TEMPLATE.md",
+    ],
+    graphPaths: [
+      "capability:period_energy_total -> metric:energy_kwh -> formula:energy_sum_same_window -> chart:metric_card",
+    ],
+    verifierRules: [
+      "period_energy_total 必須以指定本地日曆月的 kWh 加總回答，不可改用最近 30 天或迴路排行。",
+      "月份總用電可跨 billing reference 電表加總，但不可混入已被主表涵蓋的子表造成重複計算。",
+    ],
+  },
+  {
     key: "forecast_readiness",
     pageKey: "demand",
     obligationKeys: ["forecast_readiness"],
@@ -650,6 +688,28 @@ const CAPABILITY_CONTRACTS: EnmsSemanticGraphCapabilityContract[] = [
     ],
     verifierRules: [
       "site_metadata 必須回答授權範圍內案場 / 公司資訊，不可走一般模型猜測。",
+    ],
+  },
+  {
+    key: "anomaly_deviation_point",
+    pageKey: "anomaly",
+    obligationKeys: ["anomaly_deviation_point"],
+    units: ["kW", "%"],
+    requiredFactPaths: [
+      "facts.metrics.deviationPercent",
+      "chartSeries.actualDemand",
+      "chartSeries.baseline",
+    ],
+    chartTypes: ["line"],
+    knowledgeRefs: [
+      "skills/enms/reference/analysis-templates.md",
+      "wiki/operations/enms/ENMS_ANOMALY_ROOT_CAUSE_TEMPLATE.md",
+    ],
+    graphPaths: [
+      "capability:anomaly_root_cause -> metric:demand_kw -> formula:baseline_deviation_percent -> chart:demand_line",
+    ],
+    verifierRules: [
+      "anomaly_deviation_point 必須回答最大偏離點的時間、實際需量、歷史基準、差值與偏離百分比，不可只回答平均功率因數。",
     ],
   },
   {
@@ -847,6 +907,10 @@ const CAPABILITY_CONTRACTS: EnmsSemanticGraphCapabilityContract[] = [
     requiredFactPaths: [
       "facts.metrics.totalConsumptionKwh30d",
       "facts.opportunities",
+      "facts.meterRankingDetails",
+      "facts.metrics.averagePowerFactor",
+      "facts.metrics.standbyConsumptionRatio",
+      "facts.anomalyDeviationPoint",
       "facts.metrics.averageRateNtdPerKwh",
     ],
     chartTypes: ["bar", "metric"],
@@ -857,9 +921,13 @@ const CAPABILITY_CONTRACTS: EnmsSemanticGraphCapabilityContract[] = [
     ],
     graphPaths: [
       "capability:efficiency_advice -> metric:energy_kwh -> formula:energy_sum_same_window -> chart:ranking_bar",
+      "capability:efficiency_advice -> entity:meter_role -> relation:main_meter_covers_submeters -> verifier:consumption_is_not_waste",
+      "capability:efficiency_advice -> metric:power_factor -> formula:pf_quality_threshold -> verifier:efficiency_opportunity_requires_context",
     ],
     verifierRules: [
       "efficiency_advice 只能做唯讀改善建議，不可自動控制設備或改告警規則。",
+      "efficiency_advice 必須區分耗電最高與最浪費；總表或主表用電高不等於改善優先序最高。",
+      "efficiency_advice 應綜合用電排行、功率因數、夜間占比、異常偏離與設備角色，不可只回 Top kWh 排名。",
     ],
   },
   {
@@ -963,8 +1031,10 @@ const REQUIRED_GRAPH_CONTRACT_KEYS: EnmsSemanticGraphCapabilityKey[] = [
   "same_slot_demand",
   "monthly_peak_demand_point",
   "daily_consumption_point",
+  "period_energy_total",
   "forecast_readiness",
   "avg_power_factor_30d",
+  "anomaly_deviation_point",
   "anomaly_summary",
   "site_benchmarking",
   "billing",
@@ -980,6 +1050,10 @@ const REQUIRED_GRAPH_CONTRACT_KEYS: EnmsSemanticGraphCapabilityKey[] = [
 
 function isEnabledFlag(value: string | undefined): boolean {
   return /^(1|true|yes|on)$/i.test(value ?? "");
+}
+
+function isDisabledFlag(value: string | undefined): boolean {
+  return /^(0|false|no|off)$/i.test(value ?? "");
 }
 
 function unique<T>(items: T[]): T[] {
@@ -1012,7 +1086,7 @@ export function isEnmsSemanticGraphShadowEnabled(
 export function isEnmsSemanticGraphEnabled(
   env: NodeJS.ProcessEnv = process.env,
 ): boolean {
-  return isEnabledFlag(env.ENMS_SEMANTIC_GRAPH_ENABLED);
+  return !isDisabledFlag(env.ENMS_SEMANTIC_GRAPH_ENABLED);
 }
 
 export function getEnabledEnmsSemanticGraphCapabilities(

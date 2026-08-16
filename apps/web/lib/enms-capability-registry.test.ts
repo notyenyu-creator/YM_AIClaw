@@ -83,6 +83,7 @@ describe("EnMS capability registry", () => {
       "same_slot_demand",
       "monthly_peak_demand_point",
       "daily_consumption_point",
+      "period_energy_total",
       "forecast_readiness",
       "anomaly_root_cause",
       "device_lookup",
@@ -156,12 +157,14 @@ describe("EnMS capability registry", () => {
       expect.arrayContaining([
         "same_slot_demand",
         "daily_peak_demand_point",
+        "period_energy_total",
         "meter_ranking",
         "device_lookup",
         "site_metadata",
         "site_benchmarking",
         "demand_risk",
         "avg_power_factor_30d",
+        "anomaly_deviation_point",
         "efficiency_power_factor",
         "chart_request",
       ]),
@@ -182,6 +185,12 @@ describe("EnMS capability registry", () => {
         pageKey: "demand",
         units: ["kW"],
         chartTypes: ["line"],
+      });
+    expect(getEnmsSemanticGraphCapabilityContract("period_energy_total"))
+      .toMatchObject({
+        pageKey: "demand",
+        units: ["kWh"],
+        chartTypes: ["metric", "bar"],
       });
     expect(getEnmsSemanticGraphCapabilityContract("meter_ranking"))
       .toMatchObject({
@@ -362,7 +371,72 @@ describe("EnMS capability registry", () => {
     });
     expect(meterRankingPlan.selectedCapabilities).toContain("meter_ranking");
     expect(meterRankingPlan.selectedCapabilities).not.toContain("device_lookup");
+    expect(meterRankingPlan.semanticGoals).toContain("consumption_ranking");
+    expect(meterRankingPlan.requiredFactGroups).toEqual(
+      expect.arrayContaining(["meter_energy_ranking", "device_mapping"]),
+    );
+    expect(meterRankingPlan.answerQualityRules).toContain(
+      "must_distinguish_consumption_from_waste",
+    );
     expect(meterRankingPlan.needClarification).toBe(false);
+
+    const wasteOpportunityPlan = buildEnmsChatQueryPlan("哪個迴路最浪費電？");
+    expect(wasteOpportunityPlan.strategy).toBe("multi_scoped_facts_bundle");
+    expect(wasteOpportunityPlan.allowDbFacts).toBe(true);
+    expect(wasteOpportunityPlan.allowGeneralAI).toBe(false);
+    expect(wasteOpportunityPlan.primaryPageKey).toBe("eff");
+    expect(wasteOpportunityPlan.selectedPageKeys).toEqual(
+      expect.arrayContaining(["eff", "nlq", "anomaly"]),
+    );
+    expect(wasteOpportunityPlan.selectedCapabilities).toEqual(
+      expect.arrayContaining([
+        "efficiency_advice",
+        "meter_ranking",
+        "anomaly_root_cause",
+        "device_lookup",
+      ]),
+    );
+    expect(wasteOpportunityPlan.semanticGoals).toContain(
+      "efficiency_opportunity",
+    );
+    expect(wasteOpportunityPlan.requiredFactGroups).toEqual(
+      expect.arrayContaining([
+        "efficiency_opportunities",
+        "meter_energy_ranking",
+        "power_quality",
+        "anomaly_deviation",
+        "device_mapping",
+      ]),
+    );
+    expect(wasteOpportunityPlan.answerQualityRules).toEqual(
+      expect.arrayContaining([
+        "must_distinguish_consumption_from_waste",
+        "must_explain_main_meter_is_not_waste",
+      ]),
+    );
+
+    const colloquialWastePlan = buildEnmsChatQueryPlan("哪個設備最會白白燒電？");
+    expect(colloquialWastePlan.strategy).toBe("multi_scoped_facts_bundle");
+    expect(colloquialWastePlan.allowDbFacts).toBe(true);
+    expect(colloquialWastePlan.allowGeneralAI).toBe(false);
+    expect(colloquialWastePlan.primaryPageKey).toBe("eff");
+    expect(colloquialWastePlan.selectedCapabilities).toEqual(
+      expect.arrayContaining([
+        "efficiency_advice",
+        "meter_ranking",
+        "anomaly_root_cause",
+        "device_lookup",
+      ]),
+    );
+    expect(colloquialWastePlan.semanticGoals).toContain(
+      "efficiency_opportunity",
+    );
+    expect(colloquialWastePlan.answerQualityRules).toEqual(
+      expect.arrayContaining([
+        "must_distinguish_consumption_from_waste",
+        "must_explain_main_meter_is_not_waste",
+      ]),
+    );
 
     const sameSlotDemandPlan = buildEnmsChatQueryPlan("8月8號同時段最高是多少kw呢？");
     expect(sameSlotDemandPlan).toMatchObject({
@@ -434,6 +508,23 @@ describe("EnMS capability registry", () => {
       ]),
     );
 
+    const currentPlantPeakDemandPlan = buildEnmsChatQueryPlan(
+      "目前廠區中最高需量是多少kW呢？",
+    );
+    expect(currentPlantPeakDemandPlan.selectedCapabilities).toContain(
+      "demand_risk",
+    );
+    expect(currentPlantPeakDemandPlan.selectedCapabilities).not.toContain(
+      "energy_usage_query",
+    );
+    expect(currentPlantPeakDemandPlan.selectedCapabilities).not.toContain(
+      "meter_ranking",
+    );
+    expect(currentPlantPeakDemandPlan.answerObligations.map((item) => item.key))
+      .toContain("peak_demand_30d");
+    expect(currentPlantPeakDemandPlan.answerObligations.map((item) => item.key))
+      .not.toContain("meter_ranking");
+
     const monthlyPeakPlan = buildEnmsChatQueryPlan("本月契約分頁中本月最高需量是哪一天多少kW？");
     expect(monthlyPeakPlan).toMatchObject({
       strategy: "single_scoped_facts",
@@ -487,11 +578,46 @@ describe("EnMS capability registry", () => {
       "daily_consumption_point",
     );
     expect(peakDailyConsumptionPlan.selectedCapabilities).not.toContain("meter_ranking");
+    expect(peakDailyConsumptionPlan.semanticGoals).toContain("daily_energy_peak");
+    expect(peakDailyConsumptionPlan.answerQualityRules).toEqual(
+      expect.arrayContaining([
+        "must_not_use_meter_ranking_for_daily_energy_peak",
+        "must_not_mix_kw_and_kwh",
+      ]),
+    );
     expect(peakDailyConsumptionPlan.answerObligations).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           key: "daily_consumption_point",
           label: "最高用電日",
+          pageKey: "demand",
+          unit: "kWh",
+        }),
+      ]),
+    );
+
+    const periodEnergyTotalPlan = buildEnmsChatQueryPlan("可以幫我加總一下7月份總用電量");
+    expect(periodEnergyTotalPlan).toMatchObject({
+      strategy: "single_scoped_facts",
+      allowDbFacts: true,
+      primaryPageKey: "demand",
+      selectedPageKeys: ["demand"],
+    });
+    expect(periodEnergyTotalPlan.selectedCapabilities).toContain(
+      "period_energy_total",
+    );
+    expect(periodEnergyTotalPlan.selectedCapabilities).not.toContain("meter_ranking");
+    expect(periodEnergyTotalPlan.semanticGoals).toContain("calendar_energy_total");
+    expect(periodEnergyTotalPlan.answerQualityRules).toEqual(
+      expect.arrayContaining([
+        "must_not_use_meter_ranking_for_calendar_total",
+        "must_use_requested_time_window",
+      ]),
+    );
+    expect(periodEnergyTotalPlan.answerObligations).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          key: "period_energy_total",
           pageKey: "demand",
           unit: "kWh",
         }),
@@ -556,9 +682,25 @@ describe("EnMS capability registry", () => {
     expect(anomalyDeviationPointPlan.selectedCapabilities).toContain("anomaly_root_cause");
     expect(anomalyDeviationPointPlan.selectedPageKeys).toContain("anomaly");
     expect(anomalyDeviationPointPlan.answerObligations.map((item) => item.key))
-      .toEqual(expect.arrayContaining(["anomaly_summary"]));
+      .toEqual(expect.arrayContaining(["anomaly_deviation_point"]));
     expect(anomalyDeviationPointPlan.answerObligations.map((item) => item.key))
       .not.toContain("anomaly_root_cause");
+    expect(anomalyDeviationPointPlan.answerObligations.map((item) => item.key))
+      .not.toContain("avg_power_factor_30d");
+    expect(anomalyDeviationPointPlan.semanticGoals).toContain(
+      "anomaly_deviation_lookup",
+    );
+    expect(anomalyDeviationPointPlan.answerQualityRules).toContain(
+      "must_not_answer_anomaly_deviation_with_power_factor_only",
+    );
+
+    const anomalyMaxOffsetPlan = buildEnmsChatQueryPlan("異常訊號偵測 最大偏移是多少呢？");
+    expect(anomalyMaxOffsetPlan.selectedCapabilities).toContain("anomaly_root_cause");
+    expect(anomalyMaxOffsetPlan.selectedPageKeys).toContain("anomaly");
+    expect(anomalyMaxOffsetPlan.answerObligations.map((item) => item.key))
+      .toEqual(expect.arrayContaining(["anomaly_deviation_point"]));
+    expect(anomalyMaxOffsetPlan.answerObligations.map((item) => item.key))
+      .not.toContain("avg_power_factor_30d");
 
     const alertGovernancePlan = buildEnmsChatQueryPlan("Alert 智能治理分頁告警類型最多是哪一類？請用圖表呈現");
     expect(alertGovernancePlan.selectedCapabilities).toContain("alert_governance");
@@ -595,6 +737,13 @@ describe("EnMS capability registry", () => {
     );
     expect(efficiencyPowerFactorPlan.answerObligations.map((item) => item.key))
       .not.toContain("avg_power_factor_30d");
+
+    const efficiencyWhatIfPlan = buildEnmsChatQueryPlan("能效節能挖掘 What-if 模擬年省電量、年化節費、減碳與 ROI 條件是什麼？");
+    expect(efficiencyWhatIfPlan.selectedCapabilities).toContain("efficiency_advice");
+    expect(efficiencyWhatIfPlan.selectedCapabilities).toContain("billing");
+    expect(efficiencyWhatIfPlan.selectedPageKeys).toContain("eff");
+    expect(efficiencyWhatIfPlan.answerObligations.map((item) => item.key))
+      .toEqual(expect.arrayContaining(["efficiency_advice", "billing"]));
 
     for (const message of ["用電場域比較一下", "總用電各場域排名", "各案場用電比較"]) {
       const siteBenchmarkingPlan = buildEnmsChatQueryPlan(message);
@@ -634,10 +783,16 @@ describe("EnMS capability registry", () => {
     });
   });
 
-  it("keeps semantic graph in shadow mode until explicitly enabled", () => {
+  it("enables semantic graph contracts by default and still supports shadow mode", () => {
     const baseline = buildEnmsChatQueryPlan("8月8號同時段最高是多少kw呢？");
-    expect(baseline.semanticGraph).toBeUndefined();
+    expect(baseline.semanticGraph).toMatchObject({
+      version: ENMS_SEMANTIC_GRAPH_VERSION,
+      mode: "enabled",
+      applied: true,
+      coverage: "complete",
+    });
 
+    process.env.ENMS_SEMANTIC_GRAPH_ENABLED = "false";
     process.env.ENMS_SEMANTIC_GRAPH_SHADOW = "true";
     const shadowPlan = buildEnmsChatQueryPlan("8月8號同時段最高是多少kw呢？");
 
@@ -649,9 +804,6 @@ describe("EnMS capability registry", () => {
     });
     expect(shadowPlan.selectedCapabilities).toEqual(
       baseline.selectedCapabilities,
-    );
-    expect(shadowPlan.answerObligations).toEqual(
-      baseline.answerObligations,
     );
     expect(shadowPlan.semanticGraph?.requiredFactPaths).toEqual(
       expect.arrayContaining([

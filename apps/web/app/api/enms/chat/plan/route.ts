@@ -4,6 +4,9 @@ import {
   buildEnmsChatQueryPlan,
   ENMS_CHAT_PLAN_CONTRACT_VERSION,
   ENMS_CAPABILITY_REGISTRY_VERSION,
+  getEnmsChatSemanticRoutes,
+  type EnmsChatModelPlannerHints,
+  type EnmsChatSemanticRouteKey,
 } from "@/lib/enms-capability-registry";
 import { getEnmsS2sApiKey } from "@/lib/enms-s2s-auth";
 
@@ -13,6 +16,8 @@ export const runtime = "nodejs";
 const MAX_MESSAGE_LENGTH = 2000;
 const MAX_HISTORY_ITEMS = 4;
 const MAX_HISTORY_CONTENT_LENGTH = 600;
+const MAX_MODEL_PLANNER_RESPONSE_BYTES = 16 * 1024;
+const MODEL_PLANNER_DEFAULT_TIMEOUT_MS = 4_000;
 
 type EnmsChatPlanRequest = {
   message?: string;
@@ -23,6 +28,14 @@ type EnmsChatPlanRequest = {
 type EnmsChatPlanHistoryItem = {
   role?: string;
   content?: string;
+};
+
+type ModelPlannerConfig = {
+  endpoint: URL;
+  apiKey: string;
+  model: string;
+  maxTokens: number;
+  timeoutMs: number;
 };
 
 function isAuthorized(req: Request): boolean {
@@ -51,6 +64,97 @@ function trimText(value: unknown, maxLength: number): string {
 
   const text = value.trim();
   return text.length > maxLength ? `${text.slice(0, maxLength)}...` : text;
+}
+
+function readBoundedInt(
+  value: string | undefined,
+  fallback: number,
+  min: number,
+  max: number,
+): number {
+  const parsed = Number.parseInt(value ?? "", 10);
+  return Number.isFinite(parsed)
+    ? Math.min(max, Math.max(min, parsed))
+    : fallback;
+}
+
+function readPlannerModelEnv(suffix: string): string | undefined {
+  return (
+    process.env[`ENCLAW_ENMS_PLANNER_MODEL_${suffix}`]?.trim() ||
+    process.env[`ENCLAW_ENMS_STRUCTURED_MODEL_${suffix}`]?.trim() ||
+    undefined
+  );
+}
+
+function isModelSemanticPlannerEnabled(): boolean {
+  return (
+    process.env.ENCLAW_ENMS_MODEL_SEMANTIC_PLANNER_ENABLED === "1" ||
+    process.env.ENCLAW_ENMS_PLANNER_MODEL_ENABLED === "1"
+  );
+}
+
+function getModelPlannerConfig(): ModelPlannerConfig | null {
+  const transport = readPlannerModelEnv("TRANSPORT") || "openai-compatible";
+  if (transport !== "openai-compatible") {
+    return null;
+  }
+
+  const baseUrl = readPlannerModelEnv("BASE_URL") ?? "";
+  const apiKey = readPlannerModelEnv("API_KEY") ?? "";
+  const model = readPlannerModelEnv("NAME") ?? "";
+  if (!baseUrl || !apiKey || !model) {
+    return null;
+  }
+
+  try {
+    const normalizedBase = new URL(
+      baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`,
+    );
+    if (
+      !["http:", "https:"].includes(normalizedBase.protocol) ||
+      normalizedBase.username ||
+      normalizedBase.password
+    ) {
+      return null;
+    }
+    if (
+      (readPlannerModelEnv("REQUIRE_HTTPS") ??
+        process.env.ENCLAW_ENMS_REQUIRE_MODEL_HTTPS) === "1" &&
+      normalizedBase.protocol !== "https:"
+    ) {
+      return null;
+    }
+    const allowedHosts = (readPlannerModelEnv("ALLOWED_HOSTS") ?? "")
+      .split(",")
+      .map((value) => value.trim().toLowerCase())
+      .filter(Boolean);
+    if (
+      allowedHosts.length > 0 &&
+      !allowedHosts.includes(normalizedBase.hostname.toLowerCase())
+    ) {
+      return null;
+    }
+
+    return {
+      endpoint: new URL("chat/completions", normalizedBase),
+      apiKey,
+      model,
+      maxTokens: readBoundedInt(
+        readPlannerModelEnv("MAX_TOKENS"),
+        512,
+        128,
+        1_000,
+      ),
+      timeoutMs: readBoundedInt(
+        readPlannerModelEnv("TIMEOUT_MS"),
+        MODEL_PLANNER_DEFAULT_TIMEOUT_MS,
+        800,
+        8_000,
+      ),
+    };
+  } catch {
+    return null;
+  }
 }
 
 function normalizeHistory(history: unknown): EnmsChatPlanHistoryItem[] {
@@ -117,6 +221,181 @@ function buildPlannerMessage(
     "[/Conversation Context]",
     message,
   ].join("\n");
+}
+
+function buildModelSemanticPlannerPrompt(message: string): string {
+  const capabilityCatalog = getEnmsChatSemanticRoutes().map((route) => ({
+    key: route.key,
+    pageKey: route.pageKey,
+    intent: route.intent,
+    queryHint: route.queryHint,
+  }));
+
+  return [
+    "你是 EnMS AI Chat 的 plan-only 語意規劃器。",
+    "你的任務只是在白名單 capability 中選出使用者問題需要的資料能力；不得回答問題、不得查資料、不得產生 SQL、不得呼叫工具。",
+    "若問題是一般閒聊、天氣、非能管概念或沒有要求 EnMS 授權資料，allowDbFacts 必須是 false，allowGeneralAI 必須是 true。",
+    "若問題涉及能管資料、場域、電號、電表、迴路、需量、用電、功率因數、異常、告警、節能、碳排、電費或圖表，allowDbFacts 必須是 true，並從 capabilityCatalog 選 1 到 6 個 key。",
+    "優先選最少 capability；除非使用者明確要求多個指標、比較或圖表組合，通常只選 1 個主要 capability。",
+    "嚴格區分單位與語意：最高/最大需量、目前需量、kW、peak demand 只能選 demand 類 capability，不要選 energy_usage_query 或 meter_ranking。",
+    "用電量、總用電、耗電、kWh、哪一天用電最高才選 energy 類 capability；不可用需量 kW 取代 kWh。",
+    "最大偏移/偏離點必須選 anomaly deviation 相關 capability；不可只選功率因數或一般異常摘要。",
+    "最浪費、白白燒電、無效耗能、空轉需要節能機會與支援 facts；要區分『耗電最高』與『浪費最高』。",
+    "不要用單一關鍵字硬猜；要理解語意。例如：最浪費需要節能機會、用電排行、異常、設備角色；最大偏移需要 anomaly deviation；指定月份總用電需要 period energy total。",
+    '只輸出 JSON object，schema: {"selectedCapabilities":["capability_key"],"allowDbFacts":true|false,"allowGeneralAI":true|false,"needClarification":true|false,"confidence":"low|medium|high","reason":"short reason"}',
+    `<CAPABILITY_CATALOG>${JSON.stringify(capabilityCatalog)}</CAPABILITY_CATALOG>`,
+    `<USER_MESSAGE>${message}</USER_MESSAGE>`,
+    "<FINAL_OUTPUT_RULES>只輸出 JSON object，不得在 JSON 前後加入任何文字。</FINAL_OUTPUT_RULES>",
+  ].join("\n");
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function extractJsonObject(text: string): string | null {
+  const trimmed = text.trim();
+  if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
+    return trimmed;
+  }
+
+  const first = trimmed.indexOf("{");
+  const last = trimmed.lastIndexOf("}");
+  if (first < 0 || last <= first) {
+    return null;
+  }
+  return trimmed.slice(first, last + 1);
+}
+
+function parseModelPlannerHints(rawContent: string): EnmsChatModelPlannerHints | null {
+  const candidate = extractJsonObject(rawContent);
+  if (!candidate) {
+    return null;
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(candidate);
+  } catch {
+    return null;
+  }
+  if (!isPlainRecord(parsed)) {
+    return null;
+  }
+
+  const routeKeys = new Set(
+    getEnmsChatSemanticRoutes().map((route) => route.key),
+  );
+  const selectedCapabilities = Array.isArray(parsed.selectedCapabilities)
+    ? parsed.selectedCapabilities
+        .filter((value): value is EnmsChatSemanticRouteKey =>
+          typeof value === "string" &&
+          routeKeys.has(value as EnmsChatSemanticRouteKey)
+        )
+        .slice(0, 6)
+    : [];
+  const confidence =
+    parsed.confidence === "high" ||
+    parsed.confidence === "medium" ||
+    parsed.confidence === "low"
+      ? parsed.confidence
+      : "low";
+  const allowDbFacts = parsed.allowDbFacts === true;
+  const allowGeneralAI = parsed.allowGeneralAI === true;
+  const needClarification = parsed.needClarification === true;
+  const reason = trimText(parsed.reason, 160);
+
+  if (!allowDbFacts && !allowGeneralAI) {
+    return null;
+  }
+  if (allowDbFacts && selectedCapabilities.length === 0) {
+    return null;
+  }
+
+  return {
+    selectedCapabilities,
+    allowDbFacts,
+    allowGeneralAI: allowDbFacts ? false : allowGeneralAI,
+    needClarification,
+    confidence,
+    reason,
+  };
+}
+
+async function runModelSemanticPlanner(
+  message: string,
+): Promise<EnmsChatModelPlannerHints | null> {
+  if (!isModelSemanticPlannerEnabled()) {
+    return null;
+  }
+
+  const config = getModelPlannerConfig();
+  if (!config) {
+    return null;
+  }
+
+  const timeoutController = new AbortController();
+  const timeout = setTimeout(
+    () => timeoutController.abort(),
+    config.timeoutMs,
+  );
+
+  try {
+    const response = await fetch(config.endpoint, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${config.apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: config.model,
+        messages: [
+          {
+            role: "user",
+            content: buildModelSemanticPlannerPrompt(message),
+          },
+        ],
+        response_format: { type: "json_object" },
+        temperature: 0,
+        max_tokens: config.maxTokens,
+        stream: false,
+      }),
+      redirect: "error",
+      signal: timeoutController.signal,
+    });
+    if (!response.ok) {
+      return null;
+    }
+
+    const rawResponse = await response.text();
+    if (
+      !rawResponse ||
+      Buffer.byteLength(rawResponse, "utf8") >
+        MAX_MODEL_PLANNER_RESPONSE_BYTES
+    ) {
+      return null;
+    }
+
+    let envelope: unknown;
+    try {
+      envelope = JSON.parse(rawResponse);
+    } catch {
+      return null;
+    }
+    const content =
+      isPlainRecord(envelope) &&
+      Array.isArray(envelope.choices) &&
+      isPlainRecord(envelope.choices[0]) &&
+      isPlainRecord(envelope.choices[0].message) &&
+      typeof envelope.choices[0].message.content === "string"
+        ? envelope.choices[0].message.content
+        : "";
+    return content ? parseModelPlannerHints(content) : null;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 export async function GET(req: Request) {
@@ -190,5 +469,7 @@ export async function POST(req: Request) {
   }
 
   const history = normalizeHistory(body.history);
-  return Response.json(buildEnmsChatQueryPlan(buildPlannerMessage(message, history)));
+  const plannerMessage = buildPlannerMessage(message, history);
+  const modelHints = await runModelSemanticPlanner(plannerMessage);
+  return Response.json(buildEnmsChatQueryPlan(plannerMessage, modelHints ?? undefined));
 }

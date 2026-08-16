@@ -1107,7 +1107,7 @@ describe("POST /api/enms/chat", () => {
         message: "今天是幾月幾號？",
         conversationId: "conv-general-plan",
         chatPlan: {
-          contractVersion: "enms.ai.chat-plan.v1",
+          contractVersion: "enms.ai.chat-plan.v2",
           registryVersion: "test-registry",
           strategy: "general_ai",
           intent: "general_question",
@@ -1163,7 +1163,7 @@ describe("POST /api/enms/chat", () => {
           },
         ],
         chatPlan: {
-          contractVersion: "enms.ai.chat-plan.v1",
+          contractVersion: "enms.ai.chat-plan.v2",
           registryVersion: "test-registry",
           strategy: "general_ai",
           intent: "general_question",
@@ -1825,7 +1825,7 @@ describe("POST /api/enms/chat", () => {
         message:
           "請查詢最近 30 天的總用電、最大需量、平均功率因數，並做多場域 benchmarking 排名與差異說明。請幫我每一個都用圖表呈現",
         chatPlan: {
-          contractVersion: "enms.ai.chat-plan.v1",
+          contractVersion: "enms.ai.chat-plan.v2",
           strategy: "multi_scoped_facts",
           intent: "site_benchmarking",
           confidence: "high",
@@ -2054,7 +2054,7 @@ describe("POST /api/enms/chat", () => {
           },
         ],
         chatPlan: {
-          contractVersion: "enms.ai.chat-plan.v1",
+          contractVersion: "enms.ai.chat-plan.v2",
           strategy: "single_scoped_facts",
           intent: "site_benchmarking",
           confidence: "high",

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 const DEFAULT_API_KEY = "server-secret";
 
@@ -33,6 +33,15 @@ describe("POST /api/enms/chat/plan", () => {
     delete process.env.ENMS_SEMANTIC_GRAPH_ENABLED;
     delete process.env.ENMS_SEMANTIC_GRAPH_SHADOW;
     delete process.env.ENMS_SEMANTIC_GRAPH_CAPABILITIES;
+    delete process.env.ENCLAW_ENMS_MODEL_SEMANTIC_PLANNER_ENABLED;
+    delete process.env.ENCLAW_ENMS_PLANNER_MODEL_TRANSPORT;
+    delete process.env.ENCLAW_ENMS_PLANNER_MODEL_BASE_URL;
+    delete process.env.ENCLAW_ENMS_PLANNER_MODEL_API_KEY;
+    delete process.env.ENCLAW_ENMS_PLANNER_MODEL_NAME;
+    delete process.env.ENCLAW_ENMS_PLANNER_MODEL_ALLOWED_HOSTS;
+    delete process.env.ENCLAW_ENMS_PLANNER_MODEL_TIMEOUT_MS;
+    delete process.env.ENCLAW_ENMS_PLANNER_MODEL_MAX_TOKENS;
+    vi.unstubAllGlobals();
   });
 
   it("requires server-to-server authorization for the contract description", async () => {
@@ -45,7 +54,7 @@ describe("POST /api/enms/chat/plan", () => {
 
     expect(unauthorized.status).toBe(401);
     expect(authorized.status).toBe(200);
-    expect(json.contract.contractVersion).toBe("enms.ai.chat-plan.v1");
+    expect(json.contract.contractVersion).toBe("enms.ai.chat-plan.v2");
     expect(json.contract.response).toContain("semanticGraph");
     expect(json.contract.optionalResponse).toContain("semanticGraph");
     expect(json.contract.metadataOnly).toContain("semanticGraph");
@@ -248,8 +257,231 @@ describe("POST /api/enms/chat/plan", () => {
     );
   });
 
+  it("uses the optional model semantic planner only as whitelisted ChatPlan hints", async () => {
+    process.env.ENCLAW_ENMS_API_KEY = DEFAULT_API_KEY;
+    process.env.ENCLAW_ENMS_MODEL_SEMANTIC_PLANNER_ENABLED = "1";
+    process.env.ENCLAW_ENMS_PLANNER_MODEL_TRANSPORT = "openai-compatible";
+    process.env.ENCLAW_ENMS_PLANNER_MODEL_BASE_URL = "http://model.local/v1";
+    process.env.ENCLAW_ENMS_PLANNER_MODEL_API_KEY = "planner-secret";
+    process.env.ENCLAW_ENMS_PLANNER_MODEL_NAME = "fast-planner";
+    process.env.ENCLAW_ENMS_PLANNER_MODEL_ALLOWED_HOSTS = "model.local";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        new Response(
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  content: JSON.stringify({
+                    selectedCapabilities: [
+                      "efficiency_advice",
+                      "meter_ranking",
+                      "anomaly_root_cause",
+                      "device_lookup",
+                      "unknown_capability",
+                    ],
+                    allowDbFacts: true,
+                    allowGeneralAI: false,
+                    needClarification: false,
+                    confidence: "high",
+                    reason: "使用者以口語詢問可改善的耗能來源。",
+                  }),
+                },
+              },
+            ],
+          }),
+          { status: 200 },
+        )
+      ),
+    );
+    const { POST } = await import("./route.js");
+
+    const response = await POST(
+      buildRequest({ message: "哪個設備最會白白燒電？" }),
+    );
+    const json = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(json.strategy).toBe("multi_scoped_facts_bundle");
+    expect(json.allowDbFacts).toBe(true);
+    expect(json.allowGeneralAI).toBe(false);
+    expect(json.primaryPageKey).toBe("eff");
+    expect(json.selectedCapabilities).toEqual(
+      expect.arrayContaining([
+        "efficiency_advice",
+        "meter_ranking",
+        "anomaly_root_cause",
+        "device_lookup",
+      ]),
+    );
+    expect(json.selectedCapabilities).not.toContain("unknown_capability");
+    expect(json.semanticGoals).toContain("efficiency_opportunity");
+    expect(json.sourceOfTruth).toContain("model semantic planner");
+    expect(json.semanticGraph).toMatchObject({
+      mode: "enabled",
+      applied: true,
+      coverage: "complete",
+    });
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("normalizes noisy model hints by metric family before building the graph plan", async () => {
+    process.env.ENCLAW_ENMS_API_KEY = DEFAULT_API_KEY;
+    process.env.ENCLAW_ENMS_MODEL_SEMANTIC_PLANNER_ENABLED = "1";
+    process.env.ENCLAW_ENMS_PLANNER_MODEL_TRANSPORT = "openai-compatible";
+    process.env.ENCLAW_ENMS_PLANNER_MODEL_BASE_URL = "http://model.local/v1";
+    process.env.ENCLAW_ENMS_PLANNER_MODEL_API_KEY = "planner-secret";
+    process.env.ENCLAW_ENMS_PLANNER_MODEL_NAME = "fast-planner";
+    process.env.ENCLAW_ENMS_PLANNER_MODEL_ALLOWED_HOSTS = "model.local";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        new Response(
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  content: JSON.stringify({
+                    selectedCapabilities: [
+                      "demand_risk",
+                      "energy_usage_query",
+                      "meter_ranking",
+                    ],
+                    allowDbFacts: true,
+                    allowGeneralAI: false,
+                    needClarification: false,
+                    confidence: "high",
+                    reason: "模型誤把最高需量和用電排行混在一起。",
+                  }),
+                },
+              },
+            ],
+          }),
+          { status: 200 },
+        )
+      ),
+    );
+    const { POST } = await import("./route.js");
+
+    const response = await POST(
+      buildRequest({ message: "目前廠區中最高需量是多少kW呢？" }),
+    );
+    const json = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(json.selectedCapabilities).toContain("demand_risk");
+    expect(json.selectedCapabilities).not.toContain("energy_usage_query");
+    expect(json.selectedCapabilities).not.toContain("meter_ranking");
+    expect(json.answerObligations).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          key: "peak_demand_30d",
+          unit: "kW",
+        }),
+      ]),
+    );
+    expect(json.answerObligations.map((item: { key: string }) => item.key))
+      .not.toContain("meter_ranking");
+    expect(json.semanticGraph).toMatchObject({
+      mode: "enabled",
+      applied: true,
+      coverage: "complete",
+    });
+  });
+
+  it("does not let the model semantic planner force DB facts for general questions", async () => {
+    process.env.ENCLAW_ENMS_API_KEY = DEFAULT_API_KEY;
+    process.env.ENCLAW_ENMS_MODEL_SEMANTIC_PLANNER_ENABLED = "1";
+    process.env.ENCLAW_ENMS_PLANNER_MODEL_TRANSPORT = "openai-compatible";
+    process.env.ENCLAW_ENMS_PLANNER_MODEL_BASE_URL = "http://model.local/v1";
+    process.env.ENCLAW_ENMS_PLANNER_MODEL_API_KEY = "planner-secret";
+    process.env.ENCLAW_ENMS_PLANNER_MODEL_NAME = "fast-planner";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        new Response(
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  content: JSON.stringify({
+                    selectedCapabilities: [],
+                    allowDbFacts: false,
+                    allowGeneralAI: true,
+                    needClarification: false,
+                    confidence: "high",
+                    reason: "一般天氣問題。",
+                  }),
+                },
+              },
+            ],
+          }),
+          { status: 200 },
+        )
+      ),
+    );
+    const { POST } = await import("./route.js");
+
+    const response = await POST(buildRequest({ message: "今天天氣如何？" }));
+    const json = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(json.strategy).toBe("general_ai");
+    expect(json.allowDbFacts).toBe(false);
+    expect(json.allowGeneralAI).toBe(true);
+    expect(json.selectedCapabilities).toEqual([]);
+    expect(json.selectedPageKeys).toEqual([]);
+  });
+
+  it("falls back to the deterministic planner when model hints are low confidence", async () => {
+    process.env.ENCLAW_ENMS_API_KEY = DEFAULT_API_KEY;
+    process.env.ENCLAW_ENMS_MODEL_SEMANTIC_PLANNER_ENABLED = "1";
+    process.env.ENCLAW_ENMS_PLANNER_MODEL_TRANSPORT = "openai-compatible";
+    process.env.ENCLAW_ENMS_PLANNER_MODEL_BASE_URL = "http://model.local/v1";
+    process.env.ENCLAW_ENMS_PLANNER_MODEL_API_KEY = "planner-secret";
+    process.env.ENCLAW_ENMS_PLANNER_MODEL_NAME = "fast-planner";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        new Response(
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  content: JSON.stringify({
+                    selectedCapabilities: ["meter_ranking"],
+                    allowDbFacts: true,
+                    allowGeneralAI: false,
+                    needClarification: false,
+                    confidence: "low",
+                    reason: "不確定。",
+                  }),
+                },
+              },
+            ],
+          }),
+          { status: 200 },
+        )
+      ),
+    );
+    const { POST } = await import("./route.js");
+
+    const response = await POST(
+      buildRequest({ message: "08/10 最高需量是多少呢？" }),
+    );
+    const json = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(json.primaryPageKey).toBe("demand");
+    expect(json.selectedCapabilities).toContain("daily_peak_demand_point");
+    expect(json.selectedCapabilities).not.toContain("meter_ranking");
+    expect(json.sourceOfTruth).not.toContain("model semantic planner");
+  });
+
   it("can expose semantic graph metadata in shadow mode without changing routing", async () => {
     process.env.ENCLAW_ENMS_API_KEY = DEFAULT_API_KEY;
+    process.env.ENMS_SEMANTIC_GRAPH_ENABLED = "false";
     process.env.ENMS_SEMANTIC_GRAPH_SHADOW = "true";
     const { POST } = await import("./route.js");
 

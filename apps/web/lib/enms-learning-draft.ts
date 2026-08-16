@@ -265,6 +265,7 @@ function requiredEvidenceForCapabilities(
     same_slot_demand: ["same_slot_demand_series", "daily_peak_reference", "demand_kw_unit"],
     monthly_peak_demand_point: ["daily_peak_demand_series", "contract_capacity_reference", "demand_kw_unit"],
     daily_consumption_point: ["daily_consumption_series", "requested_date", "energy_kwh_unit"],
+    period_energy_total: ["period_energy_total", "requested_calendar_period", "energy_kwh_unit"],
     forecast_readiness: ["forecast_readiness_score", "missing_feature_boundary", "shadow_mode_requirement"],
     demand_risk: ["demand_trend", "contract_capacity_or_missing_boundary"],
     anomaly_root_cause: ["statistical_baseline", "power_quality_or_raw_signal_boundary"],
