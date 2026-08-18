@@ -498,6 +498,36 @@ from bill_baseline;
 - `TaipowerBills.CurrentAvgRate`
 - `PowerAccounts.AccountNumber`
 
+### 3.13 電表時序資料目前涵蓋多久？
+
+**問題模板**
+
+```text
+目前【某場域 / 某電號 / 授權範圍】的電表時序資料收集了幾天？資料起訖時間與樣本數是多少？
+```
+
+**語意邊界**
+
+- 這類問題屬於 `data_coverage`，不是 `site_metadata`，也不是單純 `latest_data`。
+- 回答必須說明最早資料、最新資料、實際涵蓋本地日期數、日曆跨度、樣本數與涵蓋電表 / 迴路數。
+- 若資料中間有缺日，必須明確區分「日曆跨度」與「實際有資料天數」。
+- EnMS Chat 正式路徑只使用 EnMS API 已授權 scoped facts；EnClaw Web 研發模式若直接查 DB，也應使用唯讀 semantic view / verified query。
+
+**主要欄位 / facts**
+
+- `ai_energy_15m_v1.recorded_at`
+- `ai_energy_15m_v1.meter_id`
+- `ai_energy_15m_v1.company_no`
+- `ai_energy_15m_v1.site_id`
+- `ai_energy_15m_v1.power_account_id`
+- `ai_energy_15m_v1.mac_address`
+
+**回答不可接受情境**
+
+- 只回答目前案場名稱。
+- 只回答最新一筆資料時間。
+- 用最近 7 天或最近 30 天查詢樣本替代完整資料涵蓋度。
+
 ---
 
 ## 4. 可直接重複使用的 SQL 模板
@@ -651,4 +681,3 @@ from bill_baseline;
 - 都能由 `DeviceDataSummaryView / DemandAlertHistory / TaipowerBills` 組合出答案
 - 不需要把答案綁死在今天只有哪一個場域或哪一個電號
 - 未來資料變多時，仍然能延用同一組問題模板
-

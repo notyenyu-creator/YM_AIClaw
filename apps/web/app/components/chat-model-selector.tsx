@@ -1,12 +1,11 @@
 "use client";
 
-import { ChevronDown, Loader2, Lock } from "lucide-react";
+import { BrainCircuit, ChevronDown, Loader2, Lock } from "lucide-react";
 import {
 	SiClaude,
 	SiGoogle,
 	SiMeta,
 	SiMistralai,
-	SiOpenai,
 	SiPerplexity,
 } from "react-icons/si";
 import type { CSSProperties } from "react";
@@ -90,7 +89,7 @@ function ProviderIcon({
 		case "openai":
 		case "chatgpt":
 			return (
-				<SiOpenai
+				<BrainCircuit
 					className={className}
 					style={iconStyle}
 					data-provider-icon="openai"

@@ -101,6 +101,19 @@ function buildContext(
   };
 }
 
+function buildChatPlan(
+  obligations: Array<{ key: string; pageKey?: string; unit?: string }>,
+) {
+  return {
+    contractVersion: "enms.ai.chat-plan.v2",
+    answerObligations: obligations.map((obligation) => ({
+      key: obligation.key,
+      pageKey: obligation.pageKey,
+      unit: obligation.unit,
+    })),
+  };
+}
+
 describe("buildEnmsScopedAnswer", () => {
   it("answers billing questions from exact scoped bill facts", () => {
     const result = buildEnmsScopedAnswer({
@@ -168,6 +181,77 @@ describe("buildEnmsScopedAnswer", () => {
     expect(result.text).toContain("目前場域 / 案場：目前場域");
     expect(result.text).toContain("授權可見場域數：2");
     expect(result.text).toContain("其他場域");
+  });
+
+  it("answers data coverage days from scoped semantic facts instead of site metadata or latest sample window", () => {
+    const result = buildEnmsScopedAnswer({
+      message: "電表資訊收集了幾天的資料？",
+      context: buildContext({
+        pageKey: "nlq",
+        facts: {
+          ...buildContext().facts,
+          dataCoverage: {
+            firstDataAtText: "2026/06/09 13:30",
+            latestDataAtText: "2026/08/14 01:45",
+            coveredDateCount: 64,
+            calendarSpanDays: 67,
+            sampleCount: 146108,
+            meterCount: 25,
+            timeZone: "Asia/Taipei",
+          },
+          metrics: {
+            dataCoverageFirstDataAt: "2026/06/09 13:30",
+            dataCoverageLatestDataAt: "2026/08/14 01:45",
+            dataCoverageCoveredDateCount: 64,
+            dataCoverageCalendarSpanDays: 67,
+            dataCoverageSampleCount: 146108,
+            dataCoverageMeterCount: 25,
+            dataCoverageTimeZone: "Asia/Taipei",
+          },
+        },
+      }),
+      chatPlan: buildChatPlan([
+        { key: "data_coverage", pageKey: "nlq", unit: "days" },
+      ]),
+    });
+
+    expect(result.answerKind).toBe("time_range");
+    expect(result.text).toContain("2026/06/09 13:30");
+    expect(result.text).toContain("2026/08/14 01:45");
+    expect(result.text).toContain("有資料的本地日曆日：64 天");
+    expect(result.text).toContain("起訖日期跨度：67 天");
+    expect(result.text).toContain("涵蓋電表迴路：25 個");
+    expect(result.text).toContain("15 分鐘資料：146,108 筆");
+    expect(result.text).toContain("不是目前分頁的 7 日或 30 日取樣視窗");
+    expect(result.text).not.toContain("目前場域 / 案場");
+    expect(result.text).not.toContain("目前需量：");
+    expect(result.matchedFactPaths).toContain(
+      "facts.dataCoverage.coveredDateCount",
+    );
+  });
+
+  it("composes every explicit ChatPlan obligation instead of returning only the first candidate", () => {
+    const result = buildEnmsScopedAnswer({
+      message: "請查最近 30 天總用電與最高需量",
+      context: buildContext({ pageKey: "demand" }),
+      chatPlan: buildChatPlan([
+        { key: "total_energy_30d", pageKey: "demand", unit: "kWh" },
+        { key: "peak_demand_30d", pageKey: "demand", unit: "kW" },
+      ]),
+    });
+
+    expect(result.answerKind).toBe("summary");
+    expect(result.text).toContain("逐項回答");
+    expect(result.text).toContain("最近 30 天總用電");
+    expect(result.text).toContain("12,345.6 kWh");
+    expect(result.text).toContain("最高需量 / 契約風險");
+    expect(result.text).toContain("91.2 kW");
+    expect(result.matchedFactPaths).toEqual(
+      expect.arrayContaining([
+        "facts.metrics.totalConsumptionKwh30d",
+        "facts.metrics.peakDemandKw",
+      ]),
+    );
   });
 
   it("answers requested account billing from bill details instead of global metrics", () => {
@@ -249,6 +333,33 @@ describe("buildEnmsScopedAnswer", () => {
     expect(result.text).not.toContain("A 場域用電最高");
   });
 
+  it("uses ChatPlan obligations to answer peak demand without kWh ranking", () => {
+    const result = buildEnmsScopedAnswer({
+      message: "目前廠區中最高需量是多少 kW 呢？",
+      context: buildContext({
+        pageKey: "demand",
+        facts: {
+          ...buildContext().facts,
+          meterRankingDetails: [
+            {
+              label: "總表",
+              consumptionKwh: 99999,
+              peakDemandKw: 10,
+            },
+          ],
+        },
+      }),
+      chatPlan: buildChatPlan([
+        { key: "peak_demand_30d", pageKey: "demand", unit: "kW" },
+      ]),
+    });
+
+    expect(result.answerKind).toBe("demand");
+    expect(result.text).toContain("已發生最高需量：91.2 kW");
+    expect(result.text).not.toContain("99,999 kWh");
+    expect(result.matchedFactPaths).toContain("facts.metrics.peakDemandKw");
+  });
+
   it("prioritizes device lookup over demand when a multi-intent question names a circuit", () => {
     const result = buildEnmsScopedAnswer({
       message: "迴路1 是對應哪個設備，也請說明需量超約風險",
@@ -325,6 +436,109 @@ describe("buildEnmsScopedAnswer", () => {
     expect(result.matchedFactPaths).toContain(
       "facts.meterRankingDetails.peakDemandKw",
     );
+  });
+
+  it("uses ChatPlan obligations to answer a daily consumption point from chart facts", () => {
+    const result = buildEnmsScopedAnswer({
+      message: "哪一天的用電量最高呢？",
+      context: buildContext({
+        pageKey: "demand",
+        facts: {
+          ...buildContext().facts,
+          meterRankingDetails: [
+            {
+              label: "總表",
+              consumptionKwh: 99999,
+            },
+          ],
+        },
+        chartSeries: [
+          {
+            key: "dailyConsumption",
+            label: "每日用電量",
+            points: [
+              { label: "08/01", value: 1000, timestamp: "2026-08-01T00:00:00Z" },
+              { label: "08/02", value: 1500, timestamp: "2026-08-02T00:00:00Z" },
+            ],
+          },
+        ],
+      }),
+      chatPlan: buildChatPlan([
+        { key: "daily_consumption_point", pageKey: "demand", unit: "kWh" },
+      ]),
+    });
+
+    expect(result.answerKind).toBe("metric");
+    expect(result.text).toContain("最高用電日：08/02");
+    expect(result.text).toContain("1,500 kWh");
+    expect(result.text).not.toContain("99,999 kWh");
+    expect(result.matchedFactPaths).toContain("chartSeries.dailyConsumption");
+  });
+
+  it("uses ChatPlan obligations to answer period energy totals instead of rankings", () => {
+    const result = buildEnmsScopedAnswer({
+      message: "可以先幫我加總一下 7 月份總用電量？",
+      context: buildContext({
+        pageKey: "demand",
+        facts: {
+          ...buildContext().facts,
+          metrics: {
+            periodEnergyTotalKwh: 76543.21,
+          },
+          meterRankingDetails: [
+            {
+              label: "總表",
+              consumptionKwh: 99999,
+            },
+          ],
+        },
+      }),
+      chatPlan: buildChatPlan([
+        { key: "period_energy_total", pageKey: "demand", unit: "kWh" },
+      ]),
+    });
+
+    expect(result.answerKind).toBe("metric");
+    expect(result.text).toContain("指定期間總用電：76,543.21 kWh");
+    expect(result.text).not.toContain("#1");
+    expect(result.text).not.toContain("99,999 kWh");
+    expect(result.matchedFactPaths).toContain("facts.metrics.periodEnergyTotalKwh");
+  });
+
+  it("uses ChatPlan obligations to answer anomaly deviation instead of average power factor", () => {
+    const result = buildEnmsScopedAnswer({
+      message: "異常訊號偵測最大偏移是多少？",
+      context: buildContext({
+        pageKey: "anomaly",
+        facts: {
+          ...buildContext().facts,
+          metrics: {
+            averagePowerFactor: 0.621,
+            minPowerFactor: 0.598,
+          },
+          anomalyDeviationPoint: {
+            timestampText: "08/09 09:00",
+            actualDemandKw: 16.1,
+            baselineDemandKw: 9.8,
+            deltaKw: 6.3,
+            deviationPercent: 63.6,
+            meterLabel: "空壓機 · MAC-B / 位址 4 / 迴路 1",
+          },
+        },
+      }),
+      chatPlan: buildChatPlan([
+        { key: "anomaly_deviation_point", pageKey: "anomaly", unit: "kW" },
+      ]),
+    });
+
+    expect(result.answerKind).toBe("metric");
+    expect(result.text).toContain("異常最大偏離點：08/09 09:00");
+    expect(result.text).toContain("實際需量：16.1 kW");
+    expect(result.text).toContain("歷史基準：9.8 kW");
+    expect(result.text).toContain("偏離量：6.3 kW");
+    expect(result.text).toContain("偏離比例：63.6 %");
+    expect(result.text).not.toContain("平均功率因數：0.621");
+    expect(result.matchedFactPaths).toContain("facts.anomalyDeviationPoint");
   });
 
   it("does not let missing billing facts hide available meter ranking facts", () => {
@@ -436,6 +650,58 @@ describe("buildEnmsScopedAnswer", () => {
 
     expect(result.answerKind).toBe("ranking");
     expect(result.text).toContain("#1 MAC-A / 位址 2 / 迴路 1：3,420 kWh");
+    expect(result.text).not.toContain("A 場域");
+  });
+
+  it("does not fall back to meter ranking when the ChatPlan only allows site benchmarking", () => {
+    const result = buildEnmsScopedAnswer({
+      message: "各區域用電比較，請用圖表呈現",
+      context: buildContext({
+        pageKey: "bench",
+        facts: {
+          siteRankings: [
+            { name: "A 場域", value: 2000 },
+            { name: "B 場域", value: 1200 },
+          ],
+          ranking: [
+            { name: "MAC-A / 位址 2 / 迴路 1", value: 3420 },
+          ],
+        },
+      }),
+      chatPlan: buildChatPlan([
+        { key: "site_benchmarking", pageKey: "bench", unit: "kWh" },
+      ]),
+    });
+
+    expect(result.answerKind).toBe("ranking");
+    expect(result.matchedFactPaths).toContain("facts.siteRankings");
+    expect(result.text).toContain("A 場域");
+    expect(result.text).not.toContain("MAC-A");
+  });
+
+  it("does not fall back to site ranking when the ChatPlan only allows meter ranking", () => {
+    const result = buildEnmsScopedAnswer({
+      message: "最近 7 日哪個迴路最耗電？",
+      context: buildContext({
+        pageKey: "nlq",
+        facts: {
+          siteRankings: [
+            { name: "A 場域", value: 2000 },
+          ],
+          ranking: [
+            { name: "MAC-A / 位址 2 / 迴路 1", value: 3420 },
+            { name: "MAC-B / 位址 4 / 迴路 1", value: 2150 },
+          ],
+        },
+      }),
+      chatPlan: buildChatPlan([
+        { key: "meter_ranking", pageKey: "nlq", unit: "kWh" },
+      ]),
+    });
+
+    expect(result.answerKind).toBe("ranking");
+    expect(result.matchedFactPaths).toContain("facts.ranking");
+    expect(result.text).toContain("MAC-A");
     expect(result.text).not.toContain("A 場域");
   });
 

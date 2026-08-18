@@ -281,6 +281,29 @@ describe("POST /api/enms/chat/plan", () => {
                       "device_lookup",
                       "unknown_capability",
                     ],
+                    selectedPageKeys: ["eff", "nlq", "unknown_page"],
+                    answerObligationKeys: [
+                      "efficiency_advice",
+                      "meter_ranking",
+                      "unknown_obligation",
+                    ],
+                    semanticGoals: [
+                      "efficiency_opportunity",
+                      "chart_rendering",
+                      "unknown_goal",
+                    ],
+                    requiredFactGroups: [
+                      "efficiency_opportunities",
+                      "meter_energy_ranking",
+                      "power_quality",
+                      "unknown_fact_group",
+                    ],
+                    answerQualityRules: [
+                      "must_distinguish_consumption_from_waste",
+                      "must_explain_main_meter_is_not_waste",
+                      "unknown_rule",
+                    ],
+                    chartRequested: true,
                     allowDbFacts: true,
                     allowGeneralAI: false,
                     needClarification: false,
@@ -317,13 +340,88 @@ describe("POST /api/enms/chat/plan", () => {
     );
     expect(json.selectedCapabilities).not.toContain("unknown_capability");
     expect(json.semanticGoals).toContain("efficiency_opportunity");
-    expect(json.sourceOfTruth).toContain("model semantic planner");
+    expect(json.requiredFactGroups).toEqual(
+      expect.arrayContaining([
+        "efficiency_opportunities",
+        "meter_energy_ranking",
+        "power_quality",
+        "chart_series",
+      ]),
+    );
+    expect(json.answerQualityRules).toEqual(
+      expect.arrayContaining([
+        "must_distinguish_consumption_from_waste",
+        "must_explain_main_meter_is_not_waste",
+        "must_attach_chart_only_from_verified_facts",
+      ]),
+    );
+    expect(json.sourceOfTruth).toContain("能管語意口徑驗證");
     expect(json.semanticGraph).toMatchObject({
       mode: "enabled",
       applied: true,
       coverage: "complete",
     });
     expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("lets the semantic model drive the plan through obligations without hard-coded capability wording", async () => {
+    process.env.ENCLAW_ENMS_API_KEY = DEFAULT_API_KEY;
+    process.env.ENCLAW_ENMS_MODEL_SEMANTIC_PLANNER_ENABLED = "1";
+    process.env.ENCLAW_ENMS_PLANNER_MODEL_TRANSPORT = "openai-compatible";
+    process.env.ENCLAW_ENMS_PLANNER_MODEL_BASE_URL = "http://model.local/v1";
+    process.env.ENCLAW_ENMS_PLANNER_MODEL_API_KEY = "planner-secret";
+    process.env.ENCLAW_ENMS_PLANNER_MODEL_NAME = "fast-planner";
+    process.env.ENCLAW_ENMS_PLANNER_MODEL_ALLOWED_HOSTS = "model.local";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        new Response(
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  content: JSON.stringify({
+                    selectedCapabilities: [],
+                    answerObligationKeys: ["period_energy_total"],
+                    semanticGoals: ["calendar_energy_total"],
+                    requiredFactGroups: ["energy_calendar_period"],
+                    answerQualityRules: [
+                      "must_answer_requested_metric",
+                      "must_not_mix_kw_and_kwh",
+                      "must_not_use_meter_ranking_for_calendar_total",
+                    ],
+                    allowDbFacts: true,
+                    allowGeneralAI: false,
+                    needClarification: false,
+                    confidence: "high",
+                    reason: "使用者用自然語言要求日曆月份總用電。",
+                  }),
+                },
+              },
+            ],
+          }),
+          { status: 200 },
+        )
+      ),
+    );
+    const { POST } = await import("./route.js");
+
+    const response = await POST(
+      buildRequest({ message: "幫我加總整個七月吃掉多少電" }),
+    );
+    const json = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(json.allowDbFacts).toBe(true);
+    expect(json.selectedCapabilities).toContain("period_energy_total");
+    expect(json.selectedCapabilities).not.toContain("meter_ranking");
+    expect(json.answerObligations).toEqual([
+      expect.objectContaining({
+        key: "period_energy_total",
+        unit: "kWh",
+      }),
+    ]);
+    expect(json.requiredFactGroups).toContain("energy_calendar_period");
   });
 
   it("normalizes noisy model hints by metric family before building the graph plan", async () => {

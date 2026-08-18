@@ -2,11 +2,16 @@ import { timingSafeEqual } from "crypto";
 
 import {
   buildEnmsChatQueryPlan,
+  ENMS_CHAT_ANSWER_OBLIGATION_VALUES,
+  ENMS_CHAT_ANSWER_QUALITY_RULE_VALUES,
+  ENMS_CHAT_FACT_GROUP_VALUES,
   ENMS_CHAT_PLAN_CONTRACT_VERSION,
+  ENMS_CHAT_SEMANTIC_GOAL_VALUES,
   ENMS_CAPABILITY_REGISTRY_VERSION,
   getEnmsChatSemanticRoutes,
   type EnmsChatModelPlannerHints,
   type EnmsChatSemanticRouteKey,
+  type EnmsPageKey,
 } from "@/lib/enms-capability-registry";
 import { getEnmsS2sApiKey } from "@/lib/enms-s2s-auth";
 
@@ -18,6 +23,14 @@ const MAX_HISTORY_ITEMS = 4;
 const MAX_HISTORY_CONTENT_LENGTH = 600;
 const MAX_MODEL_PLANNER_RESPONSE_BYTES = 16 * 1024;
 const MODEL_PLANNER_DEFAULT_TIMEOUT_MS = 4_000;
+const ENMS_PAGE_KEY_VALUES: readonly EnmsPageKey[] = [
+  "demand",
+  "anomaly",
+  "nlq",
+  "bench",
+  "alert",
+  "eff",
+];
 
 type EnmsChatPlanRequest = {
   message?: string;
@@ -199,8 +212,13 @@ function isContextualFollowUpQuestion(message: string): boolean {
     /^(那|這|上面|剛剛|前面|上一題|上一個|同樣|也|再|順便|可以|請|麻煩)/i
       .test(normalized) ||
     /呢|也|再|補|呈現|整理|轉成|換成/i.test(normalized);
+  const hasContextualAnchor =
+    /這個|那個|此案場|本案場|目前這張圖|這張圖|這個分頁|目前分頁|同一張|同一題|同時段|上一題|上一個|剛剛|剛才|前面|上述|哪一天|哪天|那一天|多少|是多少|正常嗎|可以嗎/i
+      .test(normalized);
 
-  return asksPresentation && (normalized.length <= 80 || hasFollowUpMarker);
+  return (
+    asksPresentation && (normalized.length <= 80 || hasFollowUpMarker)
+  ) || (normalized.length <= 80 && (hasFollowUpMarker || hasContextualAnchor));
 }
 
 function buildPlannerMessage(
@@ -229,21 +247,34 @@ function buildModelSemanticPlannerPrompt(message: string): string {
     pageKey: route.pageKey,
     intent: route.intent,
     queryHint: route.queryHint,
+    examples: route.synonyms.slice(0, 8),
   }));
+
+  const semanticContract = {
+    pageKeys: ENMS_PAGE_KEY_VALUES,
+    answerObligationKeys: ENMS_CHAT_ANSWER_OBLIGATION_VALUES,
+    semanticGoals: ENMS_CHAT_SEMANTIC_GOAL_VALUES,
+    requiredFactGroups: ENMS_CHAT_FACT_GROUP_VALUES,
+    answerQualityRules: ENMS_CHAT_ANSWER_QUALITY_RULE_VALUES,
+  };
 
   return [
     "你是 EnMS AI Chat 的 plan-only 語意規劃器。",
-    "你的任務只是在白名單 capability 中選出使用者問題需要的資料能力；不得回答問題、不得查資料、不得產生 SQL、不得呼叫工具。",
+    "你的任務是理解使用者語意，輸出可驗證 ChatPlan hints；不得回答問題、不得查資料、不得產生 SQL、不得呼叫工具。",
     "若問題是一般閒聊、天氣、非能管概念或沒有要求 EnMS 授權資料，allowDbFacts 必須是 false，allowGeneralAI 必須是 true。",
-    "若問題涉及能管資料、場域、電號、電表、迴路、需量、用電、功率因數、異常、告警、節能、碳排、電費或圖表，allowDbFacts 必須是 true，並從 capabilityCatalog 選 1 到 6 個 key。",
+    "若問題涉及能管資料、場域、電號、電表、迴路、需量、用電、功率因數、異常、告警、節能、碳排、電費或圖表，allowDbFacts 必須是 true，並從 capabilityCatalog 與 semanticContract 選擇白名單值。",
     "優先選最少 capability；除非使用者明確要求多個指標、比較或圖表組合，通常只選 1 個主要 capability。",
     "嚴格區分單位與語意：最高/最大需量、目前需量、kW、peak demand 只能選 demand 類 capability，不要選 energy_usage_query 或 meter_ranking。",
     "用電量、總用電、耗電、kWh、哪一天用電最高才選 energy 類 capability；不可用需量 kW 取代 kWh。",
+    "資料涵蓋多久、收集幾天、資料起訖、樣本數或資料覆蓋範圍，應選 data_coverage；不要誤選 site_metadata 或 latest_data。",
+    "案場名稱、目前場域、公司/廠區清單才選 site_metadata；最新一筆資料時間才選 latest_data。",
     "最大偏移/偏離點必須選 anomaly deviation 相關 capability；不可只選功率因數或一般異常摘要。",
     "最浪費、白白燒電、無效耗能、空轉需要節能機會與支援 facts；要區分『耗電最高』與『浪費最高』。",
     "不要用單一關鍵字硬猜；要理解語意。例如：最浪費需要節能機會、用電排行、異常、設備角色；最大偏移需要 anomaly deviation；指定月份總用電需要 period energy total。",
-    '只輸出 JSON object，schema: {"selectedCapabilities":["capability_key"],"allowDbFacts":true|false,"allowGeneralAI":true|false,"needClarification":true|false,"confidence":"low|medium|high","reason":"short reason"}',
+    "answerObligationKeys 要描述使用者真正要看到的答案項目；requiredFactGroups 要描述後續 EnMS API 需要準備的 facts；answerQualityRules 要描述 verifier 要防止的混線。",
+    '只輸出 JSON object，schema: {"selectedCapabilities":["capability_key"],"selectedPageKeys":["page_key"],"answerObligationKeys":["obligation_key"],"semanticGoals":["goal"],"requiredFactGroups":["fact_group"],"answerQualityRules":["rule"],"chartRequested":true|false,"allowDbFacts":true|false,"allowGeneralAI":true|false,"needClarification":true|false,"confidence":"low|medium|high","reason":"short reason"}',
     `<CAPABILITY_CATALOG>${JSON.stringify(capabilityCatalog)}</CAPABILITY_CATALOG>`,
+    `<SEMANTIC_CONTRACT>${JSON.stringify(semanticContract)}</SEMANTIC_CONTRACT>`,
     `<USER_MESSAGE>${message}</USER_MESSAGE>`,
     "<FINAL_OUTPUT_RULES>只輸出 JSON object，不得在 JSON 前後加入任何文字。</FINAL_OUTPUT_RULES>",
   ].join("\n");
@@ -251,6 +282,31 @@ function buildModelSemanticPlannerPrompt(message: string): string {
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function filterAllowedValues<T extends string>(
+  values: unknown,
+  allowedValues: readonly T[],
+  maxItems: number,
+): T[] {
+  if (!Array.isArray(values)) {
+    return [];
+  }
+
+  const allowed = new Set<string>(allowedValues);
+  const selected: T[] = [];
+  for (const value of values) {
+    if (typeof value !== "string" || !allowed.has(value)) {
+      continue;
+    }
+    if (!selected.includes(value as T)) {
+      selected.push(value as T);
+    }
+    if (selected.length >= maxItems) {
+      break;
+    }
+  }
+  return selected;
 }
 
 function extractJsonObject(text: string): string | null {
@@ -286,14 +342,36 @@ function parseModelPlannerHints(rawContent: string): EnmsChatModelPlannerHints |
   const routeKeys = new Set(
     getEnmsChatSemanticRoutes().map((route) => route.key),
   );
-  const selectedCapabilities = Array.isArray(parsed.selectedCapabilities)
-    ? parsed.selectedCapabilities
-        .filter((value): value is EnmsChatSemanticRouteKey =>
-          typeof value === "string" &&
-          routeKeys.has(value as EnmsChatSemanticRouteKey)
-        )
-        .slice(0, 6)
-    : [];
+  const selectedCapabilities = filterAllowedValues(
+    parsed.selectedCapabilities,
+    Array.from(routeKeys) as EnmsChatSemanticRouteKey[],
+    6,
+  );
+  const selectedPageKeys = filterAllowedValues(
+    parsed.selectedPageKeys,
+    ENMS_PAGE_KEY_VALUES,
+    4,
+  );
+  const answerObligationKeys = filterAllowedValues(
+    parsed.answerObligationKeys,
+    ENMS_CHAT_ANSWER_OBLIGATION_VALUES,
+    6,
+  );
+  const semanticGoals = filterAllowedValues(
+    parsed.semanticGoals,
+    ENMS_CHAT_SEMANTIC_GOAL_VALUES,
+    8,
+  );
+  const requiredFactGroups = filterAllowedValues(
+    parsed.requiredFactGroups,
+    ENMS_CHAT_FACT_GROUP_VALUES,
+    10,
+  );
+  const answerQualityRules = filterAllowedValues(
+    parsed.answerQualityRules,
+    ENMS_CHAT_ANSWER_QUALITY_RULE_VALUES,
+    8,
+  );
   const confidence =
     parsed.confidence === "high" ||
     parsed.confidence === "medium" ||
@@ -308,15 +386,26 @@ function parseModelPlannerHints(rawContent: string): EnmsChatModelPlannerHints |
   if (!allowDbFacts && !allowGeneralAI) {
     return null;
   }
-  if (allowDbFacts && selectedCapabilities.length === 0) {
+  const hasSemanticSelection =
+    selectedCapabilities.length > 0 ||
+    answerObligationKeys.length > 0 ||
+    semanticGoals.length > 0 ||
+    requiredFactGroups.length > 0;
+  if (allowDbFacts && !hasSemanticSelection) {
     return null;
   }
 
   return {
     selectedCapabilities,
+    selectedPageKeys,
+    answerObligationKeys,
+    semanticGoals,
+    requiredFactGroups,
+    answerQualityRules,
     allowDbFacts,
     allowGeneralAI: allowDbFacts ? false : allowGeneralAI,
     needClarification,
+    chartRequested: parsed.chartRequested === true,
     confidence,
     reason,
   };

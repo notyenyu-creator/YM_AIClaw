@@ -61,6 +61,7 @@ export type EnmsPageDefinition = {
 
 export type EnmsChatSemanticRouteKey =
   | "latest_data"
+  | "data_coverage"
   | "demand_risk"
   | "today_demand_point"
   | "daily_peak_demand_point"
@@ -92,6 +93,7 @@ export type EnmsChatSemanticRoute = {
 
 export type EnmsChatAnswerObligationKey =
   | "latest_data"
+  | "data_coverage"
   | "site_metadata"
   | "device_lookup"
   | "meter_ranking"
@@ -132,6 +134,7 @@ export type EnmsChatAnswerObligation = {
 
 export type EnmsChatSemanticGoal =
   | "latest_data_lookup"
+  | "data_coverage_lookup"
   | "site_metadata_lookup"
   | "device_mapping_lookup"
   | "consumption_ranking"
@@ -150,6 +153,7 @@ export type EnmsChatSemanticGoal =
 
 export type EnmsChatFactGroup =
   | "latest_data"
+  | "data_coverage"
   | "site_metadata"
   | "device_mapping"
   | "meter_energy_ranking"
@@ -212,12 +216,101 @@ export type EnmsChatQueryPlan = {
 
 export type EnmsChatModelPlannerHints = {
   selectedCapabilities?: EnmsChatSemanticRouteKey[];
+  selectedPageKeys?: EnmsPageKey[];
+  answerObligationKeys?: EnmsChatAnswerObligationKey[];
+  semanticGoals?: EnmsChatSemanticGoal[];
+  requiredFactGroups?: EnmsChatFactGroup[];
+  answerQualityRules?: EnmsChatAnswerQualityRule[];
   allowDbFacts?: boolean;
   allowGeneralAI?: boolean;
   needClarification?: boolean;
+  chartRequested?: boolean;
   confidence?: "low" | "medium" | "high";
   reason?: string;
 };
+
+export const ENMS_CHAT_ANSWER_OBLIGATION_VALUES: readonly EnmsChatAnswerObligationKey[] = [
+  "latest_data",
+  "data_coverage",
+  "site_metadata",
+  "device_lookup",
+  "meter_ranking",
+  "total_energy_30d",
+  "peak_demand_30d",
+  "today_demand_point",
+  "daily_peak_demand_point",
+  "same_slot_demand",
+  "monthly_peak_demand_point",
+  "daily_consumption_point",
+  "period_energy_total",
+  "forecast_readiness",
+  "avg_power_factor_30d",
+  "anomaly_deviation_point",
+  "anomaly_summary",
+  "site_benchmarking",
+  "billing",
+  "carbon_emission",
+  "efficiency_summary",
+  "efficiency_power_factor",
+  "efficiency_advice",
+  "alert_governance",
+  "anomaly_root_cause",
+  "raw_trace",
+];
+
+export const ENMS_CHAT_SEMANTIC_GOAL_VALUES: readonly EnmsChatSemanticGoal[] = [
+  "latest_data_lookup",
+  "data_coverage_lookup",
+  "site_metadata_lookup",
+  "device_mapping_lookup",
+  "consumption_ranking",
+  "efficiency_opportunity",
+  "calendar_energy_total",
+  "daily_energy_peak",
+  "demand_point_lookup",
+  "demand_risk_assessment",
+  "same_slot_comparison",
+  "anomaly_deviation_lookup",
+  "anomaly_summary",
+  "power_factor_assessment",
+  "site_benchmarking",
+  "billing_lookup",
+  "chart_rendering",
+];
+
+export const ENMS_CHAT_FACT_GROUP_VALUES: readonly EnmsChatFactGroup[] = [
+  "latest_data",
+  "data_coverage",
+  "site_metadata",
+  "device_mapping",
+  "meter_energy_ranking",
+  "energy_daily_series",
+  "energy_calendar_period",
+  "demand_series",
+  "demand_peak",
+  "demand_contract",
+  "same_slot_demand",
+  "anomaly_deviation",
+  "power_quality",
+  "efficiency_opportunities",
+  "off_hour_usage",
+  "site_benchmarking",
+  "billing",
+  "carbon",
+  "chart_series",
+];
+
+export const ENMS_CHAT_ANSWER_QUALITY_RULE_VALUES: readonly EnmsChatAnswerQualityRule[] = [
+  "must_answer_requested_metric",
+  "must_use_requested_time_window",
+  "must_not_mix_kw_and_kwh",
+  "must_not_use_meter_ranking_for_daily_energy_peak",
+  "must_not_use_meter_ranking_for_calendar_total",
+  "must_not_answer_anomaly_deviation_with_power_factor_only",
+  "must_distinguish_consumption_from_waste",
+  "must_explain_main_meter_is_not_waste",
+  "must_attach_chart_only_from_verified_facts",
+];
 
 type EnmsMetricFamily =
   | "latest"
@@ -229,6 +322,7 @@ type EnmsMetricFamily =
   | "efficiency"
   | "alert"
   | "billing"
+  | "coverage"
   | "raw";
 
 export type EnmsKnowledgeDocument = {
@@ -334,6 +428,35 @@ const SHARED_SKILL_PATHS = [
 ];
 
 const CHAT_SEMANTIC_ROUTES: readonly EnmsChatSemanticRoute[] = [
+  {
+    key: "data_coverage",
+    pageKey: "nlq",
+    intent: "natural_language_query",
+    synonyms: [
+      "資料幾天",
+      "資料幾日",
+      "幾天資料",
+      "幾日資料",
+      "收集幾天",
+      "收集幾日",
+      "採集幾天",
+      "採集幾日",
+      "資料涵蓋",
+      "資料覆蓋",
+      "資料期間",
+      "資料起訖",
+      "時間跨度",
+      "電表資訊收集",
+      "電表資料收集",
+      "有幾天資料",
+      "總共有幾天",
+      "總共有幾日",
+      "data coverage",
+      "coverage days",
+    ],
+    queryHint: "電表時序資料收集天數 資料起訖 覆蓋日數",
+    preciseAnswerOnly: true,
+  },
   {
     key: "latest_data",
     pageKey: "nlq",
@@ -905,7 +1028,7 @@ const promptDocumentCache = new Map<
 >();
 const MAX_PROMPT_KNOWLEDGE_BYTES = 32 * 1024;
 
-function unique(values: string[]): string[] {
+function unique<T extends string>(values: T[]): T[] {
   return values.filter((value, index, all) => all.indexOf(value) === index);
 }
 
@@ -991,6 +1114,8 @@ function getRouteMetricFamily(
   switch (routeKey) {
     case "latest_data":
       return "latest";
+    case "data_coverage":
+      return "coverage";
     case "site_metadata":
     case "site_benchmarking":
       return "site";
@@ -1147,13 +1272,22 @@ export function matchesEnmsChatSemanticRoute(
     return false;
   }
 
+  if (routeKey === "data_coverage") {
+    return isEnmsDataCoverageQuestion(message);
+  }
   if (routeKey === "latest_data") {
+    if (isEnmsDataCoverageQuestion(message)) {
+      return false;
+    }
     return isEnmsLatestDataQuestion(message);
   }
   if (routeKey === "device_lookup") {
     return isEnmsDeviceLookupQuestion(message);
   }
   if (routeKey === "site_metadata") {
+    if (isEnmsDataCoverageQuestion(message)) {
+      return false;
+    }
     return isEnmsSiteMetadataQuestion(message);
   }
   if (routeKey === "meter_ranking") {
@@ -1267,6 +1401,9 @@ export function isEnmsSiteMetadataQuestion(message: string): boolean {
   if (isGeneralSiteMetadataConceptQuestion(normalizedMessage)) {
     return false;
   }
+  if (isEnmsDataCoverageQuestion(message)) {
+    return false;
+  }
 
   const hasSiteAnchor =
     /案場|場域|廠區|分店|據點|站點|site|location|company|公司|客戶/.test(
@@ -1282,6 +1419,21 @@ export function isEnmsSiteMetadataQuestion(message: string): boolean {
     );
 
   return hasSiteAnchor && hasLookupIntent && !hasMetricIntent;
+}
+
+export function isEnmsDataCoverageQuestion(message: string): boolean {
+  const normalizedMessage = normalizeText(message);
+  const hasDataAnchor =
+    /資料|數據|時序|讀值|紀錄|記錄|電表資訊|電表資料|收集|採集|累積|涵蓋|覆蓋|coverage|data/.test(
+      normalizedMessage,
+    );
+  const hasCoverageIntent =
+    /幾天|幾日|多少天|多少日|多久|多長|總共有|共有|從哪天|到哪天|起訖|期間|時間跨度|資料量|筆數|日數|天數|date range|time range|how many days/.test(
+      normalizedMessage,
+    );
+  const asksLatestOnly =
+    /最新一筆|最近一筆|最後一筆|更新到|截至/.test(normalizedMessage);
+  return hasDataAnchor && hasCoverageIntent && !asksLatestOnly;
 }
 
 function isGeneralSiteMetadataConceptQuestion(normalizedMessage: string): boolean {
@@ -1300,6 +1452,10 @@ function isGeneralSiteMetadataConceptQuestion(normalizedMessage: string): boolea
 }
 
 export function isEnmsLatestDataQuestion(message: string): boolean {
+  if (isEnmsDataCoverageQuestion(message)) {
+    return false;
+  }
+
   const normalizedMessage = normalizeText(message);
   return (
     /(?:最新|最後|最近).{0,8}(?:資料|一筆|讀值|紀錄|記錄|時序|電表|db|資料庫|enms|meter|data)/i
@@ -1545,6 +1701,12 @@ function buildEnmsChatSemanticProfile(
     addFactGroup("latest_data");
     addRule("must_answer_requested_metric");
   }
+  if (routeKeySet.has("data_coverage")) {
+    addGoal("data_coverage_lookup");
+    addFactGroup("data_coverage");
+    addRule("must_answer_requested_metric");
+    addRule("must_use_requested_time_window");
+  }
   if (routeKeySet.has("site_metadata")) {
     addGoal("site_metadata_lookup");
     addFactGroup("site_metadata");
@@ -1717,6 +1879,209 @@ function expandRoutesForSemanticProfile(
   return expanded;
 }
 
+function buildRoutesFromModelPlannerHints(
+  hints: EnmsChatModelPlannerHints | undefined,
+): EnmsChatSemanticRouteKey[] {
+  if (!hints) {
+    return [];
+  }
+
+  const routeKeys: EnmsChatSemanticRouteKey[] = [
+    ...(hints.selectedCapabilities ?? []),
+  ];
+  const addRoute = (key: EnmsChatSemanticRouteKey) => {
+    routeKeys.push(key);
+  };
+
+  for (const key of hints.answerObligationKeys ?? []) {
+    switch (key) {
+      case "latest_data":
+      case "data_coverage":
+      case "site_metadata":
+      case "device_lookup":
+      case "meter_ranking":
+      case "same_slot_demand":
+      case "daily_peak_demand_point":
+      case "today_demand_point":
+      case "monthly_peak_demand_point":
+      case "daily_consumption_point":
+      case "period_energy_total":
+      case "forecast_readiness":
+      case "site_benchmarking":
+      case "billing":
+      case "efficiency_power_factor":
+      case "alert_governance":
+      case "raw_trace":
+        addRoute(key);
+        break;
+      case "total_energy_30d":
+        addRoute("energy_usage_query");
+        break;
+      case "peak_demand_30d":
+        addRoute("demand_risk");
+        break;
+      case "avg_power_factor_30d":
+      case "anomaly_deviation_point":
+      case "anomaly_summary":
+      case "anomaly_root_cause":
+        addRoute("anomaly_root_cause");
+        break;
+      case "carbon_emission":
+      case "efficiency_summary":
+      case "efficiency_advice":
+        addRoute("efficiency_advice");
+        break;
+    }
+  }
+
+  for (const goal of hints.semanticGoals ?? []) {
+    switch (goal) {
+      case "latest_data_lookup":
+        addRoute("latest_data");
+        break;
+      case "data_coverage_lookup":
+        addRoute("data_coverage");
+        break;
+      case "site_metadata_lookup":
+        addRoute("site_metadata");
+        break;
+      case "device_mapping_lookup":
+        addRoute("device_lookup");
+        break;
+      case "consumption_ranking":
+        addRoute("meter_ranking");
+        break;
+      case "calendar_energy_total":
+        addRoute("period_energy_total");
+        break;
+      case "daily_energy_peak":
+        addRoute("daily_consumption_point");
+        break;
+      case "demand_point_lookup":
+      case "demand_risk_assessment":
+        addRoute("demand_risk");
+        break;
+      case "same_slot_comparison":
+        addRoute("same_slot_demand");
+        break;
+      case "anomaly_deviation_lookup":
+      case "anomaly_summary":
+        addRoute("anomaly_root_cause");
+        break;
+      case "power_factor_assessment":
+        addRoute("efficiency_power_factor");
+        addRoute("anomaly_root_cause");
+        break;
+      case "site_benchmarking":
+        addRoute("site_benchmarking");
+        break;
+      case "billing_lookup":
+        addRoute("billing");
+        break;
+      case "efficiency_opportunity":
+        addRoute("efficiency_advice");
+        addRoute("meter_ranking");
+        addRoute("anomaly_root_cause");
+        addRoute("device_lookup");
+        break;
+      case "chart_rendering":
+        break;
+    }
+  }
+
+  for (const group of hints.requiredFactGroups ?? []) {
+    switch (group) {
+      case "latest_data":
+        addRoute("latest_data");
+        break;
+      case "data_coverage":
+        addRoute("data_coverage");
+        break;
+      case "site_metadata":
+        addRoute("site_metadata");
+        break;
+      case "device_mapping":
+        addRoute("device_lookup");
+        break;
+      case "meter_energy_ranking":
+        addRoute("meter_ranking");
+        break;
+      case "energy_daily_series":
+        addRoute("daily_consumption_point");
+        break;
+      case "energy_calendar_period":
+        addRoute("period_energy_total");
+        break;
+      case "demand_series":
+      case "demand_peak":
+      case "demand_contract":
+        addRoute("demand_risk");
+        break;
+      case "same_slot_demand":
+        addRoute("same_slot_demand");
+        break;
+      case "anomaly_deviation":
+      case "power_quality":
+        addRoute("anomaly_root_cause");
+        break;
+      case "efficiency_opportunities":
+      case "off_hour_usage":
+      case "carbon":
+        addRoute("efficiency_advice");
+        break;
+      case "site_benchmarking":
+        addRoute("site_benchmarking");
+        break;
+      case "billing":
+        addRoute("billing");
+        break;
+      case "chart_series":
+        break;
+    }
+  }
+
+  return unique(routeKeys);
+}
+
+function mergeModelPlannerHintsIntoSemanticProfile(
+  profile: EnmsChatSemanticProfile,
+  hints: EnmsChatModelPlannerHints | undefined,
+  normalizedMessage: string,
+): EnmsChatSemanticProfile {
+  if (!hints) {
+    return profile;
+  }
+
+  return {
+    semanticGoals: unique([
+      ...profile.semanticGoals,
+      ...(hints.semanticGoals ?? []),
+      ...(hints.chartRequested === true ? ["chart_rendering" as const] : []),
+    ]),
+    requiredFactGroups: unique([
+      ...profile.requiredFactGroups,
+      ...(hints.requiredFactGroups ?? []),
+      ...(hints.chartRequested === true ? ["chart_series" as const] : []),
+    ]),
+    answerQualityRules: unique([
+      ...profile.answerQualityRules,
+      ...(hints.answerQualityRules ?? []),
+      ...(hints.chartRequested === true
+        ? ["must_attach_chart_only_from_verified_facts" as const]
+        : []),
+    ]),
+    routeKeys: unique([
+      ...profile.routeKeys,
+      ...buildRoutesFromModelPlannerHints(hints).filter((routeKey) => {
+        const route = getEnmsChatSemanticRouteByKey(routeKey);
+        return route
+          ? shouldKeepRouteForDominantMetricFamily(route, normalizedMessage)
+          : false;
+      }),
+    ]),
+  };
+}
+
 function buildEnmsChatAnswerObligations(
   normalizedMessage: string,
   matchedRoutes: EnmsChatSemanticRoute[],
@@ -1745,6 +2110,27 @@ function buildEnmsChatAnswerObligations(
       chartType: "metric",
       unit: "",
       reason: "使用者詢問 EnMS 最新一筆資料或資料更新時間。",
+    });
+  }
+
+  if (routeKeys.has("data_coverage")) {
+    add({
+      key: "data_coverage",
+      label: "資料收集天數 / 覆蓋範圍",
+      pageKey: "nlq",
+      capability: "data_coverage",
+      answerKind: "time_range",
+      requiredFactPaths: [
+        "facts.dataCoverage.firstDataAt",
+        "facts.dataCoverage.latestDataAt",
+        "facts.dataCoverage.coveredDateCount",
+        "facts.metrics.dataCoverageCoveredDateCount",
+      ],
+      chartRequired: false,
+      chartType: "metric",
+      unit: "days",
+      reason:
+        "使用者詢問授權電表時序資料的收集天數、資料起訖、覆蓋日數或時間跨度。",
     });
   }
 
@@ -2011,6 +2397,11 @@ function buildEnmsChatAnswerObligations(
         capability: "anomaly_root_cause",
         answerKind: "metric",
         requiredFactPaths: [
+          "facts.anomalyDeviationPoint.timestamp",
+          "facts.anomalyDeviationPoint.actualDemandKw",
+          "facts.anomalyDeviationPoint.baselineDemandKw",
+          "facts.anomalyDeviationPoint.deviationKw",
+          "facts.anomalyDeviationPoint.deviationPercent",
           "facts.metrics.deviationPercent",
           "chartSeries.actualDemand",
           "chartSeries.baseline",
@@ -2270,26 +2661,19 @@ function buildGeneralEnmsChatQueryPlan(reason: string): EnmsChatQueryPlan {
 
 function buildModelHintedRoutes(
   hints: EnmsChatModelPlannerHints | undefined,
-  deterministicRoutes: EnmsChatSemanticRoute[],
   normalizedMessage: string,
+  hintedRouteKeys = buildRoutesFromModelPlannerHints(hints),
 ): EnmsChatSemanticRoute[] {
-  const selectedCapabilities = hints?.selectedCapabilities ?? [];
-  const hintedRoutes = unique(selectedCapabilities)
+  return hintedRouteKeys
     .map((routeKey) =>
       getEnmsChatSemanticRouteByKey(routeKey as EnmsChatSemanticRouteKey)
     )
     .filter((route): route is EnmsChatSemanticRoute => route !== null)
+    // Model planner 負責語意主控；這裡只做 Graph/contract 層的單位安全驗證，
+    // 避免高信心模型把 kW 需量題與 kWh 排行等互斥 facts 混在同一個 plan。
     .filter((route) =>
       shouldKeepRouteForDominantMetricFamily(route, normalizedMessage)
     );
-
-  if (hintedRoutes.length > 0) {
-    return hintedRoutes;
-  }
-
-  return deterministicRoutes.filter((route) =>
-    shouldKeepRouteForDominantMetricFamily(route, normalizedMessage)
-  );
 }
 
 export function buildEnmsChatQueryPlan(
@@ -2297,6 +2681,11 @@ export function buildEnmsChatQueryPlan(
   modelHints?: EnmsChatModelPlannerHints,
 ): EnmsChatQueryPlan {
   const normalizedMessage = normalizeText(message);
+  const modelHintedRouteKeys = buildRoutesFromModelPlannerHints(modelHints);
+  const modelPlannerIsPrimary =
+    modelHints?.allowDbFacts === true &&
+    modelHints.confidence === "high" &&
+    modelHintedRouteKeys.length > 0;
   const deterministicRoutes = prioritizeEnmsChatRoutes(
     CHAT_SEMANTIC_ROUTES
       .map((route, index) => ({
@@ -2312,13 +2701,8 @@ export function buildEnmsChatQueryPlan(
     normalizedMessage,
   );
   const hintedRoutes =
-    modelHints?.allowDbFacts === true &&
-      modelHints.confidence !== "low"
-      ? buildModelHintedRoutes(
-        modelHints,
-        deterministicRoutes,
-        normalizedMessage,
-      )
+    modelHints?.allowDbFacts === true && modelHints.confidence !== "low"
+      ? buildModelHintedRoutes(modelHints, normalizedMessage, modelHintedRouteKeys)
       : [];
   const initiallyMatchedRoutes =
     hintedRoutes.length > 0 ? hintedRoutes : deterministicRoutes;
@@ -2326,9 +2710,14 @@ export function buildEnmsChatQueryPlan(
     normalizedMessage,
     initiallyMatchedRoutes,
   );
+  const enrichedSemanticProfile = mergeModelPlannerHintsIntoSemanticProfile(
+    semanticProfile,
+    modelPlannerIsPrimary ? modelHints : undefined,
+    normalizedMessage,
+  );
   const matchedRoutes = expandRoutesForSemanticProfile(
     initiallyMatchedRoutes,
-    semanticProfile,
+    enrichedSemanticProfile,
   );
   const selectedPageKeys = unique(
     matchedRoutes.map((route) => route.pageKey),
@@ -2387,14 +2776,14 @@ export function buildEnmsChatQueryPlan(
     })),
     maxContexts: 4,
     answerObligations,
-    semanticGoals: semanticProfile.semanticGoals,
-    requiredFactGroups: semanticProfile.requiredFactGroups,
-    answerQualityRules: semanticProfile.answerQualityRules,
+    semanticGoals: enrichedSemanticProfile.semanticGoals,
+    requiredFactGroups: enrichedSemanticProfile.requiredFactGroups,
+    answerQualityRules: enrichedSemanticProfile.answerQualityRules,
     sourceOfTruth: hintedRoutes.length > 0
-      ? "EnClaw model semantic planner -> Semantic Graph/RAGU contract -> EnMS API scoped ai_* facts"
-      : "EnClaw Capability Registry / Context Builder -> EnMS API scoped ai_* facts",
+      ? "EnMS 授權資料；已套用能管語意口徑驗證"
+      : "EnMS 授權資料；已套用能管能力目錄驗證",
     reason: hintedRoutes.length > 0
-      ? `模型語意 planner 已選出白名單 EnMS capabilities，並由 Semantic Graph/RAGU contract 正規化。${modelHints?.reason ? ` ${modelHints.reason}` : ""}`
+      ? `模型語意 planner 已選出白名單 EnMS 問題類型，並完成語意口徑驗證。${modelHints?.reason ? ` ${modelHints.reason}` : ""}`
       : "命中 EnMS domain capability，EnMS API 應依 selectedPageKeys 建立授權 scoped facts bundle。",
   });
 }
@@ -2403,6 +2792,12 @@ function prioritizeEnmsChatRoutes(
   routes: EnmsChatSemanticRoute[],
   normalizedMessage: string,
 ): EnmsChatSemanticRoute[] {
+  if (isEnmsDataCoverageQuestion(normalizedMessage)) {
+    return routes
+      .filter((route) => route.key === "data_coverage")
+      .toSorted(() => 0);
+  }
+
   if (isEnmsSiteMetadataQuestion(normalizedMessage)) {
     return routes
       .filter((route) =>
@@ -2595,6 +2990,18 @@ function getRouteFirstMentionIndex(
     return -1;
   }
 
+  if (route.key === "data_coverage") {
+    const regexMentions = [
+      /(?:資料|數據|時序|讀值|紀錄|記錄|電表資訊|電表資料|收集|採集|累積|涵蓋|覆蓋|coverage|data).{0,16}(?:幾天|幾日|多少天|多少日|多久|多長|總共有|共有|從哪天|到哪天|起訖|期間|時間跨度|資料量|筆數|日數|天數)/i,
+      /(?:幾天|幾日|多少天|多少日|多久|多長|總共有|共有|從哪天|到哪天|起訖|期間|時間跨度|資料量|筆數|日數|天數).{0,16}(?:資料|數據|時序|讀值|紀錄|記錄|電表資訊|電表資料|收集|採集|累積|涵蓋|覆蓋|coverage|data)/i,
+    ]
+      .map((regex) => normalizedMessage.search(regex))
+      .filter((index) => index >= 0);
+    if (regexMentions.length > 0) {
+      return Math.min(...regexMentions);
+    }
+  }
+
   if (route.key === "latest_data") {
     const regexMentions = [
       /(?:最新|最後|最近).{0,8}(?:資料|一筆|讀值|紀錄|記錄|時序|電表|db|資料庫|enms|meter|data)/i,
@@ -2718,7 +3125,7 @@ export function buildEnmsScopedBundleContextMessage(
       ? " 請用圖表呈現"
       : "";
   if (pageKey !== "nlq") {
-    return `${route.queryHint}${suffix}${presentationSuffix}`
+    return `${message} ${route.queryHint}${suffix}${presentationSuffix}`
       .replace(/\s+/g, " ")
       .trim();
   }

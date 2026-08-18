@@ -12,6 +12,7 @@ import {
   getEnmsPageDefinition,
   getEnmsPageKeys,
   getMissingRequiredFactGroups,
+  isEnmsDataCoverageQuestion,
   isEnmsLatestDataQuestion,
   matchesEnmsChatSemanticRoute,
   loadEnmsKnowledgeBundle,
@@ -76,6 +77,7 @@ describe("EnMS capability registry", () => {
     const routes = getEnmsChatSemanticRoutes();
 
     expect(routes.map((route) => route.key)).toEqual([
+      "data_coverage",
       "latest_data",
       "demand_risk",
       "today_demand_point",
@@ -106,6 +108,19 @@ describe("EnMS capability registry", () => {
     expect(isEnmsLatestDataQuestion("今天是幾月幾號？")).toBe(false);
     expect(isEnmsLatestDataQuestion("這份合約是幾月幾號到期？")).toBe(false);
     expect(isEnmsLatestDataQuestion("可以給我一個省電建議嗎？")).toBe(false);
+    for (const message of [
+      "電表資訊收集了幾天的資料？",
+      "目前本案場總共有幾日的資料？",
+      "這個廠區時序資料涵蓋多久？",
+      "目前有多少天電表讀值紀錄？",
+      "資料起訖時間和覆蓋日數是多少？",
+    ]) {
+      expect(isEnmsDataCoverageQuestion(message)).toBe(true);
+      expect(isEnmsLatestDataQuestion(message)).toBe(false);
+      expect(matchesEnmsChatSemanticRoute("data_coverage", message)).toBe(true);
+      expect(matchesEnmsChatSemanticRoute("site_metadata", message)).toBe(false);
+      expect(matchesEnmsChatSemanticRoute("latest_data", message)).toBe(false);
+    }
     expect(matchesEnmsChatSemanticRoute(
       "device_lookup",
       "迴路1 是對應哪個設備？",
@@ -156,6 +171,7 @@ describe("EnMS capability registry", () => {
     expect(graph.capabilityContracts.map((item) => item.key)).toEqual(
       expect.arrayContaining([
         "same_slot_demand",
+        "data_coverage",
         "daily_peak_demand_point",
         "period_energy_total",
         "meter_ranking",
@@ -282,6 +298,39 @@ describe("EnMS capability registry", () => {
         primaryPageKey: "nlq",
         selectedPageKeys: ["nlq"],
       });
+
+    for (const message of [
+      "電表資訊收集了幾天的資料？",
+      "目前本案場總共有幾日的資料？",
+      "這個廠區時序資料涵蓋多久？",
+      "目前有多少天電表讀值紀錄？",
+      "資料起訖時間和覆蓋日數是多少？",
+    ]) {
+      const dataCoveragePlan = buildEnmsChatQueryPlan(message);
+      expect(dataCoveragePlan).toMatchObject({
+        strategy: "single_scoped_facts",
+        allowDbFacts: true,
+        primaryPageKey: "nlq",
+        selectedPageKeys: ["nlq"],
+        needClarification: false,
+      });
+      expect(dataCoveragePlan.matchedRoutes[0]).toMatchObject({
+        key: "data_coverage",
+        pageKey: "nlq",
+      });
+      expect(dataCoveragePlan.selectedCapabilities).toContain("data_coverage");
+      expect(dataCoveragePlan.selectedCapabilities).not.toContain("site_metadata");
+      expect(dataCoveragePlan.selectedCapabilities).not.toContain("latest_data");
+      expect(dataCoveragePlan.semanticGoals).toContain("data_coverage_lookup");
+      expect(dataCoveragePlan.requiredFactGroups).toContain("data_coverage");
+      expect(dataCoveragePlan.answerObligations).toEqual([
+        expect.objectContaining({
+          key: "data_coverage",
+          unit: "days",
+          answerKind: "time_range",
+        }),
+      ]);
+    }
 
     expect(buildEnmsChatQueryPlan("目前需量是多少？"))
       .toMatchObject({
@@ -781,6 +830,72 @@ describe("EnMS capability registry", () => {
       primaryPageKey: "nlq",
       selectedPageKeys: ["nlq", "anomaly", "alert", "bench"],
     });
+  });
+
+  it("uses ChatPlan v2 semantic hints as primary routing before keyword fallback", () => {
+    const periodPlan = buildEnmsChatQueryPlan("幫我統計整個七月份到底用了多少電", {
+      selectedCapabilities: [],
+      answerObligationKeys: ["period_energy_total"],
+      semanticGoals: ["calendar_energy_total"],
+      requiredFactGroups: ["energy_calendar_period"],
+      answerQualityRules: [
+        "must_answer_requested_metric",
+        "must_not_mix_kw_and_kwh",
+        "must_not_use_meter_ranking_for_calendar_total",
+      ],
+      allowDbFacts: true,
+      allowGeneralAI: false,
+      needClarification: false,
+      confidence: "high",
+      reason: "模型語意 planner 判定為月份總用電。",
+    });
+
+    expect(periodPlan.sourceOfTruth).toContain("能管語意口徑驗證");
+    expect(periodPlan.selectedCapabilities).toContain("period_energy_total");
+    expect(periodPlan.selectedCapabilities).not.toContain("meter_ranking");
+    expect(periodPlan.answerObligations).toEqual([
+      expect.objectContaining({
+        key: "period_energy_total",
+        unit: "kWh",
+      }),
+    ]);
+
+    const wastePlan = buildEnmsChatQueryPlan("哪個地方最像是在白白燒電？", {
+      selectedCapabilities: ["efficiency_advice"],
+      semanticGoals: ["efficiency_opportunity"],
+      requiredFactGroups: [
+        "efficiency_opportunities",
+        "meter_energy_ranking",
+        "power_quality",
+        "off_hour_usage",
+        "device_mapping",
+      ],
+      answerQualityRules: [
+        "must_distinguish_consumption_from_waste",
+        "must_explain_main_meter_is_not_waste",
+      ],
+      allowDbFacts: true,
+      allowGeneralAI: false,
+      needClarification: false,
+      confidence: "high",
+      reason: "模型語意 planner 判定為浪費 / 節能機會問題。",
+    });
+
+    expect(wastePlan.selectedCapabilities).toEqual(
+      expect.arrayContaining([
+        "efficiency_advice",
+        "meter_ranking",
+        "anomaly_root_cause",
+        "device_lookup",
+      ]),
+    );
+    expect(wastePlan.semanticGoals).toContain("efficiency_opportunity");
+    expect(wastePlan.answerQualityRules).toEqual(
+      expect.arrayContaining([
+        "must_distinguish_consumption_from_waste",
+        "must_explain_main_meter_is_not_waste",
+      ]),
+    );
   });
 
   it("enables semantic graph contracts by default and still supports shadow mode", () => {

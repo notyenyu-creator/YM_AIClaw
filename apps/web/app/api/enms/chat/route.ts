@@ -143,10 +143,19 @@ type EnmsChatPlan = {
   confidence?: string;
   allowDbFacts?: boolean;
   allowGeneralAI?: boolean;
+  selectedCapabilities?: string[];
   primaryPageKey?: string;
   selectedPageKeys?: string[];
   maxContexts?: number;
   sourceOfTruth?: string;
+  semanticGoals?: string[];
+  requiredFactGroups?: string[];
+  answerQualityRules?: string[];
+  semanticGraph?: {
+    applied?: boolean;
+    complete?: boolean;
+    version?: string;
+  };
   answerObligations?: EnmsChatAnswerObligation[];
 };
 
@@ -542,6 +551,39 @@ function chatPlanSelectsPage(
   );
 }
 
+function hasUsableSemanticChatPlan(plan: EnmsChatPlan | null | undefined): boolean {
+  if (
+    plan?.contractVersion !== ENMS_CHAT_PLAN_CONTRACT_VERSION ||
+    plan.allowDbFacts !== true ||
+    plan.confidence !== "high" ||
+    !Array.isArray(plan.answerObligations) ||
+    plan.answerObligations.length === 0
+  ) {
+    return false;
+  }
+
+  if (
+    plan.registryVersion === "enms-api-local-fallback" ||
+    plan.registryVersion === "enms-api-data-gateway"
+  ) {
+    return false;
+  }
+
+  return (
+    plan.semanticGraph?.applied === true ||
+    plan.semanticGraph?.complete === true ||
+    (Array.isArray(plan.semanticGoals) && plan.semanticGoals.length > 0) ||
+    (Array.isArray(plan.requiredFactGroups) && plan.requiredFactGroups.length > 0) ||
+    (Array.isArray(plan.answerQualityRules) && plan.answerQualityRules.length > 0) ||
+    plan.answerObligations.some((obligation) =>
+      (Array.isArray(obligation.requiredFactPaths) &&
+        obligation.requiredFactPaths.length > 0) ||
+      Boolean(obligation.answerKind) ||
+      Boolean(obligation.unit),
+    )
+  );
+}
+
 function getSafeAnswerObligations(
   plan: EnmsChatPlan | null | undefined,
 ): EnmsChatAnswerObligation[] {
@@ -702,7 +744,7 @@ function buildCitationBlock(
 ): AIAssistantBlock {
   const sourceLabel: Record<EnmsAnswerSource, string> = {
     verified_query: "來源：EnMS 已驗證查詢結果。",
-    scoped_facts: "來源：EnMS 授權資料，由 EnClaw 分析；已套用口徑驗證。",
+    scoped_facts: "來源：EnMS 授權資料；已套用能管語意口徑驗證。",
     context_snapshot: "來源：EnMS 資料快照。",
     runtime: "來源：EnClaw 分析流程。",
     blocked: "來源：EnClaw 安全邊界；本次未執行資料查詢。",
@@ -986,12 +1028,16 @@ function selectBundleAnswerCandidates(
   const usedKinds = new Set<string>();
   const usedTexts = new Set<string>();
   const latestDataQuestion = isEnmsLatestDataQuestion(message);
+  const usePlanOnly = hasUsableSemanticChatPlan(body.chatPlan);
 
   for (const context of contexts) {
+    const planSelectsContext = chatPlanSelectsPage(
+      body.chatPlan,
+      context.pageKey,
+    );
     const canUseContext =
-      hasEnmsChatSemanticRouteForPage(message, context.pageKey) ||
-      (isScopedPresentationRequest(message) &&
-        chatPlanSelectsPage(body.chatPlan, context.pageKey));
+      planSelectsContext ||
+      (!usePlanOnly && hasEnmsChatSemanticRouteForPage(message, context.pageKey));
     if (!canUseContext) {
       continue;
     }
@@ -1004,6 +1050,7 @@ function selectBundleAnswerCandidates(
       message: scopedQuestion,
       context,
       scope: body.scope ?? undefined,
+      chatPlan: body.chatPlan ?? undefined,
     });
     const textKey = scopedAnswer.text.replace(/\s+/g, " ").trim();
     if (scopedAnswer.answerKind === "missing") {
@@ -1060,15 +1107,14 @@ async function buildScopedFactsBundleAnswer(
   }
 
   const candidates = selectBundleAnswerCandidates(body, message, contexts);
+  const usePlanOnly = hasUsableSemanticChatPlan(body.chatPlan);
   if (
     candidates.length === 0 &&
-    contexts.every(
-      (context) =>
-        !hasEnmsChatSemanticRouteForPage(message, context.pageKey) &&
-        !(
-          isScopedPresentationRequest(message) &&
-          chatPlanSelectsPage(body.chatPlan, context.pageKey)
-        ),
+    contexts.every((context) =>
+      usePlanOnly
+        ? !chatPlanSelectsPage(body.chatPlan, context.pageKey)
+        : !chatPlanSelectsPage(body.chatPlan, context.pageKey) &&
+          !hasEnmsChatSemanticRouteForPage(message, context.pageKey),
     )
   ) {
     return buildGeneralNoMatchAnswer(body, preflight, message, signal);
@@ -1106,6 +1152,7 @@ async function buildScopedFactsBundleAnswer(
       message: buildScopedFactsQuestion(body, message, primaryContext.pageKey),
       context: primaryContext,
       scope: body.scope ?? undefined,
+      chatPlan: body.chatPlan ?? undefined,
     });
   let text = candidates.length > 0
     ? buildBundleAnswerText(candidates)
@@ -1263,6 +1310,7 @@ async function buildScopedFactsAnswer(
     message: buildScopedFactsQuestion(body, message, scopedContext.pageKey),
     context: scopedContext,
     scope: body.scope ?? undefined,
+    chatPlan: body.chatPlan ?? undefined,
   });
   let text = scopedAnswer.text;
   let structuredModelAttempted = false;

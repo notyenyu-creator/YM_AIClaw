@@ -6,7 +6,7 @@ import type {
   EnmsPageKey,
 } from "./enms-capability-registry";
 
-export const ENMS_SEMANTIC_GRAPH_VERSION = "2026-08-14.1";
+export const ENMS_SEMANTIC_GRAPH_VERSION = "2026-08-17.1";
 
 export type EnmsSemanticGraphNodeKind =
   | "capability"
@@ -91,6 +91,12 @@ const GRAPH_NODES: EnmsSemanticGraphNode[] = [
     kind: "capability",
     label: "最新資料時間",
     description: "回答授權範圍內最新資料時間與資料覆蓋狀態，不推測不存在的資料。",
+  },
+  {
+    id: "capability:data_coverage",
+    kind: "capability",
+    label: "資料收集天數 / 覆蓋範圍",
+    description: "回答授權電表時序資料的起訖、覆蓋日數、樣本數與電表數，不用最新資料取樣視窗代替。",
   },
   {
     id: "capability:same_slot_demand",
@@ -231,6 +237,12 @@ const GRAPH_NODES: EnmsSemanticGraphNode[] = [
     description: "kWh 是用電量，可在同一 scope 與同一時間窗內加總。",
   },
   {
+    id: "metric:data_coverage_days",
+    kind: "metric",
+    label: "資料覆蓋日數",
+    description: "以授權時序資料在部署本地時區內有資料的日曆日數計算，不等同某個頁面的查詢視窗。",
+  },
+  {
     id: "metric:power_factor",
     kind: "metric",
     label: "功率因數",
@@ -271,6 +283,12 @@ const GRAPH_NODES: EnmsSemanticGraphNode[] = [
     kind: "formula",
     label: "同窗用電加總",
     description: "總用電必須在相同授權範圍與相同時間窗內加總 kWh。",
+  },
+  {
+    id: "formula:data_coverage_local_dates",
+    kind: "formula",
+    label: "本地日曆日覆蓋",
+    description: "資料覆蓋日數 = COUNT(DISTINCT recorded_at 依部署時區轉換後的本地日期)。",
   },
   {
     id: "formula:pf_avg_min_rule",
@@ -331,6 +349,10 @@ const GRAPH_NODES: EnmsSemanticGraphNode[] = [
 const GRAPH_EDGES: EnmsSemanticGraphEdge[] = [
   { from: "capability:latest_data", to: "fact_path:scoped_facts", relation: "requires_fact" },
   { from: "capability:latest_data", to: "relation:site_scope", relation: "governed_by" },
+  { from: "capability:data_coverage", to: "metric:data_coverage_days", relation: "answers_with" },
+  { from: "capability:data_coverage", to: "formula:data_coverage_local_dates", relation: "computed_by" },
+  { from: "capability:data_coverage", to: "fact_path:scoped_facts", relation: "requires_fact" },
+  { from: "capability:data_coverage", to: "relation:site_scope", relation: "governed_by" },
   { from: "capability:same_slot_demand", to: "metric:demand_kw", relation: "answers_with" },
   { from: "capability:same_slot_demand", to: "formula:demand_max_not_sum", relation: "computed_by" },
   { from: "capability:same_slot_demand", to: "chart:demand_line", relation: "renders_as" },
@@ -408,6 +430,32 @@ const CAPABILITY_CONTRACTS: EnmsSemanticGraphCapabilityContract[] = [
     ],
     verifierRules: [
       "latest_data 必須回答授權範圍內資料時間，不可使用模型猜測日期。",
+    ],
+  },
+  {
+    key: "data_coverage",
+    pageKey: "nlq",
+    obligationKeys: ["data_coverage"],
+    units: ["days"],
+    requiredFactPaths: [
+      "facts.dataCoverage.firstDataAt",
+      "facts.dataCoverage.latestDataAt",
+      "facts.dataCoverage.coveredDateCount",
+      "facts.metrics.dataCoverageCoveredDateCount",
+      "facts.metrics.dataCoverageSampleCount",
+      "facts.metrics.dataCoverageMeterCount",
+    ],
+    chartTypes: ["metric"],
+    knowledgeRefs: [
+      "skills/enms/SKILL.md",
+      "skills/enms/reference/feature-guide.md",
+    ],
+    graphPaths: [
+      "capability:data_coverage -> metric:data_coverage_days -> formula:data_coverage_local_dates -> fact_path:scoped_facts -> relation:site_scope",
+    ],
+    verifierRules: [
+      "data_coverage 必須回答授權電表時序資料的起訖與有資料日數，不可使用 latest_data sample window 代替。",
+      "data_coverage 必須標示它是授權語意層的資料覆蓋，不是案場 metadata 或目前分頁 7 日 / 30 日視窗。",
     ],
   },
   {
@@ -696,6 +744,11 @@ const CAPABILITY_CONTRACTS: EnmsSemanticGraphCapabilityContract[] = [
     obligationKeys: ["anomaly_deviation_point"],
     units: ["kW", "%"],
     requiredFactPaths: [
+      "facts.anomalyDeviationPoint.timestamp",
+      "facts.anomalyDeviationPoint.actualDemandKw",
+      "facts.anomalyDeviationPoint.baselineDemandKw",
+      "facts.anomalyDeviationPoint.deviationKw",
+      "facts.anomalyDeviationPoint.deviationPercent",
       "facts.metrics.deviationPercent",
       "chartSeries.actualDemand",
       "chartSeries.baseline",
@@ -1020,6 +1073,7 @@ const CONTRACT_BY_KEY = new Map(
 
 const REQUIRED_GRAPH_CONTRACT_KEYS: EnmsSemanticGraphCapabilityKey[] = [
   "latest_data",
+  "data_coverage",
   "site_metadata",
   "device_lookup",
   "meter_ranking",

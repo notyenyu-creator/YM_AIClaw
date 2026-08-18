@@ -48,6 +48,20 @@ export type EnmsScopedAnswerScope = {
   powerAccountIds?: Array<number | string>;
 };
 
+export type EnmsScopedAnswerChatPlan = {
+  contractVersion?: string;
+  answerObligations?: Array<{
+    key?: string;
+    capability?: string;
+    pageKey?: string;
+    answerKind?: string;
+    requiredFactPaths?: string[];
+    chartRequired?: boolean;
+    chartType?: "bar" | "line" | "ranking" | "metric";
+    unit?: string;
+  }>;
+};
+
 export type EnmsScopedAnswerResult = {
   text: string;
   answerKind:
@@ -137,6 +151,71 @@ type CommonMetricDefinition = {
 const NUMBER_FORMAT = new Intl.NumberFormat("zh-TW", {
   maximumFractionDigits: 3,
 });
+const ENMS_CHAT_PLAN_CONTRACT_VERSION = "enms.ai.chat-plan.v2";
+
+function collectPlanObligationKeys(
+  chatPlan: EnmsScopedAnswerChatPlan | null | undefined,
+): Set<string> {
+  if (
+    chatPlan?.contractVersion !== ENMS_CHAT_PLAN_CONTRACT_VERSION ||
+    !Array.isArray(chatPlan.answerObligations)
+  ) {
+    return new Set<string>();
+  }
+
+  return new Set(
+    chatPlan.answerObligations
+      .flatMap((obligation) => [
+        sanitizeText(obligation?.key),
+        sanitizeText(obligation?.capability),
+      ])
+      .filter(Boolean)
+      .map((key) => key.toLowerCase()),
+  );
+}
+
+function collectPlanAnswerObligationKeys(
+  chatPlan: EnmsScopedAnswerChatPlan | null | undefined,
+): string[] {
+  if (
+    chatPlan?.contractVersion !== ENMS_CHAT_PLAN_CONTRACT_VERSION ||
+    !Array.isArray(chatPlan.answerObligations)
+  ) {
+    return [];
+  }
+
+  const selected: string[] = [];
+  for (const obligation of chatPlan.answerObligations) {
+    const key = sanitizeText(obligation?.key).toLowerCase();
+    if (!key || selected.includes(key)) {
+      continue;
+    }
+    selected.push(key);
+  }
+  return selected;
+}
+
+function allowsObligation(
+  obligationKeys: Set<string>,
+  allowedKeys: string[],
+): boolean {
+  if (obligationKeys.size === 0) {
+    return true;
+  }
+
+  return allowedKeys.some((key) => obligationKeys.has(key.toLowerCase()));
+}
+
+function resolvePowerFactorScopeLabel(context: EnmsScopedAnswerContext): string {
+  if (context.pageKey === "anomaly") {
+    return "焦點異常電表 / 異常根因分頁";
+  }
+  if (context.pageKey === "eff") {
+    return "全場能效總覽 / 能效節能分頁";
+  }
+
+  return "目前授權範圍";
+}
 
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -390,6 +469,82 @@ function buildMetricChartBlock(
       },
     ],
   };
+}
+
+function readChartPointValues(
+  context: EnmsScopedAnswerContext,
+  keyPatterns: RegExp[],
+): Array<{ label: string; timestamp: string; value: number }> {
+  return (context.chartSeries ?? [])
+    .filter((series) =>
+      keyPatterns.some((pattern) =>
+        pattern.test(`${series.key ?? ""} ${series.label ?? ""}`),
+      ),
+    )
+    .flatMap((series) =>
+      (series.points ?? [])
+        .map((point) => ({
+          label: sanitizeText(point.label),
+          timestamp: sanitizeText(point.timestamp),
+          value:
+            typeof point.value === "number" && Number.isFinite(point.value)
+              ? point.value
+              : null,
+        }))
+        .filter((point): point is { label: string; timestamp: string; value: number } =>
+          point.value !== null,
+        ),
+    );
+}
+
+function formatChartPointTime(point: { label: string; timestamp: string }): string {
+  return point.label || formatTaipeiTimestamp(point.timestamp) || "未提供時間";
+}
+
+function requestedMonthDay(message: string): { month: number; day: number } | null {
+  const match = message.match(
+    /(?:20\d{2}\s*(?:年|[-/])\s*)?(\d{1,2})\s*(?:月|[-/])\s*(\d{1,2})\s*(?:日|號)?/,
+  );
+  if (!match) {
+    return null;
+  }
+
+  const month = Number(match[1]);
+  const day = Number(match[2]);
+  return Number.isFinite(month) && Number.isFinite(day)
+    ? { month, day }
+    : null;
+}
+
+function chartPointMatchesMonthDay(
+  point: { label: string; timestamp: string },
+  monthDay: { month: number; day: number },
+): boolean {
+  const tokens = [point.label, point.timestamp].filter(Boolean);
+  return tokens.some((token) => {
+    const date = new Date(token);
+    if (!Number.isNaN(date.getTime())) {
+      const month = Number(
+        date.toLocaleString("en-US", {
+          timeZone: "Asia/Taipei",
+          month: "numeric",
+        }),
+      );
+      const day = Number(
+        date.toLocaleString("en-US", {
+          timeZone: "Asia/Taipei",
+          day: "numeric",
+        }),
+      );
+      return month === monthDay.month && day === monthDay.day;
+    }
+
+    const escapedMonth = String(monthDay.month).padStart(2, "0");
+    const escapedDay = String(monthDay.day).padStart(2, "0");
+    return new RegExp(
+      `(?:^|[^0-9])(?:${monthDay.month}|${escapedMonth})(?:月|[-/])(?:${monthDay.day}|${escapedDay})(?:日|號)?`,
+    ).test(token);
+  });
 }
 
 function findRequestedMeterRole(message: string): RequestedMeterRole | null {
@@ -751,11 +906,21 @@ function answerRanking(
   message: string,
   context: EnmsScopedAnswerContext,
   facts: Record<string, unknown>,
+  options: {
+    allowMeterRanking: boolean;
+    allowSiteRanking: boolean;
+    forceRanking?: boolean;
+  } = {
+    allowMeterRanking: true,
+    allowSiteRanking: true,
+    forceRanking: false,
+  },
 ): EnmsScopedAnswerResult | null {
   if (isEnmsDeviceLookupQuestion(message)) {
     return null;
   }
   if (
+    !options.forceRanking &&
     !/排名|排行|最高|最低|最耗電|最費電|耗電最高|用電最高|場域比較|哪個場域|哪個迴路.{0,8}(?:費電|耗電|用電)|(?:費電|耗電|用電).{0,8}迴路/i
       .test(message)
   ) {
@@ -826,13 +991,25 @@ function answerRanking(
     /最耗電|最費電|耗電|費電|用電|耗能|kWh/i.test(message);
   const asksDemandRanking =
     asksMeterRanking && /需量|kw|demand/i.test(message) && !asksConsumptionRanking;
+  const siteSources = options.allowSiteRanking ? [siteRankingSource] : [];
+  const meterSources = options.allowMeterRanking
+    ? asksDemandRanking
+      ? meterDemandRankingSources
+      : [...meterRankingSources, ...chartRankingSources]
+    : [];
   const sources = asksDemandRanking
-    ? meterDemandRankingSources
+    ? meterSources
     : asksMeterRanking
-    ? [...meterRankingSources, ...chartRankingSources, siteRankingSource]
-    : [siteRankingSource, ...meterRankingSources, ...chartRankingSources];
+      ? [...meterSources, ...siteSources]
+      : [...siteSources, ...meterSources];
   const valueUnit = asksDemandRanking ? "kW" : "kWh";
-  const missingSubject = asksDemandRanking ? "迴路 / 電表需量排名" : "排名";
+  const missingSubject = asksDemandRanking
+    ? "迴路 / 電表需量排名"
+    : options.allowSiteRanking && !options.allowMeterRanking
+      ? "場域排名"
+      : options.allowMeterRanking && !options.allowSiteRanking
+        ? "迴路 / 電表排名"
+        : "排名";
 
   const source = sources.find((candidate) => candidate.values.length > 0);
   if (!source) {
@@ -867,13 +1044,17 @@ function answerRanking(
       ? [
           {
             type: "chart",
-            label: asksMeterRanking ? "迴路 / 電表排名" : "場域 Benchmarking 排名",
+            label: options.allowMeterRanking && !options.allowSiteRanking
+              ? "迴路 / 電表排名"
+              : "場域 Benchmarking 排名",
             chartType: "bar",
             unit: valueUnit,
             series: [
               {
                 key: source.path.replace(/[^a-z0-9_.-]/gi, "_").slice(0, 80),
-                label: asksMeterRanking ? "迴路 / 電表排名" : "場域排名",
+                label: options.allowMeterRanking && !options.allowSiteRanking
+                  ? "迴路 / 電表排名"
+                  : "場域排名",
                 type: "bar",
                 points: chartPoints,
               },
@@ -1112,6 +1293,88 @@ function answerTimeRange(
   };
 }
 
+function answerDataCoverage(
+  message: string,
+  context: EnmsScopedAnswerContext,
+  facts: Record<string, unknown>,
+): EnmsScopedAnswerResult | null {
+  const normalizedMessage = message.toLowerCase();
+  const hasDataAnchor =
+    /資料|數據|時序|讀值|紀錄|記錄|電表資訊|電表資料|收集|採集|累積|涵蓋|覆蓋|coverage|data/.test(
+      normalizedMessage,
+    );
+  const hasCoverageIntent =
+    /幾天|幾日|多少天|多少日|多久|多長|總共有|共有|從哪天|到哪天|起訖|期間|時間跨度|資料量|筆數|日數|天數|date range|time range|how many days/.test(
+      normalizedMessage,
+    );
+  const asksLatestOnly =
+    /最新一筆|最近一筆|最後一筆|更新到|截至/.test(normalizedMessage);
+  if (!hasDataAnchor || !hasCoverageIntent || asksLatestOnly) {
+    return null;
+  }
+
+  const dataCoverage = asRecord(getCaseInsensitive(facts, "dataCoverage"));
+  const metrics = asRecord(getCaseInsensitive(facts, "metrics"));
+  const firstDataAt =
+    getText(dataCoverage, "firstDataAtText") ??
+    getText(metrics, "dataCoverageFirstDataAt") ??
+    formatTaipeiTimestamp(getText(dataCoverage, "firstDataAt"));
+  const latestDataAt =
+    getText(dataCoverage, "latestDataAtText") ??
+    getText(metrics, "dataCoverageLatestDataAt") ??
+    formatTaipeiTimestamp(getText(dataCoverage, "latestDataAt"));
+  const coveredDateCount =
+    getNumber(dataCoverage, "coveredDateCount") ??
+    getNumber(metrics, "dataCoverageCoveredDateCount");
+  if (!firstDataAt || !latestDataAt || coveredDateCount === null) {
+    return buildMissingAnswer(context, "資料收集天數 / 覆蓋範圍");
+  }
+
+  const calendarSpanDays =
+    getNumber(dataCoverage, "calendarSpanDays") ??
+    getNumber(metrics, "dataCoverageCalendarSpanDays");
+  const sampleCount =
+    getNumber(dataCoverage, "sampleCount") ??
+    getNumber(metrics, "dataCoverageSampleCount");
+  const meterCount =
+    getNumber(dataCoverage, "meterCount") ??
+    getNumber(metrics, "dataCoverageMeterCount");
+  const timeZone =
+    getText(dataCoverage, "timeZone") ??
+    getText(metrics, "dataCoverageTimeZone");
+  const evidence = [
+    meterCount !== null ? `涵蓋電表迴路：${formatNumber(meterCount, "個")}` : "",
+    sampleCount !== null ? `15 分鐘資料：${formatNumber(sampleCount, "筆")}` : "",
+  ].filter(Boolean);
+  const spanLine =
+    calendarSpanDays !== null
+      ? `起訖日期跨度：${formatNumber(calendarSpanDays, "天")}`
+      : "";
+  const gapLine =
+    calendarSpanDays !== null && calendarSpanDays > coveredDateCount
+      ? "提醒：日期跨度大於有資料日數，代表中間可能有日期沒有資料或未納入目前授權範圍。"
+      : "";
+
+  return {
+    answerKind: "time_range",
+    matchedFactPaths: [
+      "facts.dataCoverage.firstDataAt",
+      "facts.dataCoverage.latestDataAt",
+      "facts.dataCoverage.coveredDateCount",
+    ],
+    text: [
+      `授權範圍內電表時序資料從 ${firstDataAt} 到 ${latestDataAt}。`,
+      `有資料的本地日曆日：${formatNumber(coveredDateCount, "天")}`,
+      spanLine,
+      evidence.join("\n"),
+      gapLine,
+      `口徑：以 EnMS 授權語意層統計${timeZone ? `，依部署時區 ${timeZone} 計算本地日曆日` : ""}；不是目前分頁的 7 日或 30 日取樣視窗。`,
+    ]
+      .filter(Boolean)
+      .join("\n"),
+  };
+}
+
 function answerLatestDataAt(
   message: string,
   context: EnmsScopedAnswerContext,
@@ -1156,6 +1419,145 @@ function answerLatestDataAt(
   };
 }
 
+function answerDailyConsumptionPoint(
+  message: string,
+  context: EnmsScopedAnswerContext,
+): EnmsScopedAnswerResult | null {
+  const points = readChartPointValues(context, [
+    /dailyConsumption/i,
+    /每日用電|日用電|daily.*energy/i,
+  ]);
+  if (points.length === 0) {
+    return buildMissingAnswer(context, "每日用電量");
+  }
+
+  const targetMonthDay = requestedMonthDay(message);
+  const matchedPoint = targetMonthDay
+    ? points.find((point) => chartPointMatchesMonthDay(point, targetMonthDay))
+    : null;
+  const selectedPoint =
+    matchedPoint ??
+    points
+      .toSorted((left, right) => right.value - left.value)
+      .at(0);
+  if (!selectedPoint) {
+    return buildMissingAnswer(context, "每日用電量");
+  }
+
+  const subject = matchedPoint ? "指定日期每日用電量" : "最高用電日";
+  const chartBlocks = isChartRequested(message)
+    ? [
+        {
+          type: "chart" as const,
+          label: "每日用電量",
+          chartType: "line" as const,
+          unit: "kWh",
+          series: [
+            {
+              key: "chartSeries.dailyConsumption",
+              label: "每日用電量",
+              type: "line" as const,
+              points: points.slice(0, 60).map((point) => ({
+                label: formatChartPointTime(point),
+                value: point.value,
+                timestamp: point.timestamp || null,
+                tone: point === selectedPoint ? "danger" : "blue",
+              })),
+            },
+          ],
+        },
+      ]
+    : [];
+
+  return {
+    answerKind: "metric",
+    matchedFactPaths: ["chartSeries.dailyConsumption"],
+    blocks: chartBlocks,
+    text: [
+      `${subject}：${formatChartPointTime(selectedPoint)}，約 ${formatNumber(selectedPoint.value, "kWh")}。`,
+      `資料時間範圍：${sanitizeText(context.evidence?.timeRange) || "EnMS 未提供"}。`,
+      "口徑：每日用電量 = 同一本地日曆日內 15 分鐘 TotalConsumption kWh 加總；kWh 可加總。",
+    ].join("\n"),
+  };
+}
+
+function answerDailyPeakDemandPoint(
+  message: string,
+  context: EnmsScopedAnswerContext,
+): EnmsScopedAnswerResult | null {
+  const points = readChartPointValues(context, [
+    /dailyPeakDemand/i,
+    /每日最高需量|最高需量/i,
+  ]);
+  if (points.length === 0) {
+    return null;
+  }
+
+  const targetMonthDay = requestedMonthDay(message);
+  const matchedPoint = targetMonthDay
+    ? points.find((point) => chartPointMatchesMonthDay(point, targetMonthDay))
+    : null;
+  const selectedPoint =
+    matchedPoint ??
+    points
+      .toSorted((left, right) => right.value - left.value)
+      .at(0);
+  if (!selectedPoint) {
+    return buildMissingAnswer(context, "每日最高需量");
+  }
+
+  const subject = matchedPoint ? "指定日期最高需量" : "最高需量日";
+  return {
+    answerKind: "demand",
+    matchedFactPaths: ["chartSeries.dailyPeakDemand"],
+    text: [
+      `${subject}：${formatChartPointTime(selectedPoint)}，約 ${formatNumber(selectedPoint.value, "kW")}。`,
+      `資料時間範圍：${sanitizeText(context.evidence?.timeRange) || "EnMS 未提供"}。`,
+      "口徑：每日最高需量 = 同一本地日曆日內 15 分鐘需量取最大值；需量是 kW 強度，不可加總。",
+    ].join("\n"),
+  };
+}
+
+function answerAnomalyDeviationPoint(
+  context: EnmsScopedAnswerContext,
+  facts: Record<string, unknown>,
+): EnmsScopedAnswerResult | null {
+  const point = asRecord(getCaseInsensitive(facts, "anomalyDeviationPoint"));
+  const actualDemandKw = getNumber(point, "actualDemandKw");
+  const baselineDemandKw = getNumber(point, "baselineDemandKw");
+  const deltaKw = getNumber(point, "deltaKw");
+  const deviationPercent = getNumber(point, "deviationPercent");
+  const timestamp =
+    getText(point, "label") ||
+    getText(point, "timestampText") ||
+    formatTaipeiTimestamp(getText(point, "timestamp"));
+  const meterLabel = getText(point, "meterLabel");
+
+  if (
+    actualDemandKw === null ||
+    baselineDemandKw === null ||
+    deltaKw === null ||
+    deviationPercent === null
+  ) {
+    return buildMissingAnswer(context, "異常最大偏離點");
+  }
+
+  return {
+    answerKind: "metric",
+    matchedFactPaths: ["facts.anomalyDeviationPoint"],
+    text: [
+      `異常最大偏離點：${timestamp || "未提供時間"}。`,
+      meterLabel ? `對象：${meterLabel}。` : "",
+      `實際需量：${formatNumber(actualDemandKw, "kW")}；歷史基準：${formatNumber(baselineDemandKw, "kW")}。`,
+      `偏離量：${formatNumber(deltaKw, "kW")}；偏離比例：${formatNumber(deviationPercent, "%")}。`,
+      `資料時間範圍：${sanitizeText(context.evidence?.timeRange) || "EnMS 未提供"}。`,
+      "口徑：偏離比例 = (實際需量 - 歷史基準需量) / 歷史基準需量 × 100；此題不可用平均功率因數取代。",
+    ]
+      .filter(Boolean)
+      .join("\n"),
+  };
+}
+
 function answerCommonMetric(
   message: string,
   context: EnmsScopedAnswerContext,
@@ -1165,9 +1567,16 @@ function answerCommonMetric(
   const definitions: CommonMetricDefinition[] = [
     {
       matches: (value: string) => /總用電|用電量|耗電|能耗/i.test(value),
-      paths: ["totalConsumptionKwh", "totalConsumptionKwh30d"],
+      paths: [
+        "periodEnergyTotalKwh",
+        "totalConsumptionKwh",
+        "totalConsumptionKwh30d",
+      ],
       label: "總用電",
       unit: "kWh",
+      pathLabels: {
+        periodEnergyTotalKwh: "指定期間總用電",
+      },
     },
     {
       matches: (value: string) => /功率因數|功因/i.test(value),
@@ -1240,7 +1649,15 @@ function answerCommonMetric(
                 ),
               ]
             : [],
-          text: `${label}：${formatNumber(value, unit)}。\n\n資料時間範圍：${sanitizeText(context.evidence?.timeRange) || "EnMS 未提供"}。`,
+          text: [
+            `${label}：${formatNumber(value, unit)}。`,
+            /功率因數|功因/.test(label)
+              ? `口徑範圍：${resolvePowerFactorScopeLabel(context)}。`
+              : "",
+            `資料時間範圍：${sanitizeText(context.evidence?.timeRange) || "EnMS 未提供"}。`,
+          ]
+            .filter(Boolean)
+            .join("\n\n"),
         };
       }
     }
@@ -1322,18 +1739,244 @@ function answerCard(
   };
 }
 
+function getObligationDisplayName(key: string): string {
+  switch (key) {
+    case "latest_data":
+      return "最新資料時間";
+    case "data_coverage":
+      return "資料收集天數 / 覆蓋範圍";
+    case "site_metadata":
+      return "案場 / 場域資訊";
+    case "device_lookup":
+      return "設備 / 電表對應";
+    case "daily_consumption_point":
+      return "每日用電量";
+    case "period_energy_total":
+      return "指定期間總用電";
+    case "total_energy_30d":
+      return "最近 30 天總用電";
+    case "same_slot_demand":
+      return "同時段需量";
+    case "daily_peak_demand_point":
+      return "指定日期最高需量";
+    case "today_demand_point":
+      return "最新資料日 24 小時需量";
+    case "monthly_peak_demand_point":
+      return "本月最高需量";
+    case "peak_demand_30d":
+      return "最高需量 / 契約風險";
+    case "forecast_readiness":
+      return "Forecast 準備度";
+    case "anomaly_deviation_point":
+      return "異常最大偏離點";
+    case "anomaly_summary":
+    case "anomaly_root_cause":
+      return "異常根因摘要";
+    case "avg_power_factor_30d":
+    case "efficiency_power_factor":
+      return "功率因數";
+    case "site_benchmarking":
+      return "多場域比較";
+    case "meter_ranking":
+      return "迴路 / 電表用電排行";
+    case "billing":
+      return "電費 / 帳單";
+    case "carbon_emission":
+      return "碳排放";
+    case "efficiency_summary":
+    case "efficiency_advice":
+      return "節能 / 能效建議";
+    case "alert_governance":
+      return "Alert 智能治理";
+    default:
+      return "EnMS 指標";
+  }
+}
+
+function buildFocusedObligationQuestion(message: string, key: string): string {
+  const suffixByKey: Record<string, string> = {
+    latest_data: "最新資料時間",
+    data_coverage: "資料涵蓋天數 資料起訖",
+    site_metadata: "目前案場 場域 公司",
+    device_lookup: "設備 電表 迴路 對應",
+    daily_consumption_point: "每日用電量 kWh",
+    period_energy_total: "指定月份 總用電 kWh",
+    total_energy_30d: "最近 30 天總用電 kWh",
+    same_slot_demand: "同時段需量 kW",
+    daily_peak_demand_point: "指定日期最高需量 kW",
+    today_demand_point: "最新資料日 24 小時需量 kW",
+    monthly_peak_demand_point: "本月最高需量 kW",
+    peak_demand_30d: "最高需量 契約容量 超約 kW",
+    forecast_readiness: "Forecast 準備度",
+    anomaly_deviation_point: "異常最大偏離點 實際值 基準 差值 百分比",
+    anomaly_summary: "異常根因摘要",
+    anomaly_root_cause: "異常根因摘要",
+    avg_power_factor_30d: "平均功率因數 低功因",
+    efficiency_power_factor: "能效分頁 平均功率因數",
+    site_benchmarking: "多場域 比較 排名 kWh",
+    meter_ranking: "迴路 電表 用電排行 kWh",
+    billing: "電費 帳單 費率",
+    carbon_emission: "碳排放 kgCO2e",
+    efficiency_summary: "能效 節能 摘要",
+    efficiency_advice: "節能建議 最浪費 改善機會",
+    alert_governance: "Alert 告警治理",
+  };
+  const suffix = suffixByKey[key];
+  return suffix ? `${message}\n${suffix}` : message;
+}
+
+function answerForExplicitObligation(
+  key: string,
+  message: string,
+  context: EnmsScopedAnswerContext,
+  facts: Record<string, unknown>,
+  scope?: EnmsScopedAnswerScope,
+): EnmsScopedAnswerResult | null {
+  const focusedMessage = buildFocusedObligationQuestion(message, key);
+  switch (key) {
+    case "latest_data":
+      return answerLatestDataAt(focusedMessage, context, facts);
+    case "data_coverage":
+      return answerDataCoverage(focusedMessage, context, facts);
+    case "site_metadata":
+      return answerSiteMetadata(focusedMessage, context, facts);
+    case "device_lookup":
+      return answerDeviceLookup(focusedMessage, context, facts);
+    case "daily_consumption_point":
+      return answerDailyConsumptionPoint(focusedMessage, context);
+    case "period_energy_total":
+    case "total_energy_30d":
+      return answerCommonMetric(focusedMessage, context, facts);
+    case "same_slot_demand":
+    case "today_demand_point":
+    case "peak_demand_30d":
+    case "forecast_readiness":
+      return answerDemand(focusedMessage, context, facts);
+    case "daily_peak_demand_point":
+    case "monthly_peak_demand_point":
+      return answerDailyPeakDemandPoint(focusedMessage, context) ??
+        answerDemand(focusedMessage, context, facts);
+    case "anomaly_deviation_point":
+      return answerAnomalyDeviationPoint(context, facts);
+    case "anomaly_summary":
+    case "anomaly_root_cause":
+      return answerCommonMetric(focusedMessage, context, facts) ??
+        answerCard(focusedMessage, context);
+    case "avg_power_factor_30d":
+    case "efficiency_power_factor":
+      return answerCommonMetric(focusedMessage, context, facts);
+    case "site_benchmarking":
+      return answerRanking(focusedMessage, context, facts, {
+        allowMeterRanking: false,
+        allowSiteRanking: true,
+        forceRanking: true,
+      });
+    case "meter_ranking":
+      return answerRanking(focusedMessage, context, facts, {
+        allowMeterRanking: true,
+        allowSiteRanking: false,
+        forceRanking: true,
+      });
+    case "billing":
+      return answerBilling(focusedMessage, context, facts);
+    case "carbon_emission":
+    case "efficiency_summary":
+    case "efficiency_advice":
+      return answerCommonMetric(focusedMessage, context, facts) ??
+        answerEfficiencyOpportunities(focusedMessage, context, facts);
+    case "alert_governance":
+      return answerCommonMetric(focusedMessage, context, facts) ??
+        answerCard(focusedMessage, context);
+    default:
+      return scope ? answerAccount(focusedMessage, context, facts, scope) : null;
+  }
+}
+
+function buildExplicitObligationAnswer(
+  message: string,
+  context: EnmsScopedAnswerContext,
+  facts: Record<string, unknown>,
+  chatPlan: EnmsScopedAnswerChatPlan | null | undefined,
+  scope?: EnmsScopedAnswerScope,
+): EnmsScopedAnswerResult | null {
+  const obligationKeys = collectPlanAnswerObligationKeys(chatPlan);
+  if (obligationKeys.length <= 1) {
+    return null;
+  }
+
+  const answers: Array<{
+    key: string;
+    answer: EnmsScopedAnswerResult;
+  }> = [];
+  const usedText = new Set<string>();
+  for (const key of obligationKeys.slice(0, 6)) {
+    const answer = answerForExplicitObligation(
+      key,
+      message,
+      context,
+      facts,
+      scope,
+    );
+    if (!answer || answer.answerKind === "missing") {
+      continue;
+    }
+    const normalizedText = answer.text.replace(/\s+/g, " ").trim();
+    if (!normalizedText || usedText.has(normalizedText)) {
+      continue;
+    }
+    usedText.add(normalizedText);
+    answers.push({ key, answer });
+  }
+
+  if (answers.length <= 1) {
+    return answers[0]?.answer ?? null;
+  }
+
+  return {
+    answerKind: "summary",
+    matchedFactPaths: Array.from(
+      new Set(answers.flatMap((item) => item.answer.matchedFactPaths)),
+    ),
+    blocks: answers.flatMap((item) => item.answer.blocks ?? []).slice(0, 4),
+    text: [
+      "我依照 EnMS 授權資料，逐項回答：",
+      ...answers.map(({ key, answer }) => {
+        const compactText = answer.text.replace(/\n{2,}/g, "\n");
+        return `【${getObligationDisplayName(key)}】\n${compactText}`;
+      }),
+    ].join("\n\n"),
+  };
+}
+
 export function buildEnmsScopedAnswer(params: {
   message: string;
   context: EnmsScopedAnswerContext;
   scope?: EnmsScopedAnswerScope;
+  chatPlan?: EnmsScopedAnswerChatPlan | null;
 }): EnmsScopedAnswerResult {
   const message = sanitizeText(params.message);
   const facts = asRecord(params.context.facts);
-  const latestDataAnswer = answerLatestDataAt(message, params.context, facts);
+  const obligationKeys = collectPlanObligationKeys(params.chatPlan);
+  const canUse = (keys: string[]) => allowsObligation(obligationKeys, keys);
+  const hasExplicitObligations = obligationKeys.size > 0;
+  const allowMeterRanking =
+    !hasExplicitObligations || canUse(["meter_ranking"]);
+  const allowSiteRanking =
+    !hasExplicitObligations || canUse(["site_benchmarking"]);
+  const dataCoverageAnswer = canUse(["data_coverage"])
+    ? answerDataCoverage(message, params.context, facts)
+    : null;
+  const latestDataAnswer = canUse(["latest_data"])
+    ? answerLatestDataAt(message, params.context, facts)
+    : null;
   const timeRangeAnswer = latestDataAnswer
     ? null
-    : answerTimeRange(message, params.context);
-  const siteMetadataAnswer = answerSiteMetadata(message, params.context, facts);
+    : canUse(["latest_data", "data_coverage"])
+      ? answerTimeRange(message, params.context)
+      : null;
+  const siteMetadataAnswer = canUse(["site_metadata"])
+    ? answerSiteMetadata(message, params.context, facts)
+    : null;
 
   if (params.context.status !== "ready") {
     if (params.context.status === "empty" && siteMetadataAnswer) {
@@ -1342,6 +1985,10 @@ export function buildEnmsScopedAnswer(params: {
 
     if (params.context.status === "empty" && latestDataAnswer) {
       return latestDataAnswer;
+    }
+
+    if (params.context.status === "empty" && dataCoverageAnswer) {
+      return dataCoverageAnswer;
     }
 
     return buildMissingAnswer(
@@ -1374,18 +2021,70 @@ export function buildEnmsScopedAnswer(params: {
     );
   }
 
+  const explicitObligationAnswer = buildExplicitObligationAnswer(
+    message,
+    params.context,
+    facts,
+    params.chatPlan,
+    params.scope,
+  );
+  if (explicitObligationAnswer) {
+    return explicitObligationAnswer;
+  }
+
   const answers = [
-    answerBilling(message, params.context, facts),
+    canUse(["billing"]) ? answerBilling(message, params.context, facts) : null,
+    dataCoverageAnswer,
     siteMetadataAnswer,
-    answerDeviceLookup(message, params.context, facts),
-    answerRanking(message, params.context, facts),
-    answerDemand(message, params.context, facts),
+    canUse(["device_lookup"])
+      ? answerDeviceLookup(message, params.context, facts)
+      : null,
+    canUse(["daily_consumption_point"])
+      ? answerDailyConsumptionPoint(message, params.context)
+      : null,
+    canUse(["daily_peak_demand_point", "monthly_peak_demand_point"])
+      ? answerDailyPeakDemandPoint(message, params.context)
+      : null,
+    canUse(["anomaly_deviation_point"])
+      ? answerAnomalyDeviationPoint(params.context, facts)
+      : null,
+    canUse(["meter_ranking", "site_benchmarking"])
+      ? answerRanking(message, params.context, facts, {
+        allowMeterRanking,
+        allowSiteRanking,
+        forceRanking: hasExplicitObligations,
+      })
+      : null,
+    canUse([
+      "peak_demand_30d",
+      "same_slot_demand",
+      "today_demand_point",
+      "daily_peak_demand_point",
+      "monthly_peak_demand_point",
+      "forecast_readiness",
+    ])
+      ? answerDemand(message, params.context, facts)
+      : null,
     timeRangeAnswer,
     latestDataAnswer,
-    answerAccount(message, params.context, facts, params.scope),
-    answerEfficiencyOpportunities(message, params.context, facts),
-    answerCommonMetric(message, params.context, facts),
-    answerCard(message, params.context),
+    obligationKeys.size === 0
+      ? answerAccount(message, params.context, facts, params.scope)
+      : null,
+    canUse(["efficiency_summary", "efficiency_advice"])
+      ? answerEfficiencyOpportunities(message, params.context, facts)
+      : null,
+    canUse([
+      "total_energy_30d",
+      "period_energy_total",
+      "avg_power_factor_30d",
+      "efficiency_power_factor",
+      "carbon_emission",
+      "efficiency_summary",
+      "efficiency_advice",
+    ])
+      ? answerCommonMetric(message, params.context, facts)
+      : null,
+    obligationKeys.size === 0 ? answerCard(message, params.context) : null,
   ].filter((answer): answer is EnmsScopedAnswerResult => answer !== null);
   const answer =
     answers.find((candidate) => candidate.answerKind !== "missing") ??
